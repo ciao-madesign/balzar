@@ -10,6 +10,7 @@ we should not reinvent. The deterministic generation engine itself
 from __future__ import annotations
 
 import io
+import os
 
 from PIL import Image
 
@@ -34,3 +35,39 @@ def load_rgb(data: bytes, max_dim: int = 400) -> tuple[int, int, bytes]:
         # either way, so nothing of value is lost.
         img = img.resize((w, h), Image.NEAREST)
     return w, h, img.tobytes()
+
+
+def load_frames(data: bytes, max_dim: int = 400,
+                max_frames: int = 120) -> tuple[int, int, list[bytes]]:
+    """Decode an animated image (GIF/APNG/...) to (w, h, [RGB frames]).
+
+    Single-frame images yield a one-element list. All frames share the
+    first frame's dimensions. `max_frames` caps runaway inputs.
+    """
+    from PIL import ImageSequence
+    img = Image.open(io.BytesIO(data))
+    w, h = img.size
+    if w > max_dim or h > max_dim:
+        scale = max_dim / max(w, h)
+        w, h = max(1, round(w * scale)), max(1, round(h * scale))
+
+    frames: list[bytes] = []
+    for frame in ImageSequence.Iterator(img):
+        rgb = frame.convert("RGB")
+        if rgb.size != (w, h):
+            rgb = rgb.resize((w, h), Image.NEAREST)
+        frames.append(rgb.tobytes())
+        if len(frames) >= max_frames:
+            break
+    return w, h, frames
+
+
+def save_gif(path: str, width: int, height: int,
+             rgb_frames: list[bytes], fps: int = 12) -> int:
+    """Write frames as an animated GIF (lossless for <=256-color content)."""
+    images = [Image.frombytes("RGB", (width, height), f) for f in rgb_frames]
+    images[0].save(
+        path, save_all=True, append_images=images[1:],
+        duration=max(20, round(1000 / fps)), loop=0, optimize=False,
+    )
+    return os.path.getsize(path)

@@ -60,6 +60,14 @@ def cmd_render(args: argparse.Namespace) -> int:
         png_total += write_png(path, result.width, result.height,
                                result.frame_rgb(i))
 
+    if args.gif and len(result.frames) > 1:
+        from .imageio import save_gif
+        gif_path = os.path.join(args.output, f"{stem}.gif")
+        frames = [result.frame_rgb(i) for i in range(len(result.frames))]
+        size = save_gif(gif_path, result.width, result.height, frames,
+                        fps=args.fps)
+        print(f"gif:         {gif_path} ({size} byte)")
+
     raw = result.raw_rgb_size
     factor = raw / len(payload)
     print(f"payload:     {len(payload)} byte "
@@ -126,6 +134,84 @@ def cmd_encode_image(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_encode_video(args: argparse.Namespace) -> int:
+    try:
+        from .imageio import load_frames
+    except ImportError:
+        print("errore: encode-video richiede Pillow (pip install pillow)",
+              file=sys.stderr)
+        return 1
+    from .video import encode_video
+
+    with open(args.input, "rb") as fh:
+        data = fh.read()
+    w, h, frames = load_frames(data, max_dim=args.max_dim,
+                               max_frames=args.max_frames)
+    result = encode_video(w, h, frames)
+
+    out = args.output or (os.path.splitext(args.input)[0] + ".bzp")
+    with open(out, "wb") as fh:
+        fh.write(result.payload)
+
+    raw = w * h * 3 * result.frame_count
+    fedelta = "esatta (lossless)" if result.lossless else "quantizzata (lossy)"
+    print(f"video:        {w}x{h}, {result.frame_count} frame, "
+          f"{result.palette_size} colori, fedelta' {fedelta}")
+    print(f"delta:        {_fmt(result.delta_pixels_total)} pixel cambiati "
+          f"dopo il frame iniziale")
+    print(f"istruzioni:   {_fmt(result.instruction_count)}")
+    print(f"payload:      {out}: {_fmt(len(result.payload))} byte")
+    if len(result.payload) < raw:
+        print(f"guadagno:     {_fmt(raw / len(result.payload))}x "
+              f"rispetto al raw RGB ({_fmt(raw)} byte)")
+    else:
+        print(f"guadagno:     NESSUNO - payload piu' grande del raw RGB "
+              f"({_fmt(raw)} byte)")
+    return 0
+
+
+def cmd_chunks(args: argparse.Namespace) -> int:
+    from .payload import chunk_payload
+    _, payload = _load_program(args.input)
+    chunks = chunk_payload(payload, chunk_size=args.size)
+    os.makedirs(args.output, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(args.input))[0]
+    for i, chunk in enumerate(chunks):
+        name = os.path.join(args.output, f"{stem}_qr_{i + 1:03d}.txt")
+        with open(name, "w", encoding="ascii") as fh:
+            fh.write(to_base64(chunk) + "\n")
+    print(f"{len(chunks)} capitoli in {args.output}/ "
+          f"(max {args.size} byte l'uno: stampabili come un QR ciascuno)")
+    return 0
+
+
+def cmd_assemble(args: argparse.Namespace) -> int:
+    from .payload import assemble_chunks
+    chunks = []
+    for name in sorted(os.listdir(args.input)):
+        path = os.path.join(args.input, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as fh:
+            data = fh.read()
+        if data[:4] == b"BZC1":
+            chunks.append(data)
+        else:
+            chunks.append(from_base64(data.decode("ascii")))
+    payload = assemble_chunks(chunks)
+    with open(args.output, "wb") as fh:
+        fh.write(payload)
+    print(f"riassemblato {args.output}: {_fmt(len(payload))} byte "
+          f"da {len(chunks)} capitoli (integrita' verificata)")
+    return 0
+
+
+def cmd_gui(args: argparse.Namespace) -> int:
+    from .gui import main as gui_main
+    gui_main()
+    return 0
+
+
 def cmd_decode(args: argparse.Namespace) -> int:
     program, _ = _load_program(args.input)
     if args.output:
@@ -163,6 +249,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("render", help="rigenera il contenuto da .bzr o payload")
     p.add_argument("input")
     p.add_argument("-o", "--output", default="out", help="directory di output")
+    p.add_argument("--gif", action="store_true",
+                   help="scrive anche una GIF animata (richiede Pillow)")
+    p.add_argument("--fps", type=int, default=12)
     p.set_defaults(func=cmd_render)
 
     p = sub.add_parser("encode", help="programma DSL -> payload binario")
@@ -180,10 +269,35 @@ def main(argv: list[str] | None = None) -> int:
                    help="lato massimo dopo il ridimensionamento (default 400)")
     p.set_defaults(func=cmd_encode_image)
 
+    p = sub.add_parser("encode-video",
+                       help="GIF animata/sequenza -> payload (delta tra frame)")
+    p.add_argument("input")
+    p.add_argument("-o", "--output", default=None)
+    p.add_argument("--max-dim", type=int, default=400)
+    p.add_argument("--max-frames", type=int, default=120)
+    p.set_defaults(func=cmd_encode_video)
+
     p = sub.add_parser("decode", help="payload -> programma DSL canonico")
     p.add_argument("input")
     p.add_argument("-o", "--output", default=None)
     p.set_defaults(func=cmd_decode)
+
+    p = sub.add_parser("chunks",
+                       help="payload -> capitoli QR-sized (supporto fisico)")
+    p.add_argument("input")
+    p.add_argument("-o", "--output", default="chunks")
+    p.add_argument("--size", type=int, default=2953,
+                   help="byte per capitolo (default: capacita' QR v40)")
+    p.set_defaults(func=cmd_chunks)
+
+    p = sub.add_parser("assemble",
+                       help="cartella di capitoli -> payload ricostruito")
+    p.add_argument("input", help="directory con i file capitolo")
+    p.add_argument("-o", "--output", default="assembled.bzp")
+    p.set_defaults(func=cmd_assemble)
+
+    p = sub.add_parser("gui", help="apre l'applicazione desktop")
+    p.set_defaults(func=cmd_gui)
 
     p = sub.add_parser("info", help="statistiche payload/espansione")
     p.add_argument("input")

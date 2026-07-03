@@ -54,9 +54,69 @@ python3 -m balzar info pattern.bzp
 pip install pillow
 python3 -m balzar encode-image foto.png -o foto.bzp
 
+# video: GIF animata -> payload delta-based; render con anteprima GIF
+python3 -m balzar encode-video animazione.gif -o video.bzp --max-dim 400
+python3 -m balzar render video.bzp -o out/ --gif
+
+# supporto fisico: payload -> capitoli QR-sized e ritorno
+python3 -m balzar chunks video.bzp -o capitoli/
+python3 -m balzar assemble capitoli/ -o ricostruito.bzp
+
+# applicazione desktop (il prodotto)
+python3 -m balzar gui
+
 # test
 python3 -m unittest discover -s tests
 ```
+
+## App desktop (il prodotto)
+
+Il prodotto finale è un **programma offline tipo zipper**: apri un file,
+lo comprimi in payload generativo, lo salvi; apri un `.bzp` e lo
+"decomprimi" rigenerandolo. `balzar/gui.py` è l'app (Tkinter, quindi
+stdlib pura + Pillow), con anteprima fianco a fianco originale/rigenerato
+(animata per i video), statistiche di guadagno oneste, salvataggio
+`.bzp`/`.bzr`, export del contenuto rigenerato (PNG/GIF) e dei capitoli QR.
+
+Per distribuirla come eseguibile singolo senza Python installato:
+
+```bash
+pip install pyinstaller pillow
+pyinstaller --onefile --windowed --name balzar balzar-app.py
+# risultato in dist/balzar (.exe su Windows, binario su Linux/macOS)
+```
+
+## Video (sequenze di frame)
+
+`balzar/video.py` implementa il modello differenziale della sezione 4.3
+sul caso reale: una GIF animata (o sequenza di immagini) diventa **un solo
+programma** in cui il frame 0 è codificato per intero e ogni frame
+successivo costa solo i pixel che cambiano (coperti a rettangoli, con
+`FRAME` a separare gli stati). Non è il "flipbook" di frame indipendenti:
+la ridondanza temporale — che è dove vive quasi tutta la comprimibilità di
+un video — viene sfruttata, non buttata.
+
+Misurato sul test incluso (palla che attraversa una griglia tecnica,
+320×240, 30 frame): payload 8.1KB contro 6,9MB di RGB grezzo (**849×**),
+lossless, e più del doppio più compatto della somma dei 30 frame
+codificati indipendentemente. Come sempre: contenuto sintetico/strutturato
+sì, video da fotocamera no (ogni frame è "rumore" per l'encoder).
+
+## Supporto fisico (serie di QR)
+
+Un payload più grande di un QR si spezza in **capitoli autodescrittivi**
+(`chunk_payload` / `assemble_chunks` in `balzar/payload.py`):
+
+```
+"BZC1" | u16 indice | u16 totale | u32 CRC-32 del payload intero | dati
+```
+
+Ogni capitolo sta in un QR v40 (~2953 byte) e porta con sé posizione e
+checksum dell'insieme: i codici si possono stampare in serie e scansionare
+**in qualsiasi ordine**; il riassemblaggio verifica l'integrità end-to-end.
+Una pagina di QR diventa così il supporto fisico di un contenuto che viene
+rigenerato, non letto: il volume informativo del supporto è il volume
+dell'output generato, non dei byte stampati.
 
 ## Il linguaggio (DSL)
 
@@ -164,9 +224,12 @@ reso misurabile. Il rilevamento di linee/cerchi (per contenuti vettoriali
 con bordi non assiali, es. icone con curve) non è ancora implementato: è
 il limite noto di questa v1, richiederebbe un fitting tipo Hough.
 
-## Demo web
+## Demo web (solo vetrina online)
 
-Interfaccia statica (`index.html` + `app.js` + `style.css`) più una
+La demo su Vercel serve unicamente a far provare l'encoder dal browser;
+il prodotto è l'app desktop qui sopra, che non ha i limiti di upload,
+risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
+`app.js` + `style.css`) più una
 funzione serverless Python (`api/encode.py`) pensata per **Vercel**: carica
 un'immagine, la analizza lato server con l'encoder reale (stesso codice
 della CLI, nessuna riscrittura), e mostra fianco a fianco l'originale e
@@ -196,10 +259,15 @@ balzar/
   payload.py      encoder/decoder payload binario (QR-ready)
   png.py          writer PNG RGB8 in puro Python
   encoder.py      encoder automatico immagine -> DSL (best-effort)
-  imageio.py      lettura immagini arbitrarie (unico modulo con Pillow)
-  cli.py          comandi render / encode / encode-image / decode / info
+  video.py        encoder sequenze di frame (delta tra frame, sez. 4.3)
+  imageio.py      lettura immagini/GIF animate (unico modulo con Pillow)
+  gui.py          applicazione desktop (Tkinter)
+  webapi.py       logica dell'API web con profili di limiti
+  cli.py          render / encode / encode-image / encode-video / decode /
+                  info / chunks / assemble / gui
+balzar-app.py     entry point per PyInstaller
 examples/         programmi dimostrativi (.bzr)
-tests/            determinismo, round-trip, correttezza op, espansione, encoder
+tests/            determinismo, round-trip, op, espansione, encoder, video
 api/encode.py     funzione serverless Vercel per la demo web
 index.html, app.js, style.css   frontend statico della demo
 ```
