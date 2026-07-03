@@ -73,6 +73,8 @@ button {
   padding: 0.5rem 1rem;
 }
 button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--border); }
 
 #browse-btn {
   background: var(--accent);

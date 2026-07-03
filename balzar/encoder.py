@@ -32,9 +32,10 @@ from .payload import encode_payload
 # only controls how many instructions we emit, not correctness
 _MIN_RECT_AREA = 1
 
-# tiling search is O(w*h) per candidate; keep the candidate set small so a
-# 400x400 upload still encodes in well under a second of pure Python
-_MAX_DIVISOR_CANDIDATES = 6
+# a wrong tile candidate fails at the first mismatching row segment, so
+# testing every divisor is cheap in practice; the cap only bounds the
+# pathological almost-periodic case
+_MAX_DIVISOR_CANDIDATES = 24
 
 
 @dataclass

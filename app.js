@@ -50,9 +50,26 @@ function fileToBase64(file) {
   });
 }
 
+// Vercel rifiuta body oltre ~4.5MB; il base64 aggiunge ~33%, quindi il
+// file originale deve stare sotto ~3.3MB. Meglio dirlo subito e chiaro.
+const MAX_FILE_BYTES = 3.3 * 1024 * 1024;
+
 async function handleFile(file) {
   resultEl.hidden = true;
-  setStatus(`Analisi di "${file.name}" in corso…`);
+  if (file.size > MAX_FILE_BYTES) {
+    setStatus(
+      `File troppo grande (${(file.size / 1048576).toFixed(1)} MB): il limite di upload è ~3.3 MB. ` +
+      `Nota: il peso del file non conta per il test — l'analisi lavora sui pixel dopo il ` +
+      `ridimensionamento alla risoluzione scelta. Riduci il file (es. riesporta come JPEG) e riprova.`,
+      true
+    );
+    return;
+  }
+  const maxDimVal = parseInt(maxDimSelect.value, 10);
+  setStatus(
+    `Analisi di "${file.name}" in corso a ${maxDimVal}px… ` +
+    (maxDimVal >= 600 ? "alle risoluzioni alte può servire più di un minuto." : "")
+  );
   try {
     const dataUrl = await new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -63,12 +80,11 @@ async function handleFile(file) {
     imgOriginal.src = dataUrl;
 
     const data = dataUrl.split(",", 2)[1];
-    const maxDim = parseInt(maxDimSelect.value, 10);
 
     const res = await fetch("/api/encode", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, max_dim: maxDim }),
+      body: JSON.stringify({ data, max_dim: maxDimVal }),
     });
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || "errore sconosciuto");
@@ -89,6 +105,15 @@ function render(r, file) {
   imgRendered.src = "data:image/png;base64," + r.preview_png_base64;
   programText.textContent = r.program_text;
 
+  dlPayloadBtn.disabled = !!r.payload_omitted;
+  dlPayloadBtn.title = r.payload_omitted
+    ? "payload più grande del limite di risposta del server (caso senza guadagno): usa la CLI in locale"
+    : "";
+  dlProgramBtn.disabled = !!r.program_truncated;
+  dlProgramBtn.title = r.program_truncated
+    ? "programma troncato nella risposta: ricavalo dal payload con 'python -m balzar decode'"
+    : "";
+
   const gain = r.expansion_vs_raw >= 1;
   const rows = [
     ["dimensioni analizzate", `${r.width}×${r.height} px`],
@@ -105,6 +130,9 @@ function render(r, file) {
     ],
     ["entra in un QR code", r.fits_qr ? "sì" : "no"],
   ];
+  if (r.preview_scaled) {
+    rows.push(["anteprima", "ridotta per la visualizzazione (il payload genera la risoluzione piena)"]);
+  }
   statsTable.innerHTML = rows
     .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`)
     .join("");

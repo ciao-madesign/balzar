@@ -27,5 +27,10 @@ def load_rgb(data: bytes, max_dim: int = 400) -> tuple[int, int, bytes]:
     if w > max_dim or h > max_dim:
         scale = max_dim / max(w, h)
         w, h = max(1, round(w * scale)), max(1, round(h * scale))
-        img = img.resize((w, h), Image.LANCZOS)
+        # NEAREST, not Lanczos: smooth resampling would blend edge pixels
+        # into hundreds of new intermediate colors, destroying exactly the
+        # flat-region/tiling structure the encoder feeds on. Structured
+        # content survives NEAREST intact; photos are the no-gain case
+        # either way, so nothing of value is lost.
+        img = img.resize((w, h), Image.NEAREST)
     return w, h, img.tobytes()
