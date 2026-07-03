@@ -29,8 +29,12 @@ sistemi embedded.
 | `examples/pattern_tile.bzr` | 276 byte | 1024×1024 (3,1 MB RGB) | ~11.400× |
 | `examples/frattale.bzr` | 230 byte | 768×512 (1,2 MB RGB) | ~5.100× |
 | `examples/schema_tecnico.bzr` | ~490 byte | 800×600 (1,4 MB RGB) | ~2.900× |
+| `examples/etichetta_bom.bzr` (esploso + testo BOM) | 559 byte | 640×520 (998 KB RGB) | ~1.786× |
 
-Tutti i payload entrano in un QR code versione 40 (capacità ~2953 byte).
+Tutti i payload entrano in un QR code versione 40 (capacità ~2953 byte). Per
+`etichetta_bom.bzr` vale la pena notare il confronto diretto: il PNG della
+stessa identica immagine pesa 5.496 byte e **non** entra in un QR — il
+payload balzar (559 byte) sì, con ampio margine (dettagli in `CLAUDE.md` §8).
 
 ## Uso rapido
 
@@ -123,6 +127,8 @@ dell'output generato, non dei byte stampati.
 Un'istruzione per riga, argomenti `chiave=valore`; parentesi e virgole sono
 zucchero sintattico, quindi `SHIFT(region=A, dx=2, dy=1)` e
 `SHIFT region=A dx=2 dy=1` sono equivalenti. I commenti iniziano con `#`.
+Un valore tra virgolette (`text="QTY 12"`) mantiene spazi/parentesi/virgole
+alla lettera — serve per il contenuto di `TEXT`.
 
 ```text
 CANVAS w=256 h=256 bg=0          # stato base (A)
@@ -142,6 +148,7 @@ FILL region=A color=5                # riempimento
 MAP region=A src=3 dst=6             # ricolorazione selettiva
 INVERT region=A ncolors=16           # complemento in spazio palette
 SETPIX x=3 y=4 color=2               # modifica locale (differenziale)
+TEXT x=10 y=10 text="QTY 12" color=0 scale=2   # font bitmap 5x7 incorporato
 
 # --- primitive generative ---
 RECT x=2 y=2 w=28 h=28 color=6 fill=0

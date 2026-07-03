@@ -1,0 +1,64 @@
+# Etichetta digitale per officina/manutenzione sul campo: schema esploso
+# + distinta base (BOM) leggibile, tutto in un payload che rigenera senza
+# viewer 3D, senza licenza CAD, senza rete. Sostituisce la pila di PDF
+# accanto al banco o nello zaino del manutentore.
+
+CANVAS w=640 h=520 bg=1
+PALETTE i=0 rgb=#1A1A2E
+PALETTE i=2 rgb=#C0392B
+PALETTE i=8 rgb=#7F8C8D
+PALETTE i=11 rgb=#2E86AB
+
+# --- schema esploso semplificato (flangia + albero + bulloni) ---
+CIRCLE cx=170 cy=150 r=110 color=0 fill=0
+CIRCLE cx=170 cy=150 r=45 color=0 fill=0
+RECT x=290 y=125 w=150 h=50 color=11 fill=1
+RECT x=290 y=125 w=150 h=50 color=0 fill=0
+CIRCLE cx=470 cy=150 r=35 color=0 fill=0
+CIRCLE cx=470 cy=150 r=10 color=2 fill=1
+
+REGION name=BOLT x=560 y=20 w=30 h=30
+FILL region=BOLT color=1
+CIRCLE cx=575 cy=35 r=12 color=0 fill=0
+CIRCLE cx=575 cy=35 r=5 color=2 fill=1
+REGION name=B0 x=155 y=25 w=30 h=30
+REGION name=B1 x=255 y=125 w=30 h=30
+REGION name=B2 x=155 y=225 w=30 h=30
+REGION name=B3 x=55 y=125 w=30 h=30
+COPY src=BOLT dst=B0
+COPY src=BOLT dst=B1
+COPY src=BOLT dst=B2
+COPY src=BOLT dst=B3
+FILL region=BOLT color=1
+
+LINE x1=0 y1=290 x2=639 y2=290 color=8
+
+# --- distinta base (BOM), font bitmap incorporato: TEXT ---
+TEXT x=10  y=305 text="DISTINTA BASE - GRUPPO FLANGIA FL-100" color=0 scale=2
+LINE x1=0 y1=340 x2=639 y2=340 color=8
+
+TEXT x=10  y=355 text="POS" color=0 scale=2
+TEXT x=90  y=355 text="P/N" color=0 scale=2
+TEXT x=250 y=355 text="DESCRIZIONE" color=0 scale=2
+TEXT x=560 y=355 text="QTY" color=0 scale=2
+LINE x1=0 y1=385 x2=639 y2=385 color=8
+
+TEXT x=10  y=400 text="1" color=0 scale=2
+TEXT x=90  y=400 text="B-4471-A" color=0 scale=2
+TEXT x=250 y=400 text="BULLONE ESAG. M6X30" color=0 scale=2
+TEXT x=560 y=400 text="4" color=0 scale=2
+
+TEXT x=10  y=425 text="2" color=0 scale=2
+TEXT x=90  y=425 text="R-2200" color=0 scale=2
+TEXT x=250 y=425 text="RONDELLA PIANA D6" color=0 scale=2
+TEXT x=560 y=425 text="4" color=0 scale=2
+
+TEXT x=10  y=450 text="3" color=0 scale=2
+TEXT x=90  y=450 text="FL-100" color=0 scale=2
+TEXT x=250 y=450 text="FLANGIA DN80 PN16" color=0 scale=2
+TEXT x=560 y=450 text="1" color=0 scale=2
+
+TEXT x=10  y=475 text="4" color=0 scale=2
+TEXT x=90  y=475 text="AL-330" color=0 scale=2
+TEXT x=250 y=475 text="ALBERO L=250 D30" color=0 scale=2
+TEXT x=560 y=475 text="1" color=0 scale=2

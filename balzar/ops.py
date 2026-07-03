@@ -14,6 +14,7 @@ Categories (see README §4):
 
 from __future__ import annotations
 
+from .font5x7 import GLYPH_WIDTH, glyph_rows
 from .grid import DEFAULT_PALETTE, Grid, Region
 from .rng import DetRNG
 
@@ -224,6 +225,26 @@ def op_tile(state: State, src: Region, dst: Region) -> None:
 
 
 # -------------------------------------------------------------- differential
+
+
+@op("TEXT", x="int", y="int", text="str", color="int", scale=("int", 1))
+def op_text(state: State, x: int, y: int, text: str, color: int, scale: int) -> None:
+    """Draw text with the built-in 5x7 bitmap font (balzar/font5x7.py).
+
+    Unsupported characters render as a solid block instead of vanishing,
+    so a typo stays visible on the label instead of silently disappearing.
+    """
+    g = state.require_grid()
+    cursor_x = x
+    for ch in text:
+        for row_i, row_bits in enumerate(glyph_rows(ch)):
+            for col_i in range(GLYPH_WIDTH):
+                if (row_bits >> (GLYPH_WIDTH - 1 - col_i)) & 1:
+                    for sy in range(scale):
+                        for sx in range(scale):
+                            g.set(cursor_x + col_i * scale + sx,
+                                  y + row_i * scale + sy, color)
+        cursor_x += (GLYPH_WIDTH + 1) * scale
 
 
 @op("SETPIX", x="int", y="int", color="int")

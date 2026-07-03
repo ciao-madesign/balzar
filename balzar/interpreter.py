@@ -115,6 +115,8 @@ class Interpreter:
             return self.state.region(raw)
         if ptype == "name":
             return raw
+        if ptype == "str":
+            return raw
         if ptype == "rgb":
             return _parse_rgb(raw)
         raise ValueError(f"internal: unknown param type '{ptype}'")

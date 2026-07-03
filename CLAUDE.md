@@ -38,7 +38,8 @@ screenshot reali, non solo letto.
 | `balzar/grid.py` | Stato: griglia a indici di palette (bytearray), `Region` |
 | `balzar/rng.py` | PRNG deterministico proprio: xorshift64* + splitmix64. **Mai** usare `random` — la sequenza è parte del contratto di formato |
 | `balzar/dsl.py` | Parser DSL + valutatore di espressioni aritmetiche (AST whitelistato: solo `+ - * / // % **`, niente chiamate/stato/IO) |
-| `balzar/ops.py` | Motore di trasformazioni: registry dichiarativo tipizzato (`@op(...)`). Geometriche (SHIFT/ROTATE/MIRROR/SCALE), strutturali (COPY/SWAP/TILE), differenziali (SETPIX/FILL/MAP/INVERT/FRAME), generative (RECT/LINE/CIRCLE/NOISE/SCATTER/FRACTAL) |
+| `balzar/ops.py` | Motore di trasformazioni: registry dichiarativo tipizzato (`@op(...)`). Geometriche (SHIFT/ROTATE/MIRROR/SCALE), strutturali (COPY/SWAP/TILE), differenziali (SETPIX/FILL/MAP/INVERT/FRAME/TEXT), generative (RECT/LINE/CIRCLE/NOISE/SCATTER/FRACTAL) |
+| `balzar/font5x7.py` | Font bitmap 5×7 incorporato (A-Z, 0-9, punteggiatura tecnica) usato da `TEXT` — nessuna dipendenza da font esterni, carattere sconosciuto = blocco pieno visibile (mai silenzioso) |
 | `balzar/interpreter.py` | Esegue il programma parsato → frame RGB. `MAX_STEPS` come valvola di sicurezza contro loop runaway |
 | `balzar/payload.py` | Formato binario `BZR1` (magic+lunghezza+CRC32+deflate del programma canonico) e formato a capitoli `BZC1` per il supporto fisico |
 | `balzar/png.py` | Writer PNG RGB8 in puro Python (nessun filtro adattivo — vedi criticità §4) |
@@ -151,7 +152,7 @@ nell'app desktop**, che è il prodotto vero.
 
 ### 2.8 Test
 
-48 test, tutti verdi (`python3 -m unittest discover -s tests`):
+53 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_video.py`. Copertura: round-trip bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
@@ -270,10 +271,19 @@ Sei direzioni d'uso concrete, ordinate dalla più B2B/tecnica alla più
 consumer. Per ognuna: perché balzar specificamente (con un numero reale
 dietro, non una stima), e la precondizione che la rende vera.
 
-1. **Manuali tecnici e ricambi industriali.** Etichetta con QR su un
-   ricambio → schema esploso/istruzioni di montaggio rigenerati offline.
-   Numeri reali più forti del progetto (`schema_tecnico.bzr`,
-   `esploso_industriale.bzr`): 2.900×–17.000× a seconda della baseline.
+1. **Manuali tecnici, ricambi ed esplosi/BOM per officina e manutenzione
+   sul campo.** Il caso guida del progetto: reparti produttivi spesso non
+   hanno viewer 3D/licenze CAD accanto alla macchina, e la manutenzione
+   sul campo (stabulari sotterranei, navi, cantieri) spesso non ha rete.
+   Un'etichetta/QR rigenera schema esploso *e* distinta base (BOM) — testo
+   incluso, vedi `balzar/font5x7.py` e l'operazione `TEXT` — senza viewer
+   3D, senza licenza CAD, senza connessione: sostituisce la pila di PDF
+   disordinati. Esempio completo: `examples/etichetta_bom.bzr` (esploso +
+   tabella part number/descrizione/quantità in un payload di 559 byte,
+   entra in un singolo QR). Numeri più forti del progetto sui soli disegni
+   (`schema_tecnico.bzr`, `esploso_industriale.bzr`): 2.900×–17.000× a
+   seconda della baseline — vedi §9 per il confronto quantitativo
+   completo con l'alternativa reale (PDF su chiavetta/stampato).
    Precondizione: il disegno va esportato pulito (CAD/vettoriale), non
    fotografato — vedi §5.1 per come questo diventa ancora più forte con
    l'ingestione SVG/DXF diretta.
@@ -395,10 +405,62 @@ Distinzione netta, stesso principio di PNG-tecnico-vs-fotografico:
   immagini/video — da trattare come ipotesi da testare, non da vendere
   con un moltiplicatore inventato.
 
-## 8. Comandi utili per riprendere il lavoro
+## 8. Confronto quantitativo con lo stato dell'arte (regola del progetto)
+
+Ogni volta che si decide una direzione, va misurato il guadagno concreto
+contro l'alternativa reale — non solo "funziona", ma "quanto in meno, e
+sta in un QR o no". Caso guida: `examples/etichetta_bom.bzr` (esploso +
+distinta base, applicazione §6.1), numeri reali misurati in sessione:
+
+| Rappresentazione | Byte | Sta in un QR (limite 2.953 B)? |
+|---|---|---|
+| RGB grezzo (640×520, non compresso) | 998.400 | no (339× oltre) |
+| PNG dello stesso identico contenuto (encoder nostro, non ottimizzato) | 5.496 | **no** (1,9× oltre) |
+| PNG ri-compresso (stima con encoder a filtri adattivi) | 4.617 | **no** (1,6× oltre) |
+| ZIP del PNG | 4.969 | **no** (1,7× oltre — lo ZIP non trova altro da comprimere, il PNG è già DEFLATE) |
+| **Payload balzar (`.bzp`)** | **559** | **sì**, con margine (usa solo il 19% della capacità) |
+
+Il punto non è solo "559 è più piccolo di 5.496" (9,8× contro il PNG
+equivalente): è che **il PNG della stessa identica immagine non entra in
+un QR, il payload balzar sì, con margine per aggiungere altre righe di
+BOM**. Questo è l'unico numero che conta per l'applicazione "etichetta
+fisica": non il rapporto di compressione in astratto, ma se il contenuto
+sta o non sta nel supporto fisico scelto.
+
+Per un vero export PDF/CAD (SolidWorks, AutoCAD) dello stesso disegno +
+BOM — font incorporati, overhead del formato, spesso un'anteprima raster
+in pancia — l'ordine di grandezza tipico è 100KB–qualche MB anche per un
+disegno semplice: **non è una misura fatta in sessione** (non abbiamo
+generato un PDF reale per confronto), va trattata come stima qualitativa
+nota nel settore, non come dato verificato — a differenza delle righe
+sopra, che sono tutte misurate su file reali prodotti in questa sessione.
+
+### Perché non è "ZIP più aggressivo" né "JPEG migliore"
+
+- **ZIP/DEFLATE comprimono byte esistenti** cercando ripetizioni locali in
+  ciò che già c'è. Il PNG sopra è già passato da un DEFLATE (`png.py`):
+  ricomprimerlo con ZIP guadagna ~10% (5.496→4.969) perché non c'è molto
+  altro da trovare — la tabella sopra lo mostra: lo ZIP non fa la
+  differenza tra "entra" e "non entra" nel QR.
+- **JPEG è peggio, non meglio, su questo contenuto**: è ottimizzato per
+  gradienti fotografici (DCT + quantizzazione percettiva), non per bordi
+  netti e testo — su un'etichetta con linee nette e caratteri a 5×7 pixel
+  introduce artefatti di blocking proprio sui bordi delle lettere e in
+  genere pesa più del PNG equivalente, non meno.
+- **balzar non comprime il PNG**: non lo genera nemmeno come passo
+  intermedio. Il payload da 559 byte non è "l'immagine compressa più
+  aggressivamente" — è la lista di istruzioni (`CIRCLE cx=170 cy=150
+  r=110`, `TEXT x=90 y=400 text="B-4471-A"`, ecc.) che, eseguita, produce
+  i 998.400 byte di RGB. I pixel del cerchio o della lettera "Q" non sono
+  mai stati salvati da nessuna parte per essere poi riletti: vengono
+  calcolati al volo da `CIRCLE`/`TEXT` ogni volta che il payload viene
+  aperto. È la differenza tra "un file audio compresso" e "uno spartito":
+  lo spartito non contiene il suono, contiene le istruzioni per produrlo.
+
+## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 48 test, deve restare verde
+python3 -m unittest discover -s tests        # 53 test, deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-video anim.gif -o v.bzp

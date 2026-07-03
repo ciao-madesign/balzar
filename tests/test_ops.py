@@ -97,6 +97,46 @@ class TestStructural(unittest.TestCase):
                 self.assertEqual(frame[y * 8 + x + 1], 0)
 
 
+class TestText(unittest.TestCase):
+    def test_text_draws_known_glyph(self):
+        # 'I' is a solid vertical bar with top/bottom serifs: column 2 of
+        # its 5x7 cell must be fully lit, columns 0 and 4 only at the caps
+        r = run("TEXT x=0 y=0 text=\"I\" color=1", w=8, h=8)
+        frame = r.frames[0]
+        for row in range(7):
+            self.assertEqual(frame[row * 8 + 2], 1, f"row {row} col 2")
+
+    def test_unknown_char_renders_solid_fallback_not_silently(self):
+        r = run("TEXT x=0 y=0 text=\"@\" color=1", w=8, h=8)
+        frame = r.frames[0]
+        # fallback glyph is a fully solid 5x7 block
+        for row in range(7):
+            for col in range(5):
+                self.assertEqual(frame[row * 8 + col], 1)
+
+    def test_scale_multiplies_glyph_size(self):
+        r1 = run("TEXT x=0 y=0 text=\"1\" color=1 scale=1", w=20, h=20)
+        r2 = run("TEXT x=0 y=0 text=\"1\" color=1 scale=2", w=20, h=20)
+        count1 = sum(1 for v in r1.frames[0] if v == 1)
+        count2 = sum(1 for v in r2.frames[0] if v == 1)
+        self.assertEqual(count2, count1 * 4)
+
+    def test_cursor_advances_between_characters(self):
+        r = run("TEXT x=0 y=0 text=\"II\" color=1", w=20, h=8)
+        frame = r.frames[0]
+        # second 'I' starts 6 columns after the first (5 wide + 1 spacing)
+        self.assertEqual(frame[0 * 20 + 2], 1)
+        self.assertEqual(frame[0 * 20 + 8], 1)
+
+    def test_quoted_text_with_spaces_survives_payload_roundtrip(self):
+        from balzar.payload import decode_payload, encode_payload
+        prog = 'CANVAS w=64 h=16 bg=0\nTEXT x=1 y=1 text="QTY 12" color=1\n'
+        payload = encode_payload(prog)
+        restored = decode_payload(payload)
+        self.assertEqual(render(restored).frames, render(prog).frames)
+        self.assertIn('"QTY 12"', restored)
+
+
 class TestDifferentialAndGenerative(unittest.TestCase):
     def test_map_recolors_only_matching(self):
         r = run("FILL region=FULL color=3\nSETPIX x=0 y=0 color=1\n"

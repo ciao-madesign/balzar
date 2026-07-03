@@ -12,7 +12,9 @@ Program syntax — one instruction per line:
 Arguments are key=value pairs; parentheses and commas are optional sugar,
 so the spec form `SHIFT(region=A, dx=2, dy=1)` parses identically to
 `SHIFT region=A dx=2 dy=1`. Numeric values may be arithmetic expressions
-over loop variables (no spaces inside an expression).
+over loop variables (no spaces inside an expression). A value may be
+double-quoted to contain spaces/parentheses/commas verbatim (needed for
+TEXT content), e.g. `TEXT x=1 y=1 text="QTY 12" color=0`.
 """
 
 from __future__ import annotations
@@ -36,21 +38,39 @@ class Loop:
     line: int = 0
 
 
-def _strip_comment(raw: str) -> str:
-    # '#' starts a comment only at line start or after whitespace, so
-    # #RRGGBB color literals (as in rgb=#FF0000) are left intact
-    for i, ch in enumerate(raw):
-        if ch == "#" and (i == 0 or raw[i - 1] in " \t"):
-            return raw[:i]
-    return raw
-
-
 def _split_line(raw: str) -> list[str]:
-    # strip comments, treat ( ) , as whitespace so both syntaxes work
-    code = _strip_comment(raw)
-    for ch in "(),":
-        code = code.replace(ch, " ")
-    return code.split()
+    """Tokenize one line: whitespace/`(),` separated, '#' comments, and
+    "..." strings that keep everything (spaces, #, parens) verbatim.
+
+    '#' only starts a comment when it begins a fresh token — mid-token it
+    is data (rgb=#FF0000); quotes are stripped from the emitted token.
+    """
+    tokens: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    for ch in raw:
+        if in_quotes:
+            if ch == '"':
+                in_quotes = False
+            else:
+                current.append(ch)
+            continue
+        if ch == '"':
+            in_quotes = True
+            continue
+        if ch == "#" and not current:
+            break
+        if ch in " \t(),":
+            if current:
+                tokens.append("".join(current))
+                current = []
+            continue
+        current.append(ch)
+    if in_quotes:
+        raise SyntaxError(f"unterminated quoted string in line: {raw!r}")
+    if current:
+        tokens.append("".join(current))
+    return tokens
 
 
 def parse(text: str) -> list:
@@ -93,6 +113,20 @@ def parse(text: str) -> list:
     return root
 
 
+_NEEDS_QUOTING = set(' \t#(),')
+
+
+def _requote(tok: str) -> str:
+    """Re-wrap a value in quotes if it contains characters that would
+    otherwise be split/mangled on the next parse (round-trip safety)."""
+    if "=" not in tok:
+        return tok
+    key, value = tok.split("=", 1)
+    if any(c in _NEEDS_QUOTING for c in value):
+        return f'{key}="{value}"'
+    return tok
+
+
 def canonical(text: str) -> str:
     """Normalized program form: what actually gets encoded in the payload.
 
@@ -105,7 +139,7 @@ def canonical(text: str) -> str:
         if not tokens:
             continue
         head = tokens[0].upper()
-        lines.append(" ".join([head] + tokens[1:]))
+        lines.append(" ".join([head] + [_requote(t) for t in tokens[1:]]))
     return "\n".join(lines) + "\n"
 
 
