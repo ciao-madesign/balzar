@@ -50,6 +50,10 @@ python3 -m balzar render pattern.bzp -o out/
 python3 -m balzar decode pattern.bzp
 python3 -m balzar info pattern.bzp
 
+# encoder automatico: immagine arbitraria -> payload (richiede Pillow)
+pip install pillow
+python3 -m balzar encode-image foto.png -o foto.bzp
+
 # test
 python3 -m unittest discover -s tests
 ```
@@ -133,6 +137,53 @@ I test in `tests/test_determinism.py` verificano il contratto: doppio render
 identico, render da payload identico al render da sorgente, sequenza PRNG
 bloccata per regressione.
 
+## Encoder automatico (immagine -> programma)
+
+`balzar/encoder.py` implementa il pezzo mancante della sezione 5.1: prende
+pixel RGB arbitrari (via `balzar/imageio.py`, l'unico modulo che dipende da
+Pillow — decodificare PNG/JPEG da zero è fuori scope) e li riduce a un
+programma DSL, best-effort:
+
+1. **quantizzazione palette**: esatta e lossless se l'immagine ha già
+   <=256 colori (icone, screenshot, pixel art, export CAD); altrimenti
+   quantizzazione fissa 3-3-2 bit (256 colori), dichiarata come lossy;
+2. **rilevamento tiling**: se l'intero canvas è periodico, viene codificata
+   una sola piastrella + `TILE`;
+3. **copertura greedy a rettangoli**: scansione riga per riga che
+   massimizza ogni blocco di colore uniforme (`RECT ... fill=1`), pixel
+   isolati come `SETPIX`;
+4. **auto-verifica**: il programma generato viene renderizzato e confrontato
+   pixel-per-pixel con la sorgente quantizzata prima di essere restituito —
+   non si dichiara mai "lossless" senza averlo controllato.
+
+Il risultato è onesto per costruzione: su contenuti a blocchi piatti o
+pattern ripetuti il guadagno è enorme (nei test, migliaia di×); su rumore
+o foto il payload può risultare **più grande** del raw RGB, e il tool lo
+segnala invece di nasconderlo — è il limite di Kolmogorov della sezione 8
+reso misurabile. Il rilevamento di linee/cerchi (per contenuti vettoriali
+con bordi non assiali, es. icone con curve) non è ancora implementato: è
+il limite noto di questa v1, richiederebbe un fitting tipo Hough.
+
+## Demo web
+
+Interfaccia statica (`index.html` + `app.js` + `style.css`) più una
+funzione serverless Python (`api/encode.py`) pensata per **Vercel**: carica
+un'immagine, la analizza lato server con l'encoder reale (stesso codice
+della CLI, nessuna riscrittura), e mostra fianco a fianco l'originale e
+l'immagine **rigenerata dall'interprete** a partire dal payload — non è mai
+l'upload originale ridisegnato. Scarichi il payload binario (`.bzp`) o il
+programma DSL (`.bzr`).
+
+```bash
+# deploy
+vercel deploy   # legge vercel.json + requirements.txt (Pillow)
+```
+
+`api/encode.py` importa `balzar` direttamente dalla cartella del progetto
+(inclusa di default nel bundle Python di Vercel); il payload di richiesta è
+JSON con l'immagine in base64, per evitare di dover fare parsing
+multipart lato server.
+
 ## Architettura
 
 ```
@@ -144,9 +195,13 @@ balzar/
   interpreter.py  interprete deterministico: programma -> frame
   payload.py      encoder/decoder payload binario (QR-ready)
   png.py          writer PNG RGB8 in puro Python
-  cli.py          comandi render / encode / decode / info
+  encoder.py      encoder automatico immagine -> DSL (best-effort)
+  imageio.py      lettura immagini arbitrarie (unico modulo con Pillow)
+  cli.py          comandi render / encode / encode-image / decode / info
 examples/         programmi dimostrativi (.bzr)
-tests/            determinismo, round-trip, correttezza op, espansione
+tests/            determinismo, round-trip, correttezza op, espansione, encoder
+api/encode.py     funzione serverless Vercel per la demo web
+index.html, app.js, style.css   frontend statico della demo
 ```
 
 Per aggiungere un'operazione basta registrarla in `ops.py` con la sua firma
@@ -173,7 +228,7 @@ e il formato è interpretabile come regole discrete.
 
 ## Estensioni previste
 
-- encoder automatico (immagine → programma: ricerca di auto-similarità,
-  tiling e delta minimi);
+- rilevamento di linee/cerchi/simmetrie nell'encoder (oltre a rettangoli
+  piatti e tiling), per comprimere bene anche contenuti vettoriali curvi;
 - generazione diretta del QR code dal payload;
 - scene 3D descritte con lo stesso modello (stato + trasformazioni).

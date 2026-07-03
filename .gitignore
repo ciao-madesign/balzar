@@ -3,3 +3,5 @@ __pycache__/
 out/
 *.bzp
 *.b64
+.vercel/
+node_modules/

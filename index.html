@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>balzar — encoder deterministico</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>balzar</h1>
+    <p class="tagline">Carica un'immagine: viene analizzata e ridotta a un <em>programma</em> di poche
+      istruzioni (rettangoli, tiling, palette). Il file che scarichi non contiene pixel — l'immagine che
+      vedi sotto è stata <strong>rigenerata da zero</strong> eseguendo quel programma.</p>
+    <p class="honesty">Su contenuti strutturati (icone, schemi, pattern, pixel art) il guadagno è enorme.
+      Su foto e rumore l'encoder lo dichiara onestamente invece di fingere una compressione che non c'è —
+      è il limite di complessità di Kolmogorov descritto nel progetto.</p>
+  </header>
+
+  <main>
+    <section id="drop" class="dropzone">
+      <input type="file" id="file-input" accept="image/*" hidden>
+      <p id="drop-label">Trascina un'immagine qui, oppure <button id="browse-btn" type="button">scegli un file</button></p>
+      <label class="dim-picker">
+        risoluzione di analisi
+        <select id="max-dim">
+          <option value="200">200 px</option>
+          <option value="300" selected>300 px</option>
+          <option value="400">400 px</option>
+        </select>
+      </label>
+    </section>
+
+    <section id="status" class="status" hidden></section>
+
+    <section id="result" class="result" hidden>
+      <div class="images">
+        <figure>
+          <figcaption>originale caricato</figcaption>
+          <img id="img-original" alt="immagine originale">
+        </figure>
+        <figure>
+          <figcaption>rigenerato da balzar (payload → interprete → pixel)</figcaption>
+          <img id="img-rendered" alt="immagine rigenerata da balzar">
+        </figure>
+      </div>
+
+      <table class="stats" id="stats-table"></table>
+
+      <div class="downloads">
+        <button id="dl-payload" type="button">scarica payload (.bzp)</button>
+        <button id="dl-program" type="button">scarica programma (.bzr)</button>
+      </div>
+
+      <details>
+        <summary>programma generato (DSL)</summary>
+        <pre id="program-text"></pre>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <p><a href="https://github.com/ciao-madesign/balzar" target="_blank" rel="noopener">codice sorgente</a></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

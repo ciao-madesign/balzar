@@ -1,13 +1,15 @@
 """Command-line interface.
 
-    python -m balzar render  program.bzr  -o out/
-    python -m balzar encode  program.bzr  -o payload.bzp [--base64]
-    python -m balzar decode  payload.bzp  -o program.bzr
-    python -m balzar info    payload.bzp
+    python -m balzar render       program.bzr   -o out/
+    python -m balzar encode       program.bzr   -o payload.bzp [--base64]
+    python -m balzar encode-image photo.png      -o payload.bzp [--max-dim N]
+    python -m balzar decode       payload.bzp    -o program.bzr
+    python -m balzar info         payload.bzp
 
 `render` accepts either DSL source (.bzr) or a binary payload (.bzp,
 detected via magic) and reports the expansion factor: bytes of generated
-content per byte of payload.
+content per byte of payload. `encode-image` runs the best-effort automatic
+encoder (balzar/encoder.py) on an arbitrary image file (requires Pillow).
 """
 
 from __future__ import annotations
@@ -90,6 +92,40 @@ def cmd_encode(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_encode_image(args: argparse.Namespace) -> int:
+    try:
+        from .imageio import load_rgb
+    except ImportError:
+        print("errore: encode-image richiede Pillow (pip install pillow)",
+              file=sys.stderr)
+        return 1
+    from .encoder import encode_image
+
+    with open(args.input, "rb") as fh:
+        data = fh.read()
+    w, h, rgb = load_rgb(data, max_dim=args.max_dim)
+    result = encode_image(w, h, rgb)
+
+    out = args.output or (os.path.splitext(args.input)[0] + ".bzp")
+    with open(out, "wb") as fh:
+        fh.write(result.payload)
+
+    raw = w * h * 3
+    fedelta = "esatta (lossless)" if result.lossless else "quantizzata a 256 colori fissi (lossy)"
+    print(f"immagine:     {w}x{h} ({args.max_dim}px lato massimo), "
+          f"{result.palette_size} colori, fedelta' {fedelta}")
+    print(f"tiling:       {'trovato ' + str(result.tile) if result.tile else 'non trovato'}")
+    print(f"istruzioni:   {result.instruction_count}")
+    print(f"payload:      {out}: {len(result.payload)} byte "
+          f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'})")
+    if len(result.payload) < raw:
+        print(f"guadagno:     {_fmt(raw / len(result.payload))}x rispetto al raw RGB ({raw} byte)")
+    else:
+        print(f"guadagno:     NESSUNO - payload piu' grande del raw RGB ({raw} byte). "
+              f"Contenuto poco strutturato per questo encoder.")
+    return 0
+
+
 def cmd_decode(args: argparse.Namespace) -> int:
     program, _ = _load_program(args.input)
     if args.output:
@@ -135,6 +171,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--base64", action="store_true",
                    help="emette il payload in base64 (testo pronto per QR)")
     p.set_defaults(func=cmd_encode)
+
+    p = sub.add_parser("encode-image",
+                       help="immagine arbitraria -> payload (encoder automatico best-effort)")
+    p.add_argument("input")
+    p.add_argument("-o", "--output", default=None)
+    p.add_argument("--max-dim", type=int, default=400,
+                   help="lato massimo dopo il ridimensionamento (default 400)")
+    p.set_defaults(func=cmd_encode_image)
 
     p = sub.add_parser("decode", help="payload -> programma DSL canonico")
     p.add_argument("input")
