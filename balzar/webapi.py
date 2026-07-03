@@ -1,9 +1,9 @@
-"""Transport-agnostic web API logic, shared by the Vercel function and the
-offline local server (`python -m balzar serve`).
+"""Transport-agnostic logic behind the Vercel demo's serverless functions
+(api/encode.py, api/render.py) — the desktop app (balzar/gui.py) does not
+use this module, it calls the engine directly with no platform caps.
 
-All platform constraints live in a Limits value so the two deployments
-differ only in numbers: Vercel has hard request/response caps (~4.5MB
-each), the local server has essentially none.
+LOCAL_LIMITS exists for a possible future non-Vercel deployment; only
+VERCEL_LIMITS is wired to a real endpoint today.
 """
 
 from __future__ import annotations
@@ -122,3 +122,80 @@ def handle_encode(body: dict, limits: Limits) -> tuple[int, dict]:
         "preview_scaled": preview_scaled,
         "preview_png_base64": base64.b64encode(preview_png).decode("ascii"),
     }
+
+
+def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
+    """Open an existing .bzr/.bzp (no terminal needed): decode + render,
+    return a PNG/GIF to look at and download, plus SVG if the program
+    only uses the vector-safe op subset (balzar/svg.py)."""
+    data_b64 = body.get("data")
+    if not data_b64:
+        return 400, {"ok": False, "error": "campo 'data' mancante"}
+
+    from .payload import MAGIC, PayloadError, decode_payload
+
+    raw = base64.b64decode(data_b64)
+    try:
+        program_text = decode_payload(raw) if raw[:4] == MAGIC else raw.decode("utf-8")
+    except (PayloadError, UnicodeDecodeError) as exc:
+        return 400, {"ok": False, "error": f"file non riconosciuto: {exc}"}
+
+    from .interpreter import render as render_program
+
+    try:
+        result = render_program(program_text)
+    except (ValueError, SyntaxError) as exc:
+        return 400, {"ok": False, "error": f"programma non valido: {exc}"}
+
+    import io as _io
+
+    from PIL import Image
+
+    from .png import png_bytes
+
+    img = Image.frombytes("RGB", (result.width, result.height), result.frame_rgb(0))
+    preview_scaled = max(img.size) > limits.max_preview_dim
+    if preview_scaled:
+        img.thumbnail((limits.max_preview_dim, limits.max_preview_dim), Image.NEAREST)
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+
+    response = {
+        "ok": True,
+        "width": result.width,
+        "height": result.height,
+        "frame_count": len(result.frames),
+        "raw_rgb_bytes": result.raw_rgb_size,
+        "program_text": program_text,
+        "preview_scaled": preview_scaled,
+        "preview_png_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+    }
+
+    full_png_b64 = base64.b64encode(
+        png_bytes(result.width, result.height, result.frame_rgb(0))).decode("ascii")
+    response["png_omitted"] = len(full_png_b64) > limits.max_payload_b64_bytes
+    response["png_base64"] = "" if response["png_omitted"] else full_png_b64
+
+    if len(result.frames) > 1:
+        import os as _os
+        import tempfile
+
+        from .imageio import save_gif
+        with tempfile.TemporaryDirectory() as td:
+            path = _os.path.join(td, "out.gif")
+            frames = [result.frame_rgb(i) for i in range(len(result.frames))]
+            save_gif(path, result.width, result.height, frames)
+            with open(path, "rb") as fh:
+                gif_b64 = base64.b64encode(fh.read()).decode("ascii")
+        response["gif_omitted"] = len(gif_b64) > limits.max_payload_b64_bytes
+        response["gif_base64"] = "" if response["gif_omitted"] else gif_b64
+
+    from .svg import UnsupportedForSVG, render_svg
+    try:
+        response["svg_available"] = True
+        response["svg_text"] = render_svg(program_text)
+    except UnsupportedForSVG as exc:
+        response["svg_available"] = False
+        response["svg_reason"] = str(exc)
+
+    return 200, response

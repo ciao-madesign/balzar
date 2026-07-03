@@ -136,7 +136,41 @@ Due dettagli tecnici emersi costruendolo, da ricordare:
   codici. **ZBar (`pyzbar`) li legge tutti**: usare quello, non il
   detector nativo di OpenCV.
 
-### 2.5 App desktop (il prodotto)
+### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
+
+`balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
+un'estensione dell'encoder. PNG (`png.py`) rasterizza **qualunque**
+programma sempre; SVG no, e lo dichiara: solo il sottoinsieme di
+operazioni con un equivalente vettoriale diretto è supportato —
+`CANVAS`, `PALETTE`, `REGION`, `LOOP`, `RECT`, `LINE`, `CIRCLE`, `TEXT`,
+`FILL`, `COPY`, `TILE`, e **al massimo un `FRAME`** (video/animazioni
+restano dominio di PNG/GIF). Ops senza un significato vettoriale pulito
+(`SHIFT`, `ROTATE`, `MIRROR`, `SCALE`, `SWAP`, `MAP`, `INVERT`, `NOISE`,
+`SCATTER`, `FRACTAL`, `SETPIX`, o un programma multi-frame) fanno
+sollevare `UnsupportedForSVG` con il nome esatto dell'istruzione
+incompatibile, invece di rasterizzare silenziosamente una toppa o
+produrre un file che sembra vettoriale ma non lo è.
+
+Dettagli tecnici non ovvi:
+- `TILE` diventa un vero `<pattern>` SVG (riempimento scalabile nativo,
+  non una copia raster ripetuta) — corrispondenza quasi perfetta con la
+  semantica dell'istruzione.
+- `COPY` duplica gli elementi vettoriali già emessi nella regione
+  sorgente dentro un `<g transform="translate(...)">` alla destinazione:
+  un cerchio copiato resta un cerchio vero, non una toppa raster.
+- `TEXT` diventa `<text>` reale/editabile (font generico monospace), **non**
+  una riproduzione pixel-perfect del font bitmap 5×7 — scelta deliberata:
+  testo vettoriale modificabile in Illustrator/Inkscape vale più di un
+  match esatto del glifo che nessuno può selezionare o restilizzare.
+
+Verificato su tutti gli esempi (`tests/test_svg.py` + rendering reale in
+browser via Playwright): `etichetta_bom.bzr` e `schema_tecnico.bzr`
+esportano puliti (COPY per i bulloni → cerchi vettoriali reali, non
+pixel); `pattern_tile.bzr` (SHIFT/NOISE), `frattale.bzr` (FRACTAL),
+`animazione.bzr`/`esploso_industriale.bzr` (multi-frame) vengono
+onestamente rifiutati con il motivo esatto.
+
+### 2.6 App desktop (il prodotto)
 
 `balzar/gui.py` + `balzar-app.py` — Tkinter (stdlib) + Pillow. Apri
 immagine/GIF/payload → encoding in thread separato (la finestra non si
@@ -154,25 +188,36 @@ Verificato con screenshot reale sotto Xvfb: apertura GIF, encoding video
 delta, anteprima animata, pannello statistiche, bottoni attivi, ciclo
 completo esporta-QR→scansiona-foto→payload bit-identico.
 
-### 2.6 Demo web (solo vetrina, non il prodotto)
+### 2.7 Demo web (solo vetrina, non il prodotto)
 
-`index.html` + `app.js` + `style.css` + `api/encode.py` (funzione serverless
-Vercel) + `balzar/webapi.py` (logica condivisa con profili di limiti
-espliciti: `VERCEL_LIMITS` vs `LOCAL_LIMITS`, quest'ultimo per uso futuro non
-vincolato da piattaforma). Vercel impone limiti reali (~3,3MB upload utile,
-~4,5MB risposta, timeout) gestiti esplicitamente con messaggi chiari invece
-di errori criptici — vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`,
-`MAX_PAYLOAD_B64_BYTES` in `api/encode.py`. **Questi limiti non esistono
-nell'app desktop**, che è il prodotto vero.
+`index.html` + `app.js` + `style.css` + due funzioni serverless Vercel
+(`api/encode.py`, `api/render.py`) + `balzar/webapi.py` (logica condivisa
+con profili di limiti espliciti: `VERCEL_LIMITS` vs `LOCAL_LIMITS`,
+quest'ultimo non ancora agganciato a un vero deployment). Due tab nella
+pagina: **"Comprimi immagine"** (il flusso originale, `api/encode.py`) e
+**"Apri programma (.bzr/.bzp)"** (`api/render.py` + `handle_render` in
+`webapi.py`) — quest'ultima chiude il caso d'uso "ho scaricato un `.bzr`
+da qui e non ho un terminale": carica il file, viene decodificato e
+rigenerato, scarichi PNG (e GIF se multi-frame, e SVG se il programma è
+vettoriale — §2.5) senza installare nulla. Verificato end-to-end in
+sessione (Playwright): `.bzr` e `.bzp` entrambi riconosciuti, bottone SVG
+che appare/sparisce correttamente in base al programma, video multi-frame
+→ bottone GIF, file non valido → errore 400 con messaggio chiaro.
 
-### 2.7 CLI
+Vercel impone limiti reali (~3,3MB upload utile, ~4,5MB risposta, timeout)
+gestiti esplicitamente con messaggi chiari invece di errori criptici —
+vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
+`balzar/webapi.py`. **Questi limiti non esistono nell'app desktop**, che
+è il prodotto vero.
+
+### 2.8 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
 — vedi `balzar/cli.py` per l'elenco completo con esempi in `README.md`.
 
-### 2.8 Test
+### 2.9 Test
 
-56 test, tutti verdi (`python3 -m unittest discover -s tests`):
+66 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -476,7 +521,7 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 56 test (3 opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 66 test (3 opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-video anim.gif -o v.bzp

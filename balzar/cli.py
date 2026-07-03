@@ -68,6 +68,17 @@ def cmd_render(args: argparse.Namespace) -> int:
                         fps=args.fps)
         print(f"gif:         {gif_path} ({size} byte)")
 
+    if args.svg:
+        from .svg import UnsupportedForSVG, render_svg
+        try:
+            svg_text = render_svg(program)
+            svg_path = os.path.join(args.output, f"{stem}.svg")
+            with open(svg_path, "w", encoding="utf-8") as fh:
+                fh.write(svg_text)
+            print(f"svg:         {svg_path} ({len(svg_text)} byte, vettoriale reale)")
+        except UnsupportedForSVG as exc:
+            print(f"svg:         non disponibile — {exc}", file=sys.stderr)
+
     raw = result.raw_rgb_size
     factor = raw / len(payload)
     print(f"payload:     {len(payload)} byte "
@@ -303,6 +314,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--gif", action="store_true",
                    help="scrive anche una GIF animata (richiede Pillow)")
     p.add_argument("--fps", type=int, default=12)
+    p.add_argument("--svg", action="store_true",
+                   help="prova anche l'export SVG vettoriale (funziona solo "
+                        "per il sottoinsieme di op vettoriali, vedi balzar/svg.py)")
     p.set_defaults(func=cmd_render)
 
     p = sub.add_parser("encode", help="programma DSL -> payload binario")

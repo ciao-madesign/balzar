@@ -49,6 +49,29 @@ h1 {
 .tagline { color: var(--fg); max-width: 68ch; }
 .honesty { color: var(--muted); font-size: 0.92rem; max-width: 68ch; }
 
+.tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 0.5rem 0.9rem;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.tab:hover { color: var(--fg); }
+
 .dropzone {
   border: 2px dashed var(--border);
   border-radius: 12px;

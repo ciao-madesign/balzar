@@ -15,50 +15,95 @@
     <p class="honesty">Su contenuti strutturati (icone, schemi, pattern, pixel art) il guadagno è enorme.
       Su foto e rumore l'encoder lo dichiara onestamente invece di fingere una compressione che non c'è —
       è il limite di complessità di Kolmogorov descritto nel progetto.</p>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" id="tab-encode" type="button">Comprimi immagine</button>
+      <button class="tab" id="tab-open" type="button">Apri programma (.bzr / .bzp)</button>
+    </div>
   </header>
 
   <main>
-    <section id="drop" class="dropzone">
-      <input type="file" id="file-input" accept="image/*" hidden>
-      <p id="drop-label">Trascina un'immagine qui, oppure <button id="browse-btn" type="button">scegli un file</button></p>
-      <label class="dim-picker">
-        risoluzione di analisi
-        <select id="max-dim">
-          <option value="200">200 px</option>
-          <option value="300" selected>300 px</option>
-          <option value="400">400 px</option>
-          <option value="600">600 px (lento)</option>
-          <option value="800">800 px (molto lento)</option>
-        </select>
-      </label>
-    </section>
+    <div id="panel-encode">
+      <section id="drop" class="dropzone">
+        <input type="file" id="file-input" accept="image/*" hidden>
+        <p id="drop-label">Trascina un'immagine qui, oppure <button id="browse-btn" type="button">scegli un file</button></p>
+        <label class="dim-picker">
+          risoluzione di analisi
+          <select id="max-dim">
+            <option value="200">200 px</option>
+            <option value="300" selected>300 px</option>
+            <option value="400">400 px</option>
+            <option value="600">600 px (lento)</option>
+            <option value="800">800 px (molto lento)</option>
+          </select>
+        </label>
+      </section>
 
-    <section id="status" class="status" hidden></section>
+      <section id="status" class="status" hidden></section>
 
-    <section id="result" class="result" hidden>
-      <div class="images">
-        <figure>
-          <figcaption>originale caricato</figcaption>
-          <img id="img-original" alt="immagine originale">
-        </figure>
-        <figure>
-          <figcaption>rigenerato da balzar (payload → interprete → pixel)</figcaption>
-          <img id="img-rendered" alt="immagine rigenerata da balzar">
-        </figure>
-      </div>
+      <section id="result" class="result" hidden>
+        <div class="images">
+          <figure>
+            <figcaption>originale caricato</figcaption>
+            <img id="img-original" alt="immagine originale">
+          </figure>
+          <figure>
+            <figcaption>rigenerato da balzar (payload → interprete → pixel)</figcaption>
+            <img id="img-rendered" alt="immagine rigenerata da balzar">
+          </figure>
+        </div>
 
-      <table class="stats" id="stats-table"></table>
+        <table class="stats" id="stats-table"></table>
 
-      <div class="downloads">
-        <button id="dl-payload" type="button">scarica payload (.bzp)</button>
-        <button id="dl-program" type="button">scarica programma (.bzr)</button>
-      </div>
+        <div class="downloads">
+          <button id="dl-payload" type="button">scarica payload (.bzp)</button>
+          <button id="dl-program" type="button">scarica programma (.bzr)</button>
+        </div>
 
-      <details>
-        <summary>programma generato (DSL)</summary>
-        <pre id="program-text"></pre>
-      </details>
-    </section>
+        <details>
+          <summary>programma generato (DSL)</summary>
+          <pre id="program-text"></pre>
+        </details>
+      </section>
+    </div>
+
+    <div id="panel-open" hidden>
+      <p class="tagline">Hai già un file <code>.bzr</code> o <code>.bzp</code> (scaricato da qui, o
+        prodotto dalla CLI/app desktop)? Caricalo qui: viene decodificato e <strong>rigenerato</strong> —
+        nessun terminale necessario. Se il programma usa solo operazioni vettoriali (rettangoli, cerchi,
+        linee, testo — niente tiling/rumore/frattali), scarichi anche un vero SVG, non un raster incapsulato.</p>
+
+      <section id="open-drop" class="dropzone">
+        <input type="file" id="open-file-input" accept=".bzr,.bzp,text/plain" hidden>
+        <p>Trascina un file <code>.bzr</code>/<code>.bzp</code> qui, oppure
+          <button id="open-browse-btn" type="button">scegli un file</button></p>
+      </section>
+
+      <section id="open-status" class="status" hidden></section>
+
+      <section id="open-result" class="result" hidden>
+        <div class="images">
+          <figure>
+            <figcaption>rigenerato da balzar</figcaption>
+            <img id="open-img-rendered" alt="contenuto rigenerato">
+          </figure>
+        </div>
+
+        <table class="stats" id="open-stats-table"></table>
+
+        <div class="downloads">
+          <button id="open-dl-png" type="button">scarica PNG</button>
+          <button id="open-dl-gif" type="button" hidden>scarica GIF</button>
+          <button id="open-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
+        </div>
+        <p id="open-svg-reason" class="honesty" hidden></p>
+
+        <details>
+          <summary>programma (DSL)</summary>
+          <pre id="open-program-text"></pre>
+        </details>
+      </section>
+    </div>
   </main>
 
   <footer>

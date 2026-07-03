@@ -248,18 +248,51 @@ reso misurabile. Il rilevamento di linee/cerchi (per contenuti vettoriali
 con bordi non assiali, es. icone con curve) non è ancora implementato: è
 il limite noto di questa v1, richiederebbe un fitting tipo Hough.
 
+## Export SVG (vettoriale reale)
+
+`balzar/svg.py` è un secondo target di rendering per lo stesso DSL —
+PNG rasterizza sempre, SVG solo per il sottoinsieme di operazioni con un
+equivalente vettoriale diretto (`RECT`, `LINE`, `CIRCLE`, `TEXT`, `FILL`,
+`COPY`, `TILE`, un solo `FRAME`). Se il programma usa operazioni senza
+un significato vettoriale pulito (`SHIFT`, `NOISE`, `FRACTAL`, più di un
+`FRAME`, ecc.), l'export fallisce con un errore che nomina l'istruzione
+incompatibile — mai un raster silenziosamente incapsulato in un tag SVG.
+
+```bash
+python3 -m balzar render examples/etichetta_bom.bzr -o out/ --svg
+# -> out/etichetta_bom.svg: vettoriale reale, apribile/modificabile in
+#    Illustrator o Inkscape (i cerchi restano cerchi, non pixel)
+
+python3 -m balzar render examples/frattale.bzr -o out/ --svg
+# -> svg: non disponibile — 'FRACTAL' non ha un equivalente vettoriale diretto
+```
+
+`TILE` diventa un vero `<pattern>` SVG (riempimento scalabile nativo);
+`COPY` duplica gli elementi vettoriali già emessi in un `<g
+transform="translate(...)">` alla destinazione — un cerchio copiato resta
+un cerchio, non una toppa raster. `TEXT` diventa `<text>` reale/editabile
+con un font generico monospace, non una riproduzione pixel-perfect del
+font bitmap 5×7 di `font5x7.py`: scelta deliberata, testo modificabile
+vale più di un match esatto del glifo.
+
 ## Demo web (solo vetrina online)
 
 La demo su Vercel serve unicamente a far provare l'encoder dal browser;
 il prodotto è l'app desktop qui sopra, che non ha i limiti di upload,
 risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
-`app.js` + `style.css`) più una
-funzione serverless Python (`api/encode.py`) pensata per **Vercel**: carica
-un'immagine, la analizza lato server con l'encoder reale (stesso codice
-della CLI, nessuna riscrittura), e mostra fianco a fianco l'originale e
-l'immagine **rigenerata dall'interprete** a partire dal payload — non è mai
-l'upload originale ridisegnato. Scarichi il payload binario (`.bzp`) o il
-programma DSL (`.bzr`).
+`app.js` + `style.css`) con due tab, due funzioni serverless Python:
+
+- **"Comprimi immagine"** (`api/encode.py`): carica una foto, la analizza
+  lato server con l'encoder reale (stesso codice della CLI), mostra
+  fianco a fianco l'originale e l'immagine **rigenerata dall'interprete**
+  a partire dal payload — mai l'upload originale ridisegnato. Scarichi il
+  payload binario (`.bzp`) o il programma DSL (`.bzr`).
+- **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
+  generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
+  una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
+  file, viene decodificato e rigenerato, scarichi PNG (o GIF se
+  multi-frame, o SVG vettoriale se il programma è nel sottoinsieme
+  supportato — vedi sopra) con un click.
 
 ```bash
 # deploy
@@ -282,18 +315,22 @@ balzar/
   interpreter.py  interprete deterministico: programma -> frame
   payload.py      encoder/decoder payload binario (QR-ready)
   png.py          writer PNG RGB8 in puro Python
+  svg.py          export SVG vettoriale reale (sottoinsieme vector-safe)
   encoder.py      encoder automatico immagine -> DSL (best-effort)
   video.py        encoder sequenze di frame (delta tra frame, sez. 4.3)
   imageio.py      lettura immagini/GIF animate (unico modulo con Pillow)
+  qr.py           payload <-> immagine QR (singola o griglia), lettura ZBar
   gui.py          applicazione desktop (Tkinter)
   webapi.py       logica dell'API web con profili di limiti
   cli.py          render / encode / encode-image / encode-video / decode /
-                  info / chunks / assemble / gui
+                  info / chunks / scan / assemble / gui
 balzar-app.py     entry point per PyInstaller
 examples/         programmi dimostrativi (.bzr)
-tests/            determinismo, round-trip, op, espansione, encoder, video
-api/encode.py     funzione serverless Vercel per la demo web
-index.html, app.js, style.css   frontend statico della demo
+tests/            determinismo, round-trip, op, espansione, encoder, video,
+                  qr, svg
+api/encode.py     funzione serverless Vercel: comprimi immagine -> payload
+api/render.py     funzione serverless Vercel: apri .bzr/.bzp -> PNG/GIF/SVG
+index.html, app.js, style.css   frontend statico della demo (2 tab)
 ```
 
 Per aggiungere un'operazione basta registrarla in `ops.py` con la sua firma

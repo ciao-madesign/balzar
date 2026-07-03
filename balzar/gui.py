@@ -119,6 +119,9 @@ class BalzarApp:
         self.btn_export = ttk.Button(btns, text="Esporta rigenerato (PNG/GIF)",
                                      command=self.export_rendered, state="disabled")
         self.btn_export.pack(fill="x", pady=2)
+        self.btn_svg = ttk.Button(btns, text="Esporta SVG (vettoriale)",
+                                  command=self.export_svg, state="disabled")
+        self.btn_svg.pack(fill="x", pady=2)
         self.btn_chunks = ttk.Button(btns, text="Esporta QR (immagine)",
                                      command=self.export_chunks, state="disabled")
         self.btn_chunks.pack(fill="x", pady=2)
@@ -291,6 +294,28 @@ class BalzarApp:
                     fh.write(data)
                 self.status.set(f"Esportato PNG ({_fmt(len(data))} B)")
 
+    def export_svg(self) -> None:
+        """True vector export — works only for the vector-safe DSL subset
+        (balzar/svg.py); refuses clearly instead of faking it otherwise."""
+        job = self.job
+        if not job:
+            return
+        from .svg import UnsupportedForSVG, render_svg
+        try:
+            svg_text = render_svg(job.program_text)
+        except UnsupportedForSVG as exc:
+            messagebox.showwarning(
+                "balzar",
+                f"Questo programma non e' esportabile in SVG:\n\n{exc}\n\n"
+                f"Usa 'Esporta rigenerato (PNG/GIF)' invece.")
+            return
+        path = self._ask_save(self._stem() + ".svg", ".svg",
+                              [("SVG vettoriale", "*.svg")])
+        if path:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(svg_text)
+            self.status.set(f"Esportato SVG ({_fmt(len(svg_text))} B, vettoriale reale)")
+
     def export_chunks(self) -> None:
         """Payload -> one printable image: a single QR, or an auto-sized
         grid of QR codes if it doesn't fit in one (balzar/qr.py). Same
@@ -338,7 +363,7 @@ class BalzarApp:
     def _set_buttons(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
         for b in (self.btn_payload, self.btn_program,
-                  self.btn_export, self.btn_chunks):
+                  self.btn_export, self.btn_svg, self.btn_chunks):
             b.configure(state=state)
 
     def _photo_from_rgb(self, w: int, h: int, rgb: bytes) -> tk.PhotoImage:

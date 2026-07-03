@@ -166,3 +166,129 @@ dlProgramBtn.addEventListener("click", () => {
   if (!lastResult) return;
   downloadBlob(new TextEncoder().encode(lastResult.program_text), "output.bzr", "text/plain");
 });
+
+// ---------------------------------------------------------- tabs
+
+const tabEncode = document.getElementById("tab-encode");
+const tabOpen = document.getElementById("tab-open");
+const panelEncode = document.getElementById("panel-encode");
+const panelOpen = document.getElementById("panel-open");
+
+function activateTab(tab) {
+  const isEncode = tab === "encode";
+  tabEncode.classList.toggle("active", isEncode);
+  tabOpen.classList.toggle("active", !isEncode);
+  panelEncode.hidden = !isEncode;
+  panelOpen.hidden = isEncode;
+}
+tabEncode.addEventListener("click", () => activateTab("encode"));
+tabOpen.addEventListener("click", () => activateTab("open"));
+
+// ------------------------------------------------- apri programma (.bzr/.bzp)
+
+const openDrop = document.getElementById("open-drop");
+const openFileInput = document.getElementById("open-file-input");
+const openBrowseBtn = document.getElementById("open-browse-btn");
+const openStatusEl = document.getElementById("open-status");
+const openResultEl = document.getElementById("open-result");
+const openImgRendered = document.getElementById("open-img-rendered");
+const openStatsTable = document.getElementById("open-stats-table");
+const openProgramText = document.getElementById("open-program-text");
+const openDlPng = document.getElementById("open-dl-png");
+const openDlGif = document.getElementById("open-dl-gif");
+const openDlSvg = document.getElementById("open-dl-svg");
+const openSvgReason = document.getElementById("open-svg-reason");
+
+let lastOpenResult = null;
+
+openBrowseBtn.addEventListener("click", () => openFileInput.click());
+openFileInput.addEventListener("change", () => {
+  if (openFileInput.files[0]) handleOpenFile(openFileInput.files[0]);
+});
+["dragenter", "dragover"].forEach(evt =>
+  openDrop.addEventListener(evt, e => { e.preventDefault(); openDrop.classList.add("dragover"); })
+);
+["dragleave", "drop"].forEach(evt =>
+  openDrop.addEventListener(evt, e => { e.preventDefault(); openDrop.classList.remove("dragover"); })
+);
+openDrop.addEventListener("drop", e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleOpenFile(file);
+});
+
+function setOpenStatus(msg, isError) {
+  openStatusEl.hidden = false;
+  openStatusEl.textContent = msg;
+  openStatusEl.classList.toggle("error", !!isError);
+}
+
+async function handleOpenFile(file) {
+  openResultEl.hidden = true;
+  setOpenStatus(`Apertura di "${file.name}" in corso…`);
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    const data = dataUrl.split(",", 2)[1];
+
+    const res = await fetch("/api/render", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data }),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+
+    lastOpenResult = json;
+    renderOpenResult(json);
+    setOpenStatus(`Fatto: ${file.name}`);
+  } catch (err) {
+    setOpenStatus("Errore: " + err.message, true);
+  }
+}
+
+function renderOpenResult(r) {
+  openImgRendered.src = "data:image/png;base64," + r.preview_png_base64;
+  openProgramText.textContent = r.program_text;
+
+  const rows = [
+    ["dimensioni", `${r.width}×${r.height} px`],
+    ["frame", r.frame_count],
+    ["RGB grezzo equivalente", fmtBytes(r.raw_rgb_bytes)],
+  ];
+  if (r.preview_scaled) rows.push(["anteprima", "ridotta per la visualizzazione"]);
+  openStatsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+  openDlPng.disabled = !!r.png_omitted;
+  openDlPng.title = r.png_omitted ? "PNG oltre il limite di risposta del server" : "";
+
+  openDlGif.hidden = r.frame_count <= 1;
+  if (r.frame_count > 1) {
+    openDlGif.disabled = !!r.gif_omitted;
+    openDlGif.title = r.gif_omitted ? "GIF oltre il limite di risposta del server" : "";
+  }
+
+  openDlSvg.hidden = !r.svg_available;
+  openSvgReason.hidden = r.svg_available;
+  if (!r.svg_available) {
+    openSvgReason.textContent = "SVG non disponibile: " + r.svg_reason;
+  }
+
+  openResultEl.hidden = false;
+}
+
+openDlPng.addEventListener("click", () => {
+  if (!lastOpenResult || !lastOpenResult.png_base64) return;
+  downloadBlob(base64ToBytes(lastOpenResult.png_base64), "rigenerato.png", "image/png");
+});
+openDlGif.addEventListener("click", () => {
+  if (!lastOpenResult || !lastOpenResult.gif_base64) return;
+  downloadBlob(base64ToBytes(lastOpenResult.gif_base64), "rigenerato.gif", "image/gif");
+});
+openDlSvg.addEventListener("click", () => {
+  if (!lastOpenResult || !lastOpenResult.svg_text) return;
+  downloadBlob(new TextEncoder().encode(lastOpenResult.svg_text), "rigenerato.svg", "image/svg+xml");
+});
