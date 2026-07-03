@@ -296,7 +296,22 @@ e il formato è interpretabile come regole discrete.
 
 ## Estensioni previste
 
-- rilevamento di linee/cerchi/simmetrie nell'encoder (oltre a rettangoli
-  piatti e tiling), per comprimere bene anche contenuti vettoriali curvi;
+- **ingestione diretta di formati vettoriali (SVG/DXF)**: priorità sopra il
+  rilevamento Hough sul raster, perché i dati sono già discreti nel formato
+  sorgente (un cerchio SVG è già centro+raggio) invece di doverli dedurre
+  da pixel — vedi `CLAUDE.md` §5.1 per il ragionamento completo;
+  serve solo un nuovo modulo di ingestione, le primitive (`LINE`/`CIRCLE`)
+  esistono già;
+- rilevamento di linee/cerchi (Hough) sul raster, per contenuto senza
+  sorgente vettoriale disponibile (screenshot, scansioni);
+- comando `balzar scan`: lettura di una griglia fisica di QR in un colpo
+  solo (provato ad-hoc con ZBar in sessione, non ancora integrato — vedi
+  `CLAUDE.md` §5.2);
 - generazione diretta del QR code dal payload;
-- scene 3D descritte con lo stesso modello (stato + trasformazioni).
+- scene 3D descritte con lo stesso modello (stato + trasformazioni) — il
+  candidato più lontano: servirebbe sia un parser CAD reale (es. STEP) sia
+  primitive 3D nel DSL, nessuna delle due esiste oggi (dettagli in
+  `CLAUDE.md` §7.3).
+
+Per un registro di idee esterne valutate (comprese quelle scartate o
+ridimensionate, con il perché) vedi `CLAUDE.md` §7.

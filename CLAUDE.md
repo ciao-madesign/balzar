@@ -210,26 +210,192 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
 
 ## 5. Sviluppi possibili (ordinati per valore/sforzo stimato)
 
-1. **Comando `balzar scan`**: fotografa/carica un'immagine di una griglia di
+1. **Ingestione diretta di formati vettoriali (SVG/DXF)**, *promosso sopra
+   Hough transform*: un cerchio in un SVG/DXF è già un cerchio con centro e
+   raggio espliciti — si mappa quasi 1:1 su `CIRCLE`/`LINE` esistenti senza
+   inferire nulla da pixel. Risolve la criticità #1 (contenuto vettoriale
+   con bordi non assiali) per una frazione dello sforzo di un vero
+   rilevamento Hough sul raster, perché aggira il problema (i dati sono già
+   discreti nel formato sorgente) invece di risolverlo (dedurli da pixel).
+   Nuovo modulo di ingestione (parser SVG path/circle/line, parser DXF
+   entità) parallelo a `imageio.py`, non tocca il motore. **Non ancora
+   iniziato**: zero parsing di formati vettoriali nel codice oggi.
+2. **Comando `balzar scan`**: fotografa/carica un'immagine di una griglia di
    QR, li decodifica con ZBar in un colpo solo, riassembla, renderizza.
    Chiude il cerchio "supporto fisico → contenuto rigenerato" che oggi è
    solo per metà nel codice (si genera testo capitoli, non si legge indietro
    da foto). Aggiungere anche generazione QR reale (`qrcode`) al posto del
-   solo testo base64 in `export_chunks`/`cmd_chunks`.
-2. **Rilevamento linee/cerchi (Hough)** nell'encoder immagine: risolverebbe
-   la criticità #1, la più seria. Estende il guadagno dal "flat + tiling" al
-   vero contenuto vettoriale/tecnico (icone, schemi con curve).
-3. **Packaging e distribuzione reale**: build PyInstaller testate su
+   solo testo base64 in `export_chunks`/`cmd_chunks`. Provato ad-hoc in
+   sessione (vedi §2.4): 15 QR fotografati in un colpo solo con ZBar,
+   riassemblati, video rigenerato — il concetto regge, va solo integrato.
+3. **Rilevamento linee/cerchi (Hough) sul raster**: utile solo per
+   contenuto che arriva *già rasterizzato* senza sorgente vettoriale
+   disponibile (screenshot, scansioni). Se il punto 1 copre il caso reale
+   più comune (CAD/schemi hanno quasi sempre una sorgente vettoriale),
+   questo scende in priorità — è uno sforzo maggiore (fitting reale, non
+   solo lettura) per una porzione più piccola di casi.
+4. **Packaging e distribuzione reale**: build PyInstaller testate su
    Windows/macOS/Linux, eventualmente firma del codice, installer.
-4. **Filtri PNG adattivi** in `png.py` per output competitivo con encoder
+5. **Filtri PNG adattivi** in `png.py` per output competitivo con encoder
    PNG di libreria (criticità #3) — minore, ma facile.
-5. **Generazione diretta del QR dal payload** (già in parte coperta dal
-   punto 1).
-6. **Scene 3D** con lo stesso modello stato+trasformazioni (estensione
-   dichiarata fin dalla visione originale, non ancora iniziata).
-7. **Quantizzatore percettivo migliore** per il fallback lossy (criticità #2).
+6. **Generazione diretta del QR dal payload** (già in parte coperta dal
+   punto 2).
+7. **Pre-rendering di stati UI/HMI finiti** (versione ridimensionata e
+   costruibile dell'idea "gemello UI runtime" — vedi §7.2 per il perché la
+   versione ambiziosa non è realistica): se un pannello industriale ha un
+   numero finito di stati visivi noti (idle/loading/alarm/errore), ognuno
+   si pre-renderizza offline col motore video esistente (`video.py`, stessa
+   tecnica del delta tra frame) in un unico payload compatto; un wrapper
+   esterno piccolissimo sceglie quale frame mostrare in base allo stato live
+   letto altrove. Zero nuove primitive nel motore — è un caso d'uso di
+   `encode_video`, non un'estensione.
+8. **Scene 3D** con lo stesso modello stato+trasformazioni (estensione
+   dichiarata fin dalla visione originale, non ancora iniziata). Il
+   candidato più lontano di tutti: servirebbe un parser di un formato CAD
+   reale (es. STEP, geometria B-rep con vincoli/simmetrie) *e* primitive 3D
+   nel DSL — nessuna delle due esiste oggi. Vedi §7.3 per l'analisi
+   dettagliata di perché non è "il prossimo passo facile" nonostante sembri
+   il caso ideale sulla carta.
+9. **Quantizzatore percettivo migliore** per il fallback lossy (criticità #2).
+10. **Encoder per dati strutturati non-immagine** (JSON/XML ripetitivi):
+    problema diverso dalla compressione di immagini — "template + diff dei
+    parametri" invece di "rettangoli di pixel". Concettualmente vicino al
+    modello LOOP+espressioni del DSL, ma richiederebbe un encoder
+    interamente nuovo, non un'estensione di `encoder.py`. Speculativo,
+    nessun lavoro iniziato.
 
-## 6. Comandi utili per riprendere il lavoro
+## 6. Applicazioni target (valutate, non solo elencate)
+
+Sei direzioni d'uso concrete, ordinate dalla più B2B/tecnica alla più
+consumer. Per ognuna: perché balzar specificamente (con un numero reale
+dietro, non una stima), e la precondizione che la rende vera.
+
+1. **Manuali tecnici e ricambi industriali.** Etichetta con QR su un
+   ricambio → schema esploso/istruzioni di montaggio rigenerati offline.
+   Numeri reali più forti del progetto (`schema_tecnico.bzr`,
+   `esploso_industriale.bzr`): 2.900×–17.000× a seconda della baseline.
+   Precondizione: il disegno va esportato pulito (CAD/vettoriale), non
+   fotografato — vedi §5.1 per come questo diventa ancora più forte con
+   l'ingestione SVG/DXF diretta.
+2. **Asset per firmware/embedded**: icone, boot animation, sprite UI come
+   programma invece di bitmap in flash — il decoder è stdlib pura apposta
+   per questo. Coerente con la visione originale (sez. 10 della spec).
+3. **Distribuzione offline di contenuti tecnici/didattici** in zone a bassa
+   connettività: una pagina di QR fotografata in un colpo solo (provato:
+   15 QR, ZBar, riassemblaggio bit-identico — vedi §2.4) consegna
+   diagrammi/animazioni senza rete dati.
+4. **Asset procedurali per videogiochi/app**: tileset, pattern UI, sprite
+   animati generati a runtime da un seed invece che scaricati come bitmap.
+   Non è una novità (procedural generation esiste da decenni nei motori di
+   gioco), ma balzar offre un formato portabile e interpretabile invece di
+   codice ad-hoc per motore.
+5. **Marketing generativo/branding fisico**: QR su packaging che
+   rigenerano un pattern di brand animato. Il valore è il gesto ("appare
+   dal nulla" da un'etichetta minuscola), non la percentuale di
+   compressione — e funziona perché il pattern è *disegnato* per essere
+   strutturato, va comunicato così o sembra una promessa che non regge
+   sulla prima foto di un cliente.
+6. **Musica: notazione/MIDI strutturato, non audio.** Vedi §7.4: idea
+   valida solo se si resta su rappresentazione simbolica (spartito, MIDI,
+   pattern ritmici/melodici), MAI su audio campionato (dove balzar non ha
+   nulla da offrire: un MP3/WAV già usa una compressione percettiva
+   ottimizzata da decenni di ricerca, un secondo passaggio non fa che
+   peggiorare — stesso principio per cui in tabella MP3/AAC/MP4 sono
+   segnati come "peggiora sempre").
+
+## 7. Idee esterne valutate (per non ridiscuterle da zero)
+
+Registro delle proposte esterne (consulenze, brainstorm) con verdetto
+esplicito: cosa è balzar-oggi, cosa è "stessa filosofia ma prodotto
+diverso", cosa è semplicemente non fattibile con l'architettura attuale.
+
+### 7.1 Formati vettoriali/CAD (SVG, DXF, STEP, G-code, GLTF, STL, OBJ)
+
+Un consulente ha proposto una classifica di "efficacia Balzar" per ~25
+formati di file. Il principio qualitativo è corretto e coincide col
+nostro (strutturato/vettoriale comprime, percettivo/già-compresso no), ma
+**tutti i numeri della tabella sono aspirazionali**: balzar oggi ingerisce
+solo immagini raster via Pillow, zero parsing di STEP/SVG/DXF/G-code/
+GLTF/STL/OBJ/XML/JSON. Nessuno di quei formati è supportato nel codice.
+Vedi §5.1 per l'estensione reale più vicina (SVG/DXF) e §7.3 per il caso
+STEP nel dettaglio.
+
+### 7.2 "Gemello digitale" di una UI industriale runtime
+
+Proposta: serializzare un pannello HMI (component library + layout rules
++ state machine + binding logici tipo `if machine.status == alarm →
+AlarmWidget.visible = true`) come "UI execution graph" eseguibile da
+balzar. **Non è un'estensione di balzar**: il DSL attuale non ha
+condizionali (solo aritmetica totale su variabili di loop, per design —
+vedi `dsl.py`), non legge stato esterno a runtime (il seed è cotto nel
+payload), non ha un modello a componenti/oggetti. Servirebbe un
+linguaggio nuovo con condizionali, input live, binding reattivi — un
+prodotto fratello che condivide la filosofia (determinismo, niente
+storage di dati grezzi) ma non l'architettura (griglia di pixel +
+trasformazioni geometriche). La proposta contiene anche una
+contraddizione interna: il suo stesso piano B per il caso realistico
+("nessun accesso al codice") è un modello *probabilistico* ricostruito
+dai log — che contraddice il punto 7.1 della visione originale
+(determinismo totale, zero probabilità). Versione ridimensionata e
+realmente costruibile con l'architettura attuale: punto 7 di §5
+(pre-rendering di un numero finito di stati UI noti via `encode_video`,
+scelta del frame delegata a un wrapper esterno).
+
+### 7.3 Perché STEP non è il prossimo passo, nonostante sembri il caso ideale
+
+STEP descrive geometria B-rep con primitive parametriche vere (cilindro,
+foro, raggio, vincoli, simmetrie dichiarate) — sulla carta è esattamente
+il tipo di struttura che il modello di balzar ama. Il problema non è il
+principio, è che servono **due cose che non esistono, non una**:
+
+1. **Un parser STEP reale.** STEP (ISO 10303) non è un formato semplice
+   da leggere a mano: è un linguaggio di scambio dati completo (EXPRESS),
+   normalmente letto con librerie CAD pesanti (OpenCascade e simili, non
+   pure-Python, non piccole). Scriverne uno da zero è un progetto a sé,
+   ordini di grandezza più grande di `imageio.py` (che delega tutto il
+   parsing pesante a Pillow, una libreria matura da vent'anni — non
+   esiste un equivalente leggero per STEP).
+2. **Primitive 3D nel DSL, che oggi non esistono.** Tutto il motore
+   (`grid.py`, `ops.py`) lavora su una griglia 2D di indici di palette.
+   Non c'è un concetto di solido, mesh, vincolo geometrico o proiezione
+   3D→2D da nessuna parte. Anche con un parser STEP perfetto in mano, non
+   ci sarebbe dove appoggiare l'informazione estratta.
+
+Il confronto onesto con SVG/DXF (§5.1) rende il divario evidente: lì i
+parser sono semplici (path/circle/linea in un file di testo strutturato,
+gestibili con poche centinaia di righe pure-Python) e le primitive di
+destinazione (`LINE`, `CIRCLE`) **esistono già**. Per STEP mancano
+entrambi i lati del ponte. Resta il candidato più interessante per il
+*lungo termine* (punto 8 di §5, insieme alle scene 3D), non per il
+prossimo incremento.
+
+### 7.4 Musica: dove potrebbe avere senso, dove no
+
+Distinzione netta, stesso principio di PNG-tecnico-vs-fotografico:
+
+- **Audio campionato (MP3/WAV/FLAC di una registrazione reale)**: zero
+  guadagno per definizione. Un campione audio è denso di micro-variazioni
+  che i codec audio già comprimono sfruttando decenni di modelli
+  percettivi (mascheramento uditivo, ecc.) — è la stessa categoria di
+  JPEG/H.265 in tabella, "già ottimizzato, un secondo passaggio peggiora".
+  Balzar non ha né l'obiettivo né gli strumenti per competere qui, e
+  dichiararlo sarebbe l'esatto errore di onestà che il progetto vuole
+  evitare.
+- **Notazione simbolica (spartito, MIDI, pattern ritmici/melodici
+  generativi)**: territorio potenzialmente valido, perché è già
+  discreto e strutturato, non un segnale continuo. Un rullante ripetuto
+  ogni 4 battute, un arpeggio con trasposizioni regolari, una sequenza
+  MIDI con pattern ricorrenti: sono l'equivalente musicale del tiling e
+  delle trasformazioni geometriche (SHIFT diventa trasposizione, LOOP
+  diventa ripetizione di battute, un ipotetico `TRANSPOSE`/`SEQUENCE`
+  sostituirebbe RECT/CIRCLE). Ma è **un dominio nuovo**, non un'estensione
+  dell'encoder immagini: servirebbe uno stato (griglia note/tempo invece
+  di griglia pixel) e operazioni proprie. Zero lavoro iniziato, nessuna
+  garanzia che il guadagno sarebbe comparabile ai numeri visti su
+  immagini/video — da trattare come ipotesi da testare, non da vendere
+  con un moltiplicatore inventato.
+
+## 8. Comandi utili per riprendere il lavoro
 
 ```bash
 python3 -m unittest discover -s tests        # 48 test, deve restare verde
