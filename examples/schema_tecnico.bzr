@@ -1,0 +1,65 @@
+# Schema tecnico stile CAD: flangia con fori di fissaggio ripetuti e
+# quote. Le parti ripetute (bulloni, tacche) sono definite una volta e
+# replicate con COPY/LOOP: e' il caso d'uso "esplosi meccanici".
+
+CANVAS w=800 h=600 bg=1
+PALETTE i=0 rgb=#1A1A2E
+PALETTE i=2 rgb=#C0392B
+PALETTE i=8 rgb=#7F8C8D
+
+# --- corpo della flangia ---
+CIRCLE cx=300 cy=300 r=220 color=0 fill=0
+CIRCLE cx=300 cy=300 r=219 color=0 fill=0
+CIRCLE cx=300 cy=300 r=140 color=0 fill=0
+CIRCLE cx=300 cy=300 r=60 color=0 fill=0
+CIRCLE cx=300 cy=300 r=59 color=0 fill=0
+
+# assi di simmetria (tratteggio simulato con LOOP)
+LOOP var=k count=28
+  LINE x1=300+k*20 y1=300 x2=300+k*20+9 y2=300 color=8
+  LINE x1=300-k*20 y1=300 x2=300-k*20-9 y2=300 color=8
+  LINE x1=300 y1=300+k*10 x2=300 y2=300+k*10+4 color=8
+  LINE x1=300 y1=300-k*10 x2=300 y2=300-k*10-4 color=8
+ENDLOOP
+
+# --- bullone campione, disegnato una sola volta ---
+REGION name=BOLT x=730 y=20 w=40 h=40
+FILL region=BOLT color=1
+CIRCLE cx=750 cy=40 r=16 color=0 fill=0
+CIRCLE cx=750 cy=40 r=7 color=2 fill=1
+
+# 8 fori di fissaggio: il bullone viene copiato sulle posizioni a 45 gradi
+REGION name=B0 x=460 y=280 w=40 h=40
+REGION name=B1 x=413 y=393 w=40 h=40
+REGION name=B2 x=300 y=440 w=40 h=40
+REGION name=B3 x=167 y=393 w=40 h=40
+REGION name=B4 x=100 y=280 w=40 h=40
+REGION name=B5 x=167 y=167 w=40 h=40
+REGION name=B6 x=280 y=120 w=40 h=40
+REGION name=B7 x=393 y=167 w=40 h=40
+COPY src=BOLT dst=B0
+COPY src=BOLT dst=B1
+COPY src=BOLT dst=B2
+COPY src=BOLT dst=B3
+COPY src=BOLT dst=B4
+COPY src=BOLT dst=B5
+COPY src=BOLT dst=B6
+COPY src=BOLT dst=B7
+
+# il campione fuori tavola viene cancellato dopo la replica
+FILL region=BOLT color=1
+
+# --- vista laterale (sezione) a destra, con tratteggio ---
+RECT x=560 y=120 w=60 h=360 color=0 fill=0
+RECT x=620 y=220 w=120 h=160 color=0 fill=0
+LOOP var=k count=18
+  LINE x1=562 y1=125+k*20 x2=618 y2=145+k*20 color=8
+ENDLOOP
+LOOP var=k count=8
+  LINE x1=622 y1=225+k*20 x2=738 y2=245+k*20 color=8
+ENDLOOP
+
+# quota orizzontale
+LINE x1=80 y1=560 x2=520 y2=560 color=2
+LINE x1=80 y1=550 x2=80 y2=570 color=2
+LINE x1=520 y1=550 x2=520 y2=570 color=2

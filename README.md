@@ -1,2 +1,179 @@
 # balzar
-# Progetto: Generazione Deterministica di Contenuti Ad Alta Complessità da Descrizioni Minime 
+
+**Generazione deterministica di contenuti ad alta complessità da descrizioni minime.**
+
+Un contenuto digitale (immagine o sequenza di frame) non viene memorizzato:
+viene **rigenerato deterministicamente** a partire da un payload compatto —
+seme + programma di regole — che entra in un singolo QR code. Il dato diventa
+minimo, la descrizione diventa il contenuto.
+
+```
+INPUT MINIMO (seed + istruzioni)     payload binario, ~200-500 byte
+        ↓
+INTERPRETE DETERMINISTICO            balzar/interpreter.py
+        ↓
+APPLICAZIONE DI REGOLE SUCCESSIVE    balzar/ops.py
+        ↓
+RICOSTRUZIONE OUTPUT COMPLETO        PNG / sequenze di frame, MB di pixel
+```
+
+Implementazione in **puro Python, zero dipendenze** (solo stdlib): il
+determinismo è totale per costruzione e il decoder gira ovunque, inclusi
+sistemi embedded.
+
+## Risultati misurati (esempi inclusi)
+
+| Programma | Payload | Output | Espansione |
+|---|---|---|---|
+| `examples/animazione.bzr` | 210 byte | 24 frame 256×256 (4,7 MB RGB) | ~22.500× |
+| `examples/pattern_tile.bzr` | 276 byte | 1024×1024 (3,1 MB RGB) | ~11.400× |
+| `examples/frattale.bzr` | 230 byte | 768×512 (1,2 MB RGB) | ~5.100× |
+| `examples/schema_tecnico.bzr` | ~490 byte | 800×600 (1,4 MB RGB) | ~2.900× |
+
+Tutti i payload entrano in un QR code versione 40 (capacità ~2953 byte).
+
+## Uso rapido
+
+```bash
+# rigenera il contenuto da un programma DSL
+python3 -m balzar render examples/frattale.bzr -o out/
+
+# programma -> payload binario compatto (o base64, testo pronto per QR)
+python3 -m balzar encode examples/pattern_tile.bzr -o pattern.bzp
+python3 -m balzar encode examples/pattern_tile.bzr --base64 -o pattern.b64
+
+# il render accetta indifferentemente sorgente, payload binario o base64:
+# l'output è bit-identico in tutti e tre i casi
+python3 -m balzar render pattern.bzp -o out/
+
+# payload -> programma canonico; statistiche di espansione
+python3 -m balzar decode pattern.bzp
+python3 -m balzar info pattern.bzp
+
+# test
+python3 -m unittest discover -s tests
+```
+
+## Il linguaggio (DSL)
+
+Un'istruzione per riga, argomenti `chiave=valore`; parentesi e virgole sono
+zucchero sintattico, quindi `SHIFT(region=A, dx=2, dy=1)` e
+`SHIFT region=A dx=2 dy=1` sono equivalenti. I commenti iniziano con `#`.
+
+```text
+CANVAS w=256 h=256 bg=0          # stato base (A)
+SEED value=42                    # seme deterministico (S)
+PALETTE i=1 rgb=#F5F0E8          # colori indicizzati
+REGION name=A x=0 y=0 w=32 h=32  # mappa di indicizzazione spaziale (I)
+
+# --- trasformazioni (T) ---
+SHIFT region=A dx=2 dy=1 wrap=1      # traslazione (con o senza wrap)
+ROTATE region=A angle=90             # rotazione esatta 90/180/270
+MIRROR region=A axis=x               # riflessione
+SCALE src=A dst=B                    # riscalatura nearest-neighbour
+COPY src=A dst=C                     # copia di regioni
+SWAP a=A b=B                         # scambio blocchi
+TILE src=A dst=FULL                  # pattern repetition / tiling
+FILL region=A color=5                # riempimento
+MAP region=A src=3 dst=6             # ricolorazione selettiva
+INVERT region=A ncolors=16           # complemento in spazio palette
+SETPIX x=3 y=4 color=2               # modifica locale (differenziale)
+
+# --- primitive generative ---
+RECT x=2 y=2 w=28 h=28 color=6 fill=0
+LINE x1=0 y1=0 x2=31 y2=31 color=9   # Bresenham, rasterizzazione esatta
+CIRCLE cx=16 cy=16 r=10 color=5 fill=1
+NOISE region=FULL color=1 density=0.01   # rumore guidato dal seme
+SCATTER region=A color=7 count=30        # punti deterministici dal seme
+FRACTAL type=mandelbrot region=A cx=-0.6 cy=0 scale=1.4 iter=48
+FRACTAL type=sierpinski region=B color=5 depth=5
+FRACTAL type=triangle region=C color=6 depth=8
+
+# --- struttura ---
+LOOP var=i count=32                  # catena generativa composta
+  REGION name=ROW x=0 y=i*32 w=1024 h=32
+  SHIFT region=ROW dx=i*8 dy=0      # gli argomenti sono espressioni su i
+ENDLOOP
+FRAME                                # emette lo stato corrente come frame
+```
+
+La regione predefinita `FULL` è l'intero canvas. Ogni argomento numerico può
+essere un'espressione aritmetica (`+ - * / // % **`) sulle variabili di loop:
+è ciò che permette a poche istruzioni di descrivere strutture grandi e
+regolari. Se il programma non contiene `FRAME`, lo stato finale è l'unico
+frame di output.
+
+## Formato payload
+
+```
+"BZR1" | uint32 lunghezza | uint32 CRC-32 | deflate(programma canonico)
+```
+
+Il payload codifica la **forma canonica** del programma (commenti rimossi,
+spazi normalizzati): sorgenti cosmeticamente diversi producono payload
+byte-identici, e il CRC rileva payload corrotti. La codifica base64
+(`encode --base64`) produce il testo da inserire direttamente in un QR code.
+
+## Garanzie di determinismo
+
+Stesso payload ⇒ stessi pixel, sempre, su ogni piattaforma:
+
+- **niente floating point dove conta**: la griglia è a indici di palette e
+  tutte le trasformazioni sono operazioni intere esatte (rotazioni solo ad
+  angoli retti, scaling nearest-neighbour, Bresenham per le linee);
+- **PRNG proprio** (`xorshift64*` + `splitmix64`, `balzar/rng.py`): la
+  sequenza pseudo-casuale fa parte del contratto di formato, nessuna
+  dipendenza da `random` o dalla versione di Python;
+- **espressioni totali**: il valutatore accetta solo aritmetica su interi e
+  variabili di loop — niente chiamate, niente stato, niente I/O;
+- il frattale di Mandelbrot usa double IEEE-754 con operazioni elementari,
+  riproducibili bit-a-bit tra build di CPython.
+
+I test in `tests/test_determinism.py` verificano il contratto: doppio render
+identico, render da payload identico al render da sorgente, sequenza PRNG
+bloccata per regressione.
+
+## Architettura
+
+```
+balzar/
+  grid.py         stato: griglia a indici di palette + regioni
+  rng.py          PRNG deterministico (xorshift64*)
+  dsl.py          parser + valutatore di espressioni (AST whitelistato)
+  ops.py          motore di trasformazioni (registry dichiarativo tipizzato)
+  interpreter.py  interprete deterministico: programma -> frame
+  payload.py      encoder/decoder payload binario (QR-ready)
+  png.py          writer PNG RGB8 in puro Python
+  cli.py          comandi render / encode / decode / info
+examples/         programmi dimostrativi (.bzr)
+tests/            determinismo, round-trip, correttezza op, espansione
+```
+
+Per aggiungere un'operazione basta registrarla in `ops.py` con la sua firma
+tipizzata:
+
+```python
+@op("GRADIENT", region="region", c1="int", c2="int")
+def op_gradient(state, region, c1, c2): ...
+```
+
+L'interprete valuta automaticamente gli argomenti DSL (incluse le espressioni
+sulle variabili di loop) contro la firma dichiarata.
+
+## Limite teorico e posizionamento
+
+Il sistema non è compressione tradizionale ma **compressione algoritmica
+basata su descrizione** (program-based generation). Il limite è la
+complessità di Kolmogorov del contenuto: contenuti strutturati (schemi CAD,
+pattern, frattali, UI) si comprimono di ordini di grandezza; contenuti
+casuali non danno alcun guadagno. A differenza dei codec (JPEG, H.265) il
+contenuto non viene ricostruito da dati, ma **derivato da regole**; a
+differenza della compressione neurale la ricostruzione è deterministica pura
+e il formato è interpretabile come regole discrete.
+
+## Estensioni previste
+
+- encoder automatico (immagine → programma: ricerca di auto-similarità,
+  tiling e delta minimi);
+- generazione diretta del QR code dal payload;
+- scene 3D descritte con lo stesso modello (stato + trasformazioni).

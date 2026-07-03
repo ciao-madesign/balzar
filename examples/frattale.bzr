@@ -1,0 +1,19 @@
+# Contenuto frattale: complessita' visiva arbitraria da una descrizione
+# di poche righe. Kolmogorov-friendly per costruzione.
+
+CANVAS w=768 h=512 bg=0
+PALETTE i=1 rgb=#F5F0E8
+
+# Mandelbrot a sinistra
+REGION name=MB x=0 y=0 w=512 h=512
+FRACTAL type=mandelbrot region=MB color=0 cx=-0.6 cy=0.0 scale=1.4 iter=48
+
+# Carpet di Sierpinski in alto a destra
+REGION name=SC x=512 y=0 w=256 h=256
+FILL region=SC color=12
+FRACTAL type=sierpinski region=SC color=5 depth=5
+
+# Triangolo di Sierpinski in basso a destra
+REGION name=ST x=512 y=256 w=256 h=256
+FILL region=ST color=0
+FRACTAL type=triangle region=ST color=6 depth=8

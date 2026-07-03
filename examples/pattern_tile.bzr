@@ -1,0 +1,27 @@
+# Texture 1024x1024 generata da una piastrella base di 32x32 pixel.
+# Dimostra il fattore di espansione: ~3 MB di RGB da un payload di poche
+# centinaia di byte (struttura + ridondanza -> descrizione minima).
+
+CANVAS w=1024 h=1024 bg=0
+SEED value=7
+
+# --- piastrella base 32x32 ---
+REGION name=TILE x=0 y=0 w=32 h=32
+FILL region=TILE color=12
+RECT x=2 y=2 w=28 h=28 color=6 fill=0
+CIRCLE cx=16 cy=16 r=10 color=5 fill=0
+CIRCLE cx=16 cy=16 r=4 color=2 fill=1
+LINE x1=0 y1=0 x2=31 y2=31 color=9
+LINE x1=31 y1=0 x2=0 y2=31 color=9
+
+# --- replica strutturale sull'intero canvas ---
+TILE src=TILE dst=FULL
+
+# --- variazione deterministica per riga di piastrelle ---
+LOOP var=r count=32
+  REGION name=ROW x=0 y=r*32 w=1024 h=32
+  SHIFT region=ROW dx=r*8 dy=0 wrap=1
+ENDLOOP
+
+# --- tocchi generativi basati su seed ---
+NOISE region=FULL color=1 density=0.002
