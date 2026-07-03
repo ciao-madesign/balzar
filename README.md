@@ -62,7 +62,12 @@ python3 -m balzar encode-image foto.png -o foto.bzp
 python3 -m balzar encode-video animazione.gif -o video.bzp --max-dim 400
 python3 -m balzar render video.bzp -o out/ --gif
 
-# supporto fisico: payload -> capitoli QR-sized e ritorno
+# supporto fisico: payload -> immagine QR (1 codice o griglia auto) e ritorno
+pip install qrcode pyzbar pillow   # pyzbar richiede anche libzbar0 di sistema
+python3 -m balzar chunks video.bzp -o qr/ --qr
+python3 -m balzar scan qr/video_qr.png -o ricostruito.bzp --render out/
+
+# capitoli come solo testo base64 (senza generare l'immagine QR)
 python3 -m balzar chunks video.bzp -o capitoli/
 python3 -m balzar assemble capitoli/ -o ricostruito.bzp
 
@@ -118,7 +123,19 @@ Un payload più grande di un QR si spezza in **capitoli autodescrittivi**
 Ogni capitolo sta in un QR v40 (~2953 byte) e porta con sé posizione e
 checksum dell'insieme: i codici si possono stampare in serie e scansionare
 **in qualsiasi ordine**; il riassemblaggio verifica l'integrità end-to-end.
-Una pagina di QR diventa così il supporto fisico di un contenuto che viene
+
+`balzar/qr.py` (richiede `qrcode` + `pyzbar`, non nel motore core) chiude
+il cerchio: se il payload sta in un QR genera **un'immagine**, altrimenti
+lo spezza in capitoli e li dispone in **una griglia auto-dimensionata**
+nella stessa immagine — l'esperienza resta "scansiona questa foto" sia per
+1 QR sia per 15. La lettura usa ZBar (`pyzbar`), non il detector nativo di
+OpenCV: verificato che legge in modo affidabile molti più QR in un solo
+scatto (15/15 contro 5/15 in un test con `cv2.QRCodeDetector`). I byte
+grezzi non sopravvivono al giro stampa/foto/lettura (verificato: si
+corrompono) — i capitoli passano per base64, come `encode --base64`.
+`balzar scan foto.jpg` (CLI) e il pulsante "Scansiona foto QR" (GUI)
+fanno il percorso inverso in un colpo solo. Una pagina di QR diventa così
+il supporto fisico di un contenuto che viene
 rigenerato, non letto: il volume informativo del supporto è il volume
 dell'output generato, non dei byte stampati.
 

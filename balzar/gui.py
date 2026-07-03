@@ -25,7 +25,7 @@ from tkinter import filedialog, messagebox, ttk
 from .imageio import load_frames, save_gif
 from .interpreter import render as render_program
 from .payload import (MAGIC, QR_V40_BINARY_CAPACITY, chunk_payload,
-                      decode_payload, fits_in_qr, to_base64)
+                      decode_payload, fits_in_qr)
 from .png import png_bytes
 
 PREVIEW_MAX = 380  # px, per pane
@@ -72,6 +72,8 @@ class BalzarApp:
         top.pack(fill="x")
 
         ttk.Button(top, text="Apri file…", command=self.open_file).pack(side="left")
+        ttk.Button(top, text="Scansiona foto QR…",
+                  command=self.open_qr_photo).pack(side="left", padx=(6, 0))
         ttk.Label(top, text="  risoluzione di analisi:").pack(side="left")
         self.max_dim = tk.StringVar(value="400")
         ttk.Combobox(top, textvariable=self.max_dim, width=6, state="readonly",
@@ -117,7 +119,7 @@ class BalzarApp:
         self.btn_export = ttk.Button(btns, text="Esporta rigenerato (PNG/GIF)",
                                      command=self.export_rendered, state="disabled")
         self.btn_export.pack(fill="x", pady=2)
-        self.btn_chunks = ttk.Button(btns, text="Esporta capitoli QR (.txt)",
+        self.btn_chunks = ttk.Button(btns, text="Esporta QR (immagine)",
                                      command=self.export_chunks, state="disabled")
         self.btn_chunks.pack(fill="x", pady=2)
 
@@ -134,6 +136,31 @@ class BalzarApp:
         self.status.set(f"Elaborazione di {os.path.basename(path)}…")
         self._set_buttons(False)
         threading.Thread(target=self._worker, args=(path,), daemon=True).start()
+
+    def open_qr_photo(self) -> None:
+        """Scan a photo of one QR code or a printed grid of many: same
+        action either way, per the physical-carrier design (balzar/qr.py)."""
+        path = filedialog.askopenfilename(
+            title="Apri foto di un QR o di una griglia di QR",
+            filetypes=[("Immagini", "*.png *.jpg *.jpeg *.bmp *.webp"),
+                       ("Tutti i file", "*.*")])
+        if not path:
+            return
+        self.status.set(f"Scansione di {os.path.basename(path)}…")
+        self._set_buttons(False)
+        threading.Thread(target=self._scan_worker, args=(path,), daemon=True).start()
+
+    def _scan_worker(self, path: str) -> None:
+        job = Job()
+        job.source_name = os.path.basename(path)
+        try:
+            from .qr import scan_image_file
+            payload = scan_image_file(path)
+            self._job_from_payload(job, path, payload)
+            job.stats.insert(0, ("scansionato da", os.path.basename(path)))
+        except Exception as exc:
+            job.error = f"{type(exc).__name__}: {exc}"
+        self.queue.put(job)
 
     def _worker(self, path: str) -> None:
         job = Job()
@@ -265,21 +292,29 @@ class BalzarApp:
                 self.status.set(f"Esportato PNG ({_fmt(len(data))} B)")
 
     def export_chunks(self) -> None:
-        """One base64 text file per QR-sized chunk: print each as a QR code."""
+        """Payload -> one printable image: a single QR, or an auto-sized
+        grid of QR codes if it doesn't fit in one (balzar/qr.py). Same
+        'scan this image' experience either way — see 'Scansiona foto QR'."""
         job = self.job
         if not job:
             return
-        outdir = filedialog.askdirectory(title="Cartella per i capitoli QR")
-        if not outdir:
+        try:
+            from .qr import payload_to_qr_image
+        except ImportError:
+            messagebox.showerror(
+                "balzar", "Richiede i pacchetti 'qrcode' e 'Pillow'\n"
+                "(pip install qrcode pillow)")
             return
-        chunks = chunk_payload(job.payload)
-        stem = self._stem()
-        for i, chunk in enumerate(chunks):
-            with open(os.path.join(outdir, f"{stem}_qr_{i + 1:03d}.txt"),
-                      "w", encoding="ascii") as fh:
-                fh.write(to_base64(chunk) + "\n")
-        self.status.set(f"{len(chunks)} capitoli scritti in {outdir} "
-                        f"(max {QR_V40_BINARY_CAPACITY} B l'uno: un QR ciascuno)")
+        path = self._ask_save(self._stem() + "_qr.png", ".png",
+                              [("Immagine QR", "*.png")])
+        if not path:
+            return
+        img = payload_to_qr_image(job.payload)
+        img.save(path)
+        n_chunks = len(chunk_payload(job.payload))
+        self.status.set(
+            f"QR scritto in {os.path.basename(path)} ({img.width}x{img.height}px, "
+            + (f"{n_chunks} codici in griglia" if n_chunks > 1 else "1 codice"))
 
     def _stem(self) -> str:
         return os.path.splitext(self.job.source_name)[0] if self.job else "output"

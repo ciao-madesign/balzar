@@ -171,17 +171,68 @@ def cmd_encode_video(args: argparse.Namespace) -> int:
 
 
 def cmd_chunks(args: argparse.Namespace) -> int:
-    from .payload import chunk_payload
     _, payload = _load_program(args.input)
-    chunks = chunk_payload(payload, chunk_size=args.size)
     os.makedirs(args.output, exist_ok=True)
     stem = os.path.splitext(os.path.basename(args.input))[0]
+
+    if args.qr:
+        try:
+            from .qr import payload_to_qr_image
+        except ImportError:
+            print("errore: --qr richiede i pacchetti 'qrcode' e 'Pillow' "
+                  "(pip install qrcode pillow)", file=sys.stderr)
+            return 1
+        img = payload_to_qr_image(payload)
+        path = os.path.join(args.output, f"{stem}_qr.png")
+        img.save(path)
+        print(f"immagine QR scritta in {path} ({img.size[0]}x{img.size[1]}px) "
+              f"— singolo QR o griglia auto-dimensionata a seconda della "
+              f"dimensione del payload; scansionala con 'balzar scan'")
+        return 0
+
+    from .payload import chunk_payload
+    chunks = chunk_payload(payload, chunk_size=args.size)
     for i, chunk in enumerate(chunks):
         name = os.path.join(args.output, f"{stem}_qr_{i + 1:03d}.txt")
         with open(name, "w", encoding="ascii") as fh:
             fh.write(to_base64(chunk) + "\n")
     print(f"{len(chunks)} capitoli in {args.output}/ "
-          f"(max {args.size} byte l'uno: stampabili come un QR ciascuno)")
+          f"(max {args.size} byte l'uno: stampabili come un QR ciascuno; "
+          f"usa --qr per generare l'immagine QR direttamente)")
+    return 0
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    try:
+        from .qr import scan_image_file
+    except ImportError:
+        print("errore: scan richiede i pacchetti 'pyzbar' (+ libzbar0 di "
+              "sistema) e 'Pillow' (pip install pyzbar pillow)", file=sys.stderr)
+        return 1
+    from .payload import PayloadError
+
+    try:
+        payload = scan_image_file(args.input)
+    except PayloadError as exc:
+        print(f"errore: {exc} — riprova la scansione", file=sys.stderr)
+        return 1
+
+    out = args.output or (os.path.splitext(args.input)[0] + ".bzp")
+    with open(out, "wb") as fh:
+        fh.write(payload)
+    print(f"payload ricostruito: {out} ({_fmt(len(payload))} byte)")
+
+    if args.render:
+        program = decode_payload(payload)
+        result = render(program)
+        os.makedirs(args.render, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(args.input))[0]
+        for i in range(len(result.frames)):
+            name = f"{stem}.png" if len(result.frames) == 1 else f"{stem}_{i:04d}.png"
+            write_png(os.path.join(args.render, name), result.width,
+                     result.height, result.frame_rgb(i))
+        print(f"rigenerato in {args.render}/ "
+              f"({len(result.frames)} frame {result.width}x{result.height})")
     return 0
 
 
@@ -288,7 +339,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--output", default="chunks")
     p.add_argument("--size", type=int, default=2953,
                    help="byte per capitolo (default: capacita' QR v40)")
+    p.add_argument("--qr", action="store_true",
+                   help="genera l'immagine QR reale (1 codice o griglia "
+                        "auto-dimensionata) invece del testo base64")
     p.set_defaults(func=cmd_chunks)
+
+    p = sub.add_parser("scan",
+                       help="foto di 1 QR o una griglia -> payload ricostruito")
+    p.add_argument("input", help="immagine (foto/screenshot) con 1 o piu' QR")
+    p.add_argument("-o", "--output", default=None)
+    p.add_argument("--render", default=None, metavar="DIR",
+                   help="rigenera subito il contenuto in questa directory")
+    p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("assemble",
                        help="cartella di capitoli -> payload ricostruito")

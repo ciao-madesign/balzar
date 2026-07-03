@@ -103,36 +103,56 @@ Ogni capitolo sta in un QR v40 (~2953 byte), porta con sé posizione e
 checksum dell'insieme. I capitoli si riassemblano **in qualsiasi ordine**
 (testato con shuffle) e la corruzione/mancanza viene rilevata.
 
-**Provato end-to-end in questa sessione** (non solo in teoria): generati 15
-QR reali (libreria `qrcode`) da un payload video da 8.144 byte, disposti in
-una griglia fisica 4×4 (immagine PNG), **fotografati/letti in un solo
-scatto** con ZBar (`pyzbar`), riassemblati in ordine casuale → payload
-bit-identico all'originale → video di 30 frame rigenerato correttamente.
-Questo dimostra il concetto "supporto fisico con moltitudine di QR letti in
-un solo gesto" come reale, non ipotetico. **Non ancora integrato nel
-codice**: l'esperimento è stato fatto ad-hoc, `qrcode`/`pyzbar` non sono
-dipendenze del progetto e non c'è ancora un comando `balzar scan` — vedi §5.
+**Integrato nel codice** (`balzar/qr.py`, richiede `qrcode` + `pyzbar`,
+dipendenze opzionali non nel motore core): `payload_to_qr_image` genera
+un'immagine singola se il payload sta in un QR, altrimenti spezza in
+capitoli e li dispone in una **griglia auto-dimensionata** nella stessa
+immagine; `scan_image_bytes`/`scan_image_file` fanno il percorso inverso,
+decodificando con ZBar tutti i QR trovati in una foto e riassemblando
+in qualsiasi ordine. Esposto come `balzar chunks --qr` / `balzar scan` in
+CLI e come pulsanti "Esporta QR (immagine)" / "Scansiona foto QR" in GUI.
+Verificato end-to-end (`tests/test_qr.py` + test manuali in sessione):
+payload piccolo → 1 QR → scansionato → bit-identico; payload video da
+8.144 byte → griglia 2×2 (4 capitoli) → fotografata in un colpo solo →
+riassemblata → video di 30 frame rigenerato correttamente, anche con i
+capitoli letti fuori ordine.
 
-Nota tecnica emersa dall'esperimento: `cv2.QRCodeDetector().detectAndDecodeMulti`
-(OpenCV nativo, senza dipendenze extra) ha letto solo 5 QR su 15 nello
-stesso scatto — la sua multi-decodifica è inaffidabile oltre pochi codici.
-**ZBar (`pyzbar`) li ha letti tutti e 15**. Se si implementa lo scan reale,
-usare ZBar, non il detector nativo di OpenCV.
+Due dettagli tecnici emersi costruendolo, da ricordare:
+- **I byte grezzi non sopravvivono al giro libreria-QR→ZBar**: un test con
+  2.953 byte binari (incluso `0x00` e tutti i valori 0-255) è tornato
+  corrotto (4.370 byte invece di 2.953). I capitoli vanno quindi
+  **sempre** codificati in base64 prima di finire in un QR (come già fa
+  `encode --base64`), mai come byte grezzi.
+- **Il livello di correzione errori conta per la capacità**: usare
+  `ERROR_CORRECT_M` invece di `ERROR_CORRECT_L` fa scendere la capacità
+  di un QR v40 da 2.953 a 2.334 byte, causando un errore "Invalid version
+  41" su payload che in teoria ci starebbero — `balzar/qr.py` usa L per
+  restare coerente con `QR_V40_BINARY_CAPACITY`, scambiando robustezza
+  fisica extra (che L comunque non ha, 7% di recovery) con più byte per
+  QR; la corruzione è comunque rilevata dal CRC di `BZC1` al riassemblaggio.
+- `cv2.QRCodeDetector().detectAndDecodeMulti` (OpenCV nativo, senza
+  dipendenze extra) ha letto solo 5 QR su 15 nello stesso scatto in un
+  test precedente — la sua multi-decodifica è inaffidabile oltre pochi
+  codici. **ZBar (`pyzbar`) li legge tutti**: usare quello, non il
+  detector nativo di OpenCV.
 
 ### 2.5 App desktop (il prodotto)
 
 `balzar/gui.py` + `balzar-app.py` — Tkinter (stdlib) + Pillow. Apri
 immagine/GIF/payload → encoding in thread separato (la finestra non si
 blocca) → anteprima animata fianco a fianco originale/rigenerato →
-statistiche oneste → salva `.bzp`/`.bzr`, esporta PNG/GIF, esporta capitoli
-QR (come file di testo base64, **non ancora come immagini QR reali** — vedi
-criticità). Impacchettabile in un eseguibile singolo con PyInstaller
+statistiche oneste → salva `.bzp`/`.bzr`, esporta PNG/GIF, esporta QR come
+**immagine reale** (singola o griglia auto-dimensionata, `balzar/qr.py`),
+pulsante "Scansiona foto QR" per il percorso inverso. Impacchettabile in
+un eseguibile singolo con PyInstaller
 (`pyinstaller --onefile --windowed --name balzar balzar-app.py`) —
 **il packaging PyInstaller non è stato ancora eseguito/testato in questa
-sessione**, solo documentato.
+sessione**, solo documentato; da verificare che includa anche la libreria
+nativa `libzbar` richiesta da `pyzbar`, non solo codice Python.
 
 Verificato con screenshot reale sotto Xvfb: apertura GIF, encoding video
-delta, anteprima animata, pannello statistiche, bottoni attivi.
+delta, anteprima animata, pannello statistiche, bottoni attivi, ciclo
+completo esporta-QR→scansiona-foto→payload bit-identico.
 
 ### 2.6 Demo web (solo vetrina, non il prodotto)
 
@@ -147,13 +167,15 @@ nell'app desktop**, che è il prodotto vero.
 
 ### 2.7 CLI
 
-`balzar render|encode|encode-image|encode-video|decode|info|chunks|assemble|gui`
+`balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
 — vedi `balzar/cli.py` per l'elenco completo con esempi in `README.md`.
 
 ### 2.8 Test
 
-53 test, tutti verdi (`python3 -m unittest discover -s tests`):
+56 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
+`test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
+installati — dipendenze opzionali, non nel motore core),
 `test_video.py`. Copertura: round-trip bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -221,14 +243,8 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
    Nuovo modulo di ingestione (parser SVG path/circle/line, parser DXF
    entità) parallelo a `imageio.py`, non tocca il motore. **Non ancora
    iniziato**: zero parsing di formati vettoriali nel codice oggi.
-2. **Comando `balzar scan`**: fotografa/carica un'immagine di una griglia di
-   QR, li decodifica con ZBar in un colpo solo, riassembla, renderizza.
-   Chiude il cerchio "supporto fisico → contenuto rigenerato" che oggi è
-   solo per metà nel codice (si genera testo capitoli, non si legge indietro
-   da foto). Aggiungere anche generazione QR reale (`qrcode`) al posto del
-   solo testo base64 in `export_chunks`/`cmd_chunks`. Provato ad-hoc in
-   sessione (vedi §2.4): 15 QR fotografati in un colpo solo con ZBar,
-   riassemblati, video rigenerato — il concetto regge, va solo integrato.
+2. ~~Comando `balzar scan` + generazione QR reale~~ — **fatto** (`balzar/qr.py`,
+   `balzar chunks --qr`, `balzar scan`, pulsanti GUI): vedi §2.4.
 3. **Rilevamento linee/cerchi (Hough) sul raster**: utile solo per
    contenuto che arriva *già rasterizzato* senza sorgente vettoriale
    disponibile (screenshot, scansioni). Se il punto 1 copre il caso reale
@@ -460,12 +476,12 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 53 test, deve restare verde
+python3 -m unittest discover -s tests        # 56 test (3 opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-video anim.gif -o v.bzp
-python3 -m balzar chunks v.bzp -o capitoli/
-python3 -m balzar assemble capitoli/ -o ricostruito.bzp
+python3 -m balzar chunks v.bzp -o qr/ --qr       # immagine QR reale (1 o griglia)
+python3 -m balzar scan qr/v_qr.png -o ricostruito.bzp --render out/
 ```
 
 Ambiente di sviluppo: Python 3.11 di sistema **non ha Tk** (pacchetto
@@ -473,3 +489,6 @@ Ambiente di sviluppo: Python 3.11 di sistema **non ha Tk** (pacchetto
 stata sviluppata e testata con **python3.12**, che ha Tk 8.6 disponibile.
 Pillow va installato su entrambe le versioni se si passa dall'una all'altra
 (`pip install pillow` / `python3.12 -m pip install --break-system-packages pillow`).
+Stesso discorso per `qrcode`/`pyzbar` (usati da `balzar/qr.py`, opzionali):
+`pyzbar` richiede anche `libzbar0` di sistema (`apt-get install libzbar0`),
+non solo il pacchetto pip.
