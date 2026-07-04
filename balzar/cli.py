@@ -1,15 +1,18 @@
 """Command-line interface.
 
-    python -m balzar render       program.bzr   -o out/
-    python -m balzar encode       program.bzr   -o payload.bzp [--base64]
-    python -m balzar encode-image photo.png      -o payload.bzp [--max-dim N]
-    python -m balzar decode       payload.bzp    -o program.bzr
-    python -m balzar info         payload.bzp
+    python -m balzar render        program.bzr   -o out/
+    python -m balzar encode        program.bzr   -o payload.bzp [--base64]
+    python -m balzar encode-image  photo.png      -o payload.bzp [--max-dim N]
+    python -m balzar encode-vector drawing.svg    -o payload.bzp [--max-dim N]
+    python -m balzar decode        payload.bzp    -o program.bzr
+    python -m balzar info          payload.bzp
 
 `render` accepts either DSL source (.bzr) or a binary payload (.bzp,
 detected via magic) and reports the expansion factor: bytes of generated
 content per byte of payload. `encode-image` runs the best-effort automatic
-encoder (balzar/encoder.py) on an arbitrary image file (requires Pillow).
+raster encoder (balzar/encoder.py) on an arbitrary image file (requires
+Pillow). `encode-vector` ingests an SVG/DXF file directly (balzar/vectorio.py,
+stdlib only) — no rasterization, no quantization, exact geometry.
 """
 
 from __future__ import annotations
@@ -142,6 +145,31 @@ def cmd_encode_image(args: argparse.Namespace) -> int:
     else:
         print(f"guadagno:     NESSUNO - payload piu' grande del raw RGB ({raw} byte). "
               f"Contenuto poco strutturato per questo encoder.")
+    return 0
+
+
+def cmd_encode_vector(args: argparse.Namespace) -> int:
+    from .vectorio import VectorIngestError, ingest_vector_file
+
+    try:
+        result = ingest_vector_file(args.input, max_dim=args.max_dim)
+    except VectorIngestError as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    out = args.output or (os.path.splitext(args.input)[0] + ".bzp")
+    with open(out, "wb") as fh:
+        fh.write(result.payload)
+
+    print(f"sorgente:     {args.input} ({result.source_format.upper()}), "
+          f"{result.width}x{result.height}")
+    print(f"elementi:     {result.element_count} convertiti, "
+          f"{len(result.skipped)} saltati")
+    for reason in result.skipped:
+        print(f"  saltato:    {reason}")
+    print(f"istruzioni:   {result.instruction_count}")
+    print(f"payload:      {out}: {len(result.payload)} byte "
+          f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'})")
     return 0
 
 
@@ -333,6 +361,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-dim", type=int, default=400,
                    help="lato massimo dopo il ridimensionamento (default 400)")
     p.set_defaults(func=cmd_encode_image)
+
+    p = sub.add_parser("encode-vector",
+                       help="SVG/DXF -> payload (ingestione diretta, no raster)")
+    p.add_argument("input", help="file .svg o .dxf")
+    p.add_argument("-o", "--output", default=None)
+    p.add_argument("--max-dim", type=int, default=800,
+                   help="lato massimo del canvas generato (default 800)")
+    p.set_defaults(func=cmd_encode_vector)
 
     p = sub.add_parser("encode-video",
                        help="GIF animata/sequenza -> payload (delta tra frame)")

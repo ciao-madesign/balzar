@@ -248,6 +248,39 @@ reso misurabile. Il rilevamento di linee/cerchi (per contenuti vettoriali
 con bordi non assiali, es. icone con curve) non è ancora implementato: è
 il limite noto di questa v1, richiederebbe un fitting tipo Hough.
 
+## Ingestione vettoriale (SVG/DXF → DSL, no raster)
+
+`balzar/vectorio.py` ingerisce direttamente file SVG e DXF — nessuna
+rasterizzazione, nessuna quantizzazione: un cerchio nel file sorgente è
+già un cerchio con centro e raggio espliciti, si mappa 1:1 su `CIRCLE`
+esistente. Zero dipendenze nuove (SVG via `xml.etree` stdlib, DXF con un
+parser di gruppi ASCII scritto da zero).
+
+```bash
+python3 -m balzar encode-vector examples/flangia_sorgente.svg -o f.bzp
+python3 -m balzar encode-vector examples/flangia_sorgente.dxf -o f.bzp
+```
+
+Risolve esattamente il problema del testo/cerchi "fotografati": uno
+screenshot passa per quantizzazione colore + copertura a rettangoli
+(bordi curvi = tante micro-istruzioni, testo anti-aliased = centinaia di
+colori). Un `<circle>` SVG o un'entità `CIRCLE` DXF non ha bisogno di
+nessuna delle due cose. Stesso discorso per il testo: `<text>` SVG e
+`TEXT` DXF diventano direttamente la nostra operazione `TEXT` — lo stesso
+font bitmap esatto usato in `etichetta_bom.bzr`, non pixel quantizzati.
+
+Supportate: `RECT`/`CIRCLE`/`LINE` (anche da `polyline`/`polygon`/`path`
+con solo comandi `M`/`L`/`Z`), `TEXT`, gruppi con `translate` (SVG),
+colori ACI comuni 1-9 (DXF). Non supportate — **saltate con il motivo
+esatto**, mai ignorate in silenzio: curve (`C`/`Q`/`A` negli SVG path),
+trasformazioni diverse da `translate`, archi/spline DXF, colori ACI fuori
+dalla tabella nota (resi in grigio neutro, dichiarato). A differenza
+dell'encoder raster non c'è un originale rasterizzato da cui verificare
+un lossless bit-a-bit: la garanzia qui è "ogni elemento convertito è
+geometricamente esatto", non "pixel-perfect rispetto a un render di
+riferimento" (per cui servirebbe un motore di rendering SVG/DXF esterno,
+fuori scope).
+
 ## Export SVG (vettoriale reale)
 
 `balzar/svg.py` è un secondo target di rendering per lo stesso DSL —
@@ -316,18 +349,19 @@ balzar/
   payload.py      encoder/decoder payload binario (QR-ready)
   png.py          writer PNG RGB8 in puro Python
   svg.py          export SVG vettoriale reale (sottoinsieme vector-safe)
+  vectorio.py     ingestione SVG/DXF -> DSL diretta (no raster, stdlib)
   encoder.py      encoder automatico immagine -> DSL (best-effort)
   video.py        encoder sequenze di frame (delta tra frame, sez. 4.3)
   imageio.py      lettura immagini/GIF animate (unico modulo con Pillow)
   qr.py           payload <-> immagine QR (singola o griglia), lettura ZBar
   gui.py          applicazione desktop (Tkinter)
   webapi.py       logica dell'API web con profili di limiti
-  cli.py          render / encode / encode-image / encode-video / decode /
-                  info / chunks / scan / assemble / gui
+  cli.py          render / encode / encode-image / encode-vector /
+                  encode-video / decode / info / chunks / scan / assemble / gui
 balzar-app.py     entry point per PyInstaller
-examples/         programmi dimostrativi (.bzr)
+examples/         programmi dimostrativi (.bzr) + sorgenti vettoriali (.svg/.dxf)
 tests/            determinismo, round-trip, op, espansione, encoder, video,
-                  qr, svg
+                  qr, svg, vectorio
 api/encode.py     funzione serverless Vercel: comprimi immagine -> payload
 api/render.py     funzione serverless Vercel: apri .bzr/.bzp -> PNG/GIF/SVG
 index.html, app.js, style.css   frontend statico della demo (2 tab)

@@ -173,7 +173,65 @@ pixel); `pattern_tile.bzr` (SHIFT/NOISE), `frattale.bzr` (FRACTAL),
 `animazione.bzr`/`esploso_industriale.bzr` (multi-frame) vengono
 onestamente rifiutati con il motivo esatto.
 
-### 2.6 App desktop (il prodotto)
+### 2.6 Ingestione vettoriale (SVG/DXF → DSL, no raster)
+
+`balzar/vectorio.py` — **fatto**, era il punto 1 di §5 nella versione
+precedente di questo documento. Motivazione diretta: un utente ha notato
+che il testo/le forme "fotografate" (screenshot → encoder raster)
+degradano vistosamente, mentre il testo generato direttamente con `TEXT`
+(es. `etichetta_bom.bzr`) resta perfetto — perché non passa mai per
+quantizzazione colore né per la copertura a rettangoli, che è dove si
+perde tutto. `vectorio.py` estende quella stessa esattezza ai file
+vettoriali esterni: un `<circle>` SVG o un'entità `CIRCLE` DXF hanno già
+centro e raggio espliciti, si mappano 1:1 su `CIRCLE` senza rasterizzare
+né dedurre nulla da pixel.
+
+Due parser scritti da zero, **zero dipendenze nuove** (coerente col
+motore core): SVG via `xml.etree.ElementTree` (stdlib), DXF con un lettore
+di coppie codice/valore ASCII scritto a mano (il formato è testuale e
+semplice da leggere per le entità comuni, non serve una libreria CAD).
+
+Supportato: `RECT`/`CIRCLE`/`LINE` (anche da `<polyline>`/`<polygon>`/
+`<path>` con solo comandi `M`/`L`/`Z`, e da `LWPOLYLINE` in DXF), `TEXT`
+(da `<text>` SVG e da entità `TEXT`/`MTEXT` DXF — **la stessa `TEXT`
+esatta usata a mano**, non testo rasterizzato), gruppi `<g
+transform="translate(...)">` in SVG, colori ACI 1-9 in DXF (la tabella
+completa a 256 voci non è verificabile senza accesso a rete in questo
+ambiente — onestamente non hardcodata a rischio di sbagliarla).
+
+Non supportato — **saltato con il motivo esatto**, mai in silenzio (stesso
+principio di `svg.py` ma best-effort invece di tutto-o-niente, perché qui
+non c'è un secondo target di rendering dello stesso DSL da cui aspettarsi
+un supporto completo, ma un formato esterno arbitrario): curve SVG
+(`C`/`S`/`Q`/`T`/`A`), trasformazioni diverse da `translate`, archi/spline
+DXF, colori ACI fuori dalla tabella nota (resi in grigio neutro,
+dichiarato in `skipped`).
+
+Due bug reali trovati testando prima di dichiarare la funzione pronta:
+- **Sfondo bianco non garantito**: il primo tentativo assumeva che
+  l'indice di palette 1 fosse sempre bianco (convenzione degli esempi
+  scritti a mano), ma la palette qui si costruisce dinamicamente dai
+  colori del file sorgente — è finito per diventare rosso per coincidenza
+  d'ordine. Fix: il bianco viene sempre riservato esplicitamente come
+  indice 0 prima di processare qualunque elemento.
+- **Convenzione baseline testo**: la `y` di `<text>` SVG e delle entità
+  `TEXT` DXF è la *baseline* (base del testo), mentre la nostra `TEXT`
+  interpreta `y` come il *top* del glifo — senza correzione il testo
+  risultava tagliato dal bordo del canvas. Corretto sottraendo/sommando
+  l'altezza del font in base alla convenzione dell'asse Y di ciascun
+  formato (SVG y giù, DXF y su — direzioni opposte).
+
+Verificato end-to-end (`tests/test_vectorio.py` + rendering reale in
+sessione): `examples/flangia_sorgente.svg`/`.dxf` (flangia con fori
+imbullonati + etichetta di testo, lo stesso soggetto di
+`schema_tecnico.bzr` ma come sorgente vettoriale esterna) convertiti con
+**zero elementi saltati**, payload 230 B (SVG) / 255 B (DXF), entrambi in
+un singolo QR con ampio margine. Il risultato SVG è a sua volta
+ri-esportabile come SVG vettoriale reale via `svg.py` (usa solo
+`CIRCLE`/`LINE`/`TEXT`), chiudendo il cerchio SVG→balzar→SVG senza mai
+passare per un pixel.
+
+### 2.7 App desktop (il prodotto)
 
 `balzar/gui.py` + `balzar-app.py` — Tkinter (stdlib) + Pillow. Apri
 immagine/GIF/payload → encoding in thread separato (la finestra non si
@@ -191,7 +249,7 @@ Verificato con screenshot reale sotto Xvfb: apertura GIF, encoding video
 delta, anteprima animata, pannello statistiche, bottoni attivi, ciclo
 completo esporta-QR→scansiona-foto→payload bit-identico.
 
-### 2.7 Demo web (solo vetrina, non il prodotto)
+### 2.8 Demo web (solo vetrina, non il prodotto)
 
 `index.html` + `app.js` + `style.css` + due funzioni serverless Vercel
 (`api/encode.py`, `api/render.py`) + `balzar/webapi.py` (logica condivisa
@@ -213,18 +271,19 @@ vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
 `balzar/webapi.py`. **Questi limiti non esistono nell'app desktop**, che
 è il prodotto vero.
 
-### 2.8 CLI
+### 2.9 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
 — vedi `balzar/cli.py` per l'elenco completo con esempi in `README.md`.
 
-### 2.9 Test
+### 2.10 Test
 
-69 test, tutti verdi (`python3 -m unittest discover -s tests`):
+85 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
-`test_video.py`. Copertura: round-trip bit-identico, corruzione rilevata,
+`test_video.py`, `test_svg.py`, `test_vectorio.py`. Copertura: round-trip
+bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
 vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
@@ -242,16 +301,23 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
 | GIF palla+griglia 320×240×30 frame (video encoder) | 8.144 B | 6,91 MB | 849× |
 | Confronto onesto vs JPEG/PNG/ZIP/DEFLATE su vista esplosa 5 frame | 424 B | 7,2 MB | 40×–17.000× a seconda della baseline |
 | Screenshot UI sintetico anti-aliased, 455 colori esatti (encoder auto) | 18.751 B (passo 4, vs 7.949 B col vecchio fallback fisso) | 384.000 B | 20,5× (qualità visibilmente migliore: ombra/pattern di sfondo preservati) |
+| `examples/flangia_sorgente.svg` (ingestione vettoriale, 0 elementi saltati) | 230 B | 800×800 | in un solo QR, margine ampio |
+| `examples/flangia_sorgente.dxf` (stesso soggetto, ingestione DXF, 0 saltati) | 255 B | 789×800 | in un solo QR, margine ampio |
 
 ## 4. Criticità note (non nascoste, da affrontare quando serve)
 
-1. **Niente rilevamento linee/cerchi/curve nell'encoder**. La copertura a
-   rettangoli va in crisi su contenuto vettoriale con bordi non assiali
-   (diagonali, cerchi): un'icona con una linea diagonale e un'ellisse è
-   risultata **peggiore del PNG** (4.216 B vs 1.900 B) perché ogni pixel di
-   bordo diventa la propria istruzione. Servirebbe un fitting tipo Hough
-   transform per linee/cerchi. Non implementato: è la lacuna più seria
-   dell'encoder v1.
+1. **Niente rilevamento linee/cerchi/curve nell'encoder *raster*.** La
+   copertura a rettangoli va in crisi su contenuto rasterizzato con bordi
+   non assiali (diagonali, cerchi): un'icona con una linea diagonale e
+   un'ellisse è risultata **peggiore del PNG** (4.216 B vs 1.900 B) perché
+   ogni pixel di bordo diventa la propria istruzione. Servirebbe un
+   fitting tipo Hough transform per linee/cerchi — non implementato,
+   resta una lacuna dell'encoder raster v1. **Aggirata, non risolta, per
+   il caso con sorgente vettoriale disponibile**: `vectorio.py` (§2.6)
+   ingerisce SVG/DXF direttamente, quindi un cerchio/una linea con quella
+   sorgente non passa mai dal problema (niente pixel da cui dedurre
+   nulla). Resta valida per contenuto che arriva *solo* rasterizzato
+   (screenshot, scansioni) senza una sorgente vettoriale disponibile.
 2. **Quantizzazione lossy oltre 256 colori — migliorata ma non risolta
    del tutto.** Non è più il fallback fisso 3-3-2 (passi ±16/±32 sempre,
    anche quando servirebbe pochissimo): ora `_quantize` in `encoder.py`
@@ -295,31 +361,47 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
 
 ## 5. Sviluppi possibili (ordinati per valore/sforzo stimato)
 
-1. **Ingestione diretta di formati vettoriali (SVG/DXF)**, *promosso sopra
-   Hough transform*: un cerchio in un SVG/DXF è già un cerchio con centro e
-   raggio espliciti — si mappa quasi 1:1 su `CIRCLE`/`LINE` esistenti senza
-   inferire nulla da pixel. Risolve la criticità #1 (contenuto vettoriale
-   con bordi non assiali) per una frazione dello sforzo di un vero
-   rilevamento Hough sul raster, perché aggira il problema (i dati sono già
-   discreti nel formato sorgente) invece di risolverlo (dedurli da pixel).
-   Nuovo modulo di ingestione (parser SVG path/circle/line, parser DXF
-   entità) parallelo a `imageio.py`, non tocca il motore. **Non ancora
-   iniziato**: zero parsing di formati vettoriali nel codice oggi.
+1. ~~Ingestione diretta di formati vettoriali (SVG/DXF)~~ — **fatto**
+   (`balzar/vectorio.py`, comando `balzar encode-vector`): vedi §2.6.
 2. ~~Comando `balzar scan` + generazione QR reale~~ — **fatto** (`balzar/qr.py`,
    `balzar chunks --qr`, `balzar scan`, pulsanti GUI): vedi §2.4.
-3. **Rilevamento linee/cerchi (Hough) sul raster**: utile solo per
+3. **Supporto hardware dedicato: lettore QR + schermo.** Idea proposta in
+   sessione per l'adozione reale in officina/ONG (applicazioni §6.1 e
+   §6.3): un dispositivo fisico che fotografa QR (singoli o griglia,
+   `balzar/qr.py` già lo fa) ed espande il contenuto (esploso CAD, BOM,
+   schema) su schermo, senza rete, senza PC. **Fase 1, prototipo**: uno
+   smartphone Android vecchio/dismesso — ha già fotocamera + schermo +
+   batteria, quindi zero costo hardware aggiuntivo, solo software. Il
+   percorso più realistico non è "installare Tkinter su Android" (non
+   funziona, vedi discussione sessione su iOS/Android: Tkinter non gira
+   su mobile) ma impacchettare il *solo motore* (stdlib pura, già
+   portabile) con un layer UI minimale mobile-native — Kivy o BeeWare/
+   Briefcase (già valutati come le due strade realistiche per
+   Android/iOS) — oppure, ancora più semplice per un vero prototipo
+   rapido, una web-app locale (HTML+JS che chiama un piccolo server
+   Python locale sul telefono stesso, es. via Termux) che riusa
+   `balzar/qr.py` + `interpreter.py` così come sono. Il valore del
+   prototipo "vecchio smartphone" non è il prodotto finale (l'app dedicata
+   verrebbe dopo, magari su un device più economico/robusto tipo un
+   pannello industriale con Android embedded) ma la dimostrazione a costo
+   zero: fotografa un'etichetta reale, vedi l'esploso apparire su uno
+   schermo vero, senza PC, senza rete — l'argomento più concreto possibile
+   per convincere un'officina o un'ONG a investire nell'adozione.
+   **Non ancora iniziato**: nessun lavoro di packaging mobile nel codice
+   oggi.
+4. **Rilevamento linee/cerchi (Hough) sul raster**: utile solo per
    contenuto che arriva *già rasterizzato* senza sorgente vettoriale
    disponibile (screenshot, scansioni). Se il punto 1 copre il caso reale
    più comune (CAD/schemi hanno quasi sempre una sorgente vettoriale),
    questo scende in priorità — è uno sforzo maggiore (fitting reale, non
    solo lettura) per una porzione più piccola di casi.
-4. **Packaging e distribuzione reale**: build PyInstaller testate su
+5. **Packaging e distribuzione reale**: build PyInstaller testate su
    Windows/macOS/Linux, eventualmente firma del codice, installer.
-5. **Filtri PNG adattivi** in `png.py` per output competitivo con encoder
+6. **Filtri PNG adattivi** in `png.py` per output competitivo con encoder
    PNG di libreria (criticità #3) — minore, ma facile.
-6. **Generazione diretta del QR dal payload** (già in parte coperta dal
+7. **Generazione diretta del QR dal payload** (già in parte coperta dal
    punto 2).
-7. **Pre-rendering di stati UI/HMI finiti** (versione ridimensionata e
+8. **Pre-rendering di stati UI/HMI finiti** (versione ridimensionata e
    costruibile dell'idea "gemello UI runtime" — vedi §7.2 per il perché la
    versione ambiziosa non è realistica): se un pannello industriale ha un
    numero finito di stati visivi noti (idle/loading/alarm/errore), ognuno
@@ -328,15 +410,15 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
    esterno piccolissimo sceglie quale frame mostrare in base allo stato live
    letto altrove. Zero nuove primitive nel motore — è un caso d'uso di
    `encode_video`, non un'estensione.
-8. **Scene 3D** con lo stesso modello stato+trasformazioni (estensione
+9. **Scene 3D** con lo stesso modello stato+trasformazioni (estensione
    dichiarata fin dalla visione originale, non ancora iniziata). Il
    candidato più lontano di tutti: servirebbe un parser di un formato CAD
    reale (es. STEP, geometria B-rep con vincoli/simmetrie) *e* primitive 3D
    nel DSL — nessuna delle due esiste oggi. Vedi §7.3 per l'analisi
    dettagliata di perché non è "il prossimo passo facile" nonostante sembri
    il caso ideale sulla carta.
-9. **Quantizzatore percettivo migliore** per il fallback lossy (criticità #2).
-10. **Encoder per dati strutturati non-immagine** (JSON/XML ripetitivi):
+10. **Quantizzatore percettivo migliore** per il fallback lossy (criticità #2).
+11. **Encoder per dati strutturati non-immagine** (JSON/XML ripetitivi):
     problema diverso dalla compressione di immagini — "template + diff dei
     parametri" invece di "rettangoli di pixel". Concettualmente vicino al
     modello LOOP+espressioni del DSL, ma richiederebbe un encoder
@@ -363,8 +445,10 @@ dietro, non una stima), e la precondizione che la rende vera.
    seconda della baseline — vedi §9 per il confronto quantitativo
    completo con l'alternativa reale (PDF su chiavetta/stampato).
    Precondizione: il disegno va esportato pulito (CAD/vettoriale), non
-   fotografato — vedi §5.1 per come questo diventa ancora più forte con
-   l'ingestione SVG/DXF diretta.
+   fotografato — **ora ancora più diretto**: `balzar encode-vector` (§2.6)
+   ingerisce l'SVG/DXF esportato dal CAD senza passare da uno screenshot.
+   Per portare questo in officina/ONG senza un PC vicino alla macchina,
+   vedi l'idea di supporto hardware dedicato al punto 3 di §5.
 2. **Asset per firmware/embedded**: icone, boot animation, sprite UI come
    programma invece di bitmap in flash — il decoder è stdlib pura apposta
    per questo. Coerente con la visione originale (sez. 10 della spec).
@@ -538,7 +622,7 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 69 test (3 opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 85 test (3 opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-video anim.gif -o v.bzp
