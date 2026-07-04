@@ -290,15 +290,28 @@ font bitmap esatto usato in `etichetta_bom.bzr`, non pixel quantizzati.
 
 Supportate: `RECT`/`CIRCLE`/`LINE` (anche da `polyline`/`polygon`/`path`
 con solo comandi `M`/`L`/`Z`), `TEXT`, gruppi con `translate` (SVG),
-colori ACI comuni 1-9 (DXF). Non supportate — **saltate con il motivo
-esatto**, mai ignorate in silenzio: curve (`C`/`Q`/`A` negli SVG path),
-trasformazioni diverse da `translate`, archi/spline DXF, colori ACI fuori
-dalla tabella nota (resi in grigio neutro, dichiarato). A differenza
-dell'encoder raster non c'è un originale rasterizzato da cui verificare
-un lossless bit-a-bit: la garanzia qui è "ogni elemento convertito è
-geometricamente esatto", non "pixel-perfect rispetto a un render di
+colori ACI comuni 1-9 (DXF), **curve `SPLINE` DXF** (NURBS/B-spline,
+campionate e convogliate in segmenti `LINE`: il DSL non ha una
+primitiva curva, quindi si approssima la curva invece di aggiungerne
+una — stesso principio già usato per `LWPOLYLINE`). Non supportate —
+**saltate con il motivo esatto**, mai ignorate in silenzio: curve
+(`C`/`Q`/`A` negli SVG path), trasformazioni diverse da `translate`,
+archi DXF (`ARC`/`ELLIPSE`), SPLINE definite solo da fit point senza
+punti di controllo, colori ACI fuori dalla tabella nota (resi in grigio
+neutro, dichiarato). A differenza dell'encoder raster non c'è un
+originale rasterizzato da cui verificare un lossless bit-a-bit: la
+garanzia qui è "ogni elemento convertito è geometricamente esatto" (per
+le SPLINE, "approssimato con una tolleranza fissa dichiarata" —
+`SPLINE_SAMPLES = 32`), non "pixel-perfect rispetto a un render di
 riferimento" (per cui servirebbe un motore di rendering SVG/DXF esterno,
 fuori scope).
+
+Testato su un logo CAD reale multi-spline (118 entità `SPLINE`, file di
+terzi non incluso nel repository per copyright): 0 entità saltate,
+payload 20.391 B contro 330.991 B del DXF grezzo — **il punto che conta
+è che né l'uno né l'altro entrano in un solo QR**, ma il payload ne
+richiede 10 contro i 151 del sorgente grezzo. Esempio incluso (soggetto
+generico): `examples/curva_spline.dxf`.
 
 ## Sequenze multi-file ed esploso automatico (CAD)
 

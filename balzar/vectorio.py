@@ -455,6 +455,70 @@ def _dxf_pairs(text: str):
             continue
 
 
+# ---------------------------------------------------- SPLINE (NURBS) sampling
+#
+# The DSL has no curve primitive, so a SPLINE is approximated the same way
+# LWPOLYLINE already is: sample the curve and emit connected LINE segments.
+# This needs a real B-spline evaluator (De Boor's algorithm, in homogeneous
+# coordinates so rational/weighted splines work too) since a SPLINE entity
+# stores control points + a knot vector, not a series of points to connect
+# directly. Fixed sample count, not adaptive to curvature — a documented,
+# honest tolerance choice, not hidden precision.
+SPLINE_SAMPLES = 32
+
+
+def _bspline_find_span(n: int, degree: int, u: float, knots: list[float]) -> int:
+    if u >= knots[n + 1]:
+        return n
+    if u <= knots[degree]:
+        return degree
+    low, high = degree, n + 1
+    mid = (low + high) // 2
+    while u < knots[mid] or u >= knots[mid + 1]:
+        if u < knots[mid]:
+            high = mid
+        else:
+            low = mid
+        mid = (low + high) // 2
+    return mid
+
+
+def _bspline_de_boor(u: float, degree: int, knots: list[float],
+                     points: list[tuple[float, ...]]) -> tuple[float, ...]:
+    """One point on the curve at parameter u, via De Boor's algorithm.
+    `points` may be plain (x, y) or homogeneous (x*w, y*w, w) for NURBS."""
+    n = len(points) - 1
+    k = _bspline_find_span(n, degree, u, knots)
+    dim = len(points[0])
+    d = [list(points[j + k - degree]) for j in range(degree + 1)]
+    for r in range(1, degree + 1):
+        for j in range(degree, r - 1, -1):
+            denom = knots[j + 1 + k - r] - knots[j + k - degree]
+            alpha = 0.0 if denom == 0 else (u - knots[j + k - degree]) / denom
+            d[j] = [(1.0 - alpha) * d[j - 1][c] + alpha * d[j][c] for c in range(dim)]
+    return tuple(d[degree])
+
+
+def _sample_bspline(control_points: list[tuple[float, float]], weights: list[float],
+                    knots: list[float], degree: int,
+                    n_samples: int = SPLINE_SAMPLES) -> list[tuple[float, float]] | None:
+    """Uniform samples of a (possibly rational) clamped B-spline curve, or
+    None if the control points/knots/degree don't form a valid curve."""
+    n = len(control_points) - 1
+    if n < degree or len(knots) != n + degree + 2:
+        return None
+    u_min, u_max = knots[degree], knots[n + 1]
+    if u_max <= u_min:
+        return None
+    homogeneous = [(x * w, y * w, w) for (x, y), w in zip(control_points, weights)]
+    result = []
+    for i in range(n_samples + 1):
+        u = u_min + (u_max - u_min) * i / n_samples
+        xw, yw, w = _bspline_de_boor(u, degree, knots, homogeneous)
+        result.append((xw / w, yw / w))
+    return result
+
+
 def _parse_dxf(dxf_text: str) -> tuple[list[_Shape], tuple[float, float, float, float], list[str], int]:
     """DXF text -> (raw shapes in DXF-world coordinates, bounds, skipped).
 
@@ -538,6 +602,27 @@ def _parse_dxf(dxf_text: str) -> tuple[list[_Shape], tuple[float, float, float, 
                 shapes.append(_Shape("LINE", color, layer, geom=(*a, *b)))
             xs += pxs; ys += pys
             entity_count += 1
+        elif kind == "SPLINE":
+            degree = get(entity, 71, int)
+            cxs, cys = get_all(entity, 10), get_all(entity, 20)
+            knots = get_all(entity, 40)
+            weights = get_all(entity, 41)
+            if degree is None or len(cxs) != len(cys) or not cxs:
+                skipped.append("SPLINE: punti di controllo insufficienti "
+                               "(solo fit point non e' supportato)"); continue
+            control_points = list(zip(cxs, cys))
+            if not weights:
+                weights = [1.0] * len(control_points)
+            elif len(weights) != len(control_points):
+                weights = [1.0] * len(control_points)  # malformed weights: ignore, non-rational
+            pts = _sample_bspline(control_points, weights, knots, degree)
+            if pts is None:
+                skipped.append("SPLINE: nodi/grado incoerenti con i punti di controllo"); continue
+            for a, b in zip(pts, pts[1:]):
+                shapes.append(_Shape("LINE", color, layer, geom=(*a, *b)))
+            sxs, sys_ = zip(*pts)
+            xs += sxs; ys += sys_
+            entity_count += 1
         elif kind in ("TEXT", "MTEXT"):
             x, y = get(entity, 10), get(entity, 20)
             h = get(entity, 40, float, 2.5)
@@ -555,8 +640,15 @@ def _parse_dxf(dxf_text: str) -> tuple[list[_Shape], tuple[float, float, float, 
             skipped.append(f"{kind}: entità non supportata")
 
     if not shapes:
-        raise VectorIngestError("nessuna entità convertibile trovata (LINE/CIRCLE/"
-                               "LWPOLYLINE/TEXT) nel file DXF")
+        detail = ""
+        if skipped:
+            from collections import Counter
+            counts = Counter(skipped)
+            detail = " — " + "; ".join(
+                f"{msg} (×{n})" if n > 1 else msg for msg, n in counts.items())
+        raise VectorIngestError(
+            "nessuna entità convertibile trovata (LINE/CIRCLE/LWPOLYLINE/"
+            f"SPLINE/TEXT) nel file DXF{detail}")
 
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)

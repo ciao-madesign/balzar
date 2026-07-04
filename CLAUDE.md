@@ -230,15 +230,57 @@ Supportato: `RECT`/`CIRCLE`/`LINE` (anche da `<polyline>`/`<polygon>`/
 esatta usata a mano**, non testo rasterizzato), gruppi `<g
 transform="translate(...)">` in SVG, colori ACI 1-9 in DXF (la tabella
 completa a 256 voci non è verificabile senza accesso a rete in questo
-ambiente — onestamente non hardcodata a rischio di sbagliarla).
+ambiente — onestamente non hardcodata a rischio di sbagliarla), **entità
+`SPLINE` DXF** (curve NURBS, vedi sotto).
 
 Non supportato — **saltato con il motivo esatto**, mai in silenzio (stesso
 principio di `svg.py` ma best-effort invece di tutto-o-niente, perché qui
 non c'è un secondo target di rendering dello stesso DSL da cui aspettarsi
 un supporto completo, ma un formato esterno arbitrario): curve SVG
-(`C`/`S`/`Q`/`T`/`A`), trasformazioni diverse da `translate`, archi/spline
-DXF, colori ACI fuori dalla tabella nota (resi in grigio neutro,
-dichiarato in `skipped`).
+(`C`/`S`/`Q`/`T`/`A`), trasformazioni diverse da `translate`, archi DXF
+(`ARC`/`ELLIPSE`), SPLINE definite solo da fit point senza punti di
+controllo espliciti (variante rara), colori ACI fuori dalla tabella nota
+(resi in grigio neutro, dichiarato in `skipped`).
+
+**Curve SPLINE (DXF), aggiunte in una sessione successiva**: il DSL non
+ha una primitiva curva, quindi una `SPLINE` viene approssimata con lo
+stesso principio già usato per `LWPOLYLINE` — campionarla ed emettere
+segmenti `LINE` connessi — invece di richiedere una nuova primitiva
+nell'interprete. Serve però un vero valutatore di curve B-spline (non
+solo "connetti i punti", quelli qui sono punti di controllo e nodi, non
+punti sulla curva): implementato l'algoritmo di De Boor in coordinate
+omogenee (funziona sia per B-spline normali sia per NURBS pesate) in
+`_bspline_de_boor`/`_sample_bspline`, nessuna dipendenza nuova. Ogni
+`SPLINE` è campionata a un numero **fisso** di punti (`SPLINE_SAMPLES =
+32`, non adattivo alla curvatura) — una tolleranza dichiarata ed esplicita,
+non una precisione nascosta; conta come **1 entità** in `element_count`
+anche se diventa 32 segmenti `LINE`, stessa convenzione di `LWPOLYLINE`.
+Varianti DXF non supportate: SPLINE definite solo da fit point (senza
+punti di controllo/nodi espliciti, rara nei file esportati da CAD reali).
+
+Verificato con un file reale fornito dall'utente durante la sessione (non
+incluso nel repository per motivi di copyright — logo aquila/ali
+Harley-Davidson): 382.000 B di DXF, **118 entità, tutte SPLINE** su un
+solo layer — prima di questo lavoro sarebbe stato un fallimento totale
+(0 entità convertibili). Con SPLINE supportata: 118/118 convertite, 0
+saltate (a parte gli avvisi di colore ACI non in tabella), payload
+20.391 B. Punto di misura onesto e utile: **né il sorgente né il payload
+entrano in un solo QR** (sorgente 330.991 B → 151 QR necessari; payload
+20.391 B → 10 QR) — ma il rapporto 16,2× in meno byte (27,4× contro
+l'RGB equivalente) è la differenza reale tra stampare/laminare 151 QR o
+10. Nuovo esempio incluso nel repository (soggetto generico, non
+coperto da copyright): `examples/curva_spline.dxf` (2 onde SPLINE + testo,
+0 saltati, payload 765 B, singolo QR).
+
+Bug reale trovato **grazie a questo test**, corretto nella stessa
+sessione: quando *tutte* le entità di un file sono di un tipo non
+supportato, `_parse_dxf` collezionava correttamente i motivi in
+`skipped`, ma `ingest_dxf` sollevava un `VectorIngestError` generico
+("nessuna entità convertibile trovata") **senza includere quei motivi**
+— l'informazione più utile proprio nel caso di fallimento totale veniva
+scartata. Corretto: il messaggio d'errore ora include un riepilogo
+deduplicato dei motivi di scarto (es. "ARC: entità non supportata
+(×45)").
 
 Due bug reali trovati testando prima di dichiarare la funzione pronta:
 - **Sfondo bianco non garantito**: il primo tentativo assumeva che
@@ -470,7 +512,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-120 test, tutti verdi (`python3 -m unittest discover -s tests`):
+125 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -480,8 +522,10 @@ bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
 vs flipbook, capitoli in ordine sparso/mancanti/corrotti, sequenze
-vettoriali/raster multi-file, esploso automatico per layer, i quattro
-flussi della demo web (successo, errori onesti invece di crash,
+vettoriali/raster multi-file, esploso automatico per layer, curve SPLINE
+DXF (campionamento B-spline/NURBS, entità con nodi/gradi incoerenti o
+solo fit-point scartate senza crash), i quattro flussi della demo web
+(successo, errori onesti invece di crash,
 troncamento in base ai limiti) più il generatore QR (incluso un
 round-trip reale via ZBar in `test_webapi.py`, skippato se `pyzbar` non
 è installato).
@@ -504,6 +548,8 @@ round-trip reale via ZBar in `test_webapi.py`, skippato se `pyzbar` non
 | `examples/sequenza_flangia_cad/` (sequenza vettoriale, 3 file DXF: carcassa→+flangia→+bulloni) | 169 B | 800×800×3 frame = 5,76 MB RGB | 34.083× |
 | 3 PNG sintetici 100×80 indipendenti (sequenza raster, encode_raster_sequence) | 166 B | 72.000 B RGB | 434× |
 | `examples/flangia_esploso.dxf` (esploso automatico, 6 layer, 6 step) | 303 B | 800×800×7 frame = 13,44 MB RGB | 44.356×, un solo QR |
+| `examples/curva_spline.dxf` (curve SPLINE reali, 2 onde + testo, 0 saltati) | 765 B | 753×800 | in un solo QR, margine ampio |
+| Logo reale multi-spline (118 entità SPLINE, file di terzi non incluso per copyright) | 20.391 B | 800×233 | 16,2× vs DXF grezzo (330.991 B), 27,4× vs RGB — **né sorgente né payload entrano in un solo QR** (151 QR vs 10 QR necessari: il numero che conta davvero qui) |
 
 ## 4. Criticità note (non nascoste, da affrontare quando serve)
 

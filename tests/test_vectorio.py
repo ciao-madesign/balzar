@@ -270,5 +270,122 @@ EOF
             ingest_dxf(dxf)
 
 
+# a valid clamped cubic B-spline: 5 control points, degree 3, knots = n+degree+2 = 9
+_SPLINE_ENTITY = """0
+SPLINE
+8
+0
+62
+1
+70
+0
+71
+3
+72
+9
+73
+5
+74
+0
+40
+0.0
+40
+0.0
+40
+0.0
+40
+0.0
+40
+0.5
+40
+1.0
+40
+1.0
+40
+1.0
+40
+1.0
+10
+0.0
+20
+0.0
+30
+0.0
+10
+10.0
+20
+30.0
+30
+0.0
+10
+30.0
+20
+30.0
+30
+0.0
+10
+40.0
+20
+0.0
+30
+0.0
+10
+50.0
+20
+10.0
+30
+0.0
+"""
+
+
+def _wrap_entities(*entity_texts: str) -> str:
+    return "0\nSECTION\n2\nENTITIES\n" + "".join(entity_texts) + "0\nENDSEC\n0\nEOF\n"
+
+
+class TestDxfSpline(unittest.TestCase):
+    def test_valid_spline_is_converted_to_line_segments(self):
+        dxf = _wrap_entities(_SPLINE_ENTITY)
+        result = ingest_dxf(dxf)
+        self.assertEqual(result.element_count, 1)  # one SPLINE entity...
+        self.assertEqual(result.skipped, [])
+        # ...approximated by SPLINE_SAMPLES connected LINE segments
+        from balzar.vectorio import SPLINE_SAMPLES
+        self.assertEqual(result.program_text.count("LINE "), SPLINE_SAMPLES)
+
+    def test_spline_renders_without_error(self):
+        dxf = _wrap_entities(_SPLINE_ENTITY)
+        result = ingest_dxf(dxf)
+        rendered = render(result.program_text)
+        self.assertEqual(rendered.width, result.width)
+
+    def test_two_splines_count_as_two_entities(self):
+        dxf = _wrap_entities(_SPLINE_ENTITY, _SPLINE_ENTITY)
+        result = ingest_dxf(dxf)
+        self.assertEqual(result.element_count, 2)
+
+    def test_mismatched_knot_count_is_skipped_not_crashed(self):
+        # degree=3 with only 5 knots (needs 9): invalid, must be skipped honestly
+        dxf = _wrap_entities(
+            "0\nSPLINE\n8\n0\n62\n1\n70\n0\n71\n3\n72\n5\n73\n5\n74\n0\n"
+            "40\n0.0\n40\n0.0\n40\n1.0\n40\n1.0\n40\n1.0\n"
+            "10\n0.0\n20\n0.0\n30\n0.0\n"
+            "10\n10.0\n20\n30.0\n30\n0.0\n"
+            "10\n30.0\n20\n30.0\n30\n0.0\n"
+            "10\n40.0\n20\n0.0\n30\n0.0\n"
+            "10\n50.0\n20\n10.0\n30\n0.0\n")
+        with self.assertRaises(VectorIngestError) as ctx:
+            ingest_dxf(dxf)
+        self.assertIn("SPLINE", str(ctx.exception))
+
+    def test_fit_points_only_spline_is_skipped_not_crashed(self):
+        # no control points (code 10/20), only fit points (11/21) — the
+        # rarer DXF variant we explicitly don't support
+        dxf = _wrap_entities(
+            "0\nSPLINE\n8\n0\n62\n1\n70\n0\n71\n3\n72\n0\n73\n0\n74\n2\n"
+            "11\n0.0\n21\n0.0\n31\n0.0\n11\n10.0\n21\n10.0\n31\n0.0\n")
+        with self.assertRaises(VectorIngestError):
+            ingest_dxf(dxf)
+
+
 if __name__ == "__main__":
     unittest.main()
