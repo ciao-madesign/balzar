@@ -108,6 +108,8 @@ def handle_encode(body: dict, limits: Limits) -> tuple[int, dict]:
         "height": h,
         "palette_size": result.palette_size,
         "lossless": result.lossless,
+        "color_step": result.color_step,
+        "fidelity_label": result.fidelity_label(),
         "tile": list(result.tile) if result.tile else None,
         "instruction_count": result.instruction_count,
         "raw_rgb_bytes": raw_rgb_bytes,

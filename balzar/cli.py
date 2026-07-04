@@ -130,7 +130,7 @@ def cmd_encode_image(args: argparse.Namespace) -> int:
         fh.write(result.payload)
 
     raw = w * h * 3
-    fedelta = "esatta (lossless)" if result.lossless else "quantizzata a 256 colori fissi (lossy)"
+    fedelta = result.fidelity_label()
     print(f"immagine:     {w}x{h} ({args.max_dim}px lato massimo), "
           f"{result.palette_size} colori, fedelta' {fedelta}")
     print(f"tiling:       {'trovato ' + str(result.tile) if result.tile else 'non trovato'}")

@@ -216,14 +216,14 @@ class BalzarApp:
             from .encoder import encode_image
             result = encode_image(w, h, frames[0])
             frame_info = "1 frame"
-            lossless = result.lossless
+            fedelta = result.fidelity_label()
             extra = [("tiling", f"{result.tile[0]}x{result.tile[1]} px"
                       if result.tile else "non trovato")]
         else:
             from .video import encode_video
             result = encode_video(w, h, frames)
             frame_info = f"{result.frame_count} frame (delta-encoding)"
-            lossless = result.lossless
+            fedelta = "esatta (lossless)" if result.lossless else "quantizzata (lossy)"
             extra = [("pixel cambiati totali", _fmt(result.delta_pixels_total))]
 
         job.payload = result.payload
@@ -236,8 +236,7 @@ class BalzarApp:
         job.stats = [
             ("sorgente", f"{job.source_name} ({_fmt(upload_size)} B)"),
             ("analisi", f"{w}x{h}, {frame_info}"),
-            ("colori", f"{result.palette_size} "
-             + ("(lossless)" if lossless else "(quantizzati 3-3-2, lossy)")),
+            ("colori", f"{result.palette_size} ({fedelta})"),
             *extra,
             ("istruzioni", _fmt(result.instruction_count)),
             ("RGB grezzo", f"{_fmt(raw)} B"),

@@ -119,7 +119,7 @@ function render(r, file) {
     ["dimensioni analizzate", `${r.width}×${r.height} px`],
     ["file caricato", fmtBytes(r.upload_bytes)],
     ["colori (palette)", r.palette_size + (r.lossless ? "" : " (quantizzati, non esatti)")],
-    ["fedeltà", r.lossless ? "esatta (lossless)" : "quantizzata a 256 colori fissi (lossy)"],
+    ["fedeltà", r.fidelity_label],
     ["tiling rilevato", r.tile ? `sì, ${r.tile[0]}×${r.tile[1]} px` : "no"],
     ["istruzioni generate", r.instruction_count],
     ["RGB grezzo equivalente", fmtBytes(r.raw_rgb_bytes)],

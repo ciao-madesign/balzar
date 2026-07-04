@@ -57,8 +57,11 @@ CPython ma non un'astrazione intera pura).
 teoria, ora implementato e testato (`tests/test_encoder.py`):
 
 1. **quantizzazione palette**: lossless se l'immagine ha già ≤256 colori
-   (icone, screenshot, export CAD, pixel art); altrimenti quantizzazione
-   fissa 3-3-2 bit (256 colori), dichiarata come lossy;
+   (icone, screenshot, export CAD, pixel art); altrimenti arrotondamento
+   colore a passi crescenti (2,4,8,...,64 per canale, il più fine che
+   basta) — non più un fallback fisso grezzo, dichiarato con precisione
+   (`color_step`, `fidelity_label()`) invece di un booleano lossless/lossy
+   piatto — vedi criticità §4.2;
 2. **rilevamento tiling**: prova **tutti** i divisori di w e h (i candidati
    sbagliati falliscono alla prima riga, quindi il costo è basso) — trova
    piastrelle anche grandi, es. 100×100 su un canvas 800×800;
@@ -217,7 +220,7 @@ vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
 
 ### 2.9 Test
 
-66 test, tutti verdi (`python3 -m unittest discover -s tests`):
+69 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -238,6 +241,7 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
 | Rumore puro 800×800 (encoder auto) | 2,73 MB | 1,92 MB | **0,7×, nessun guadagno** (dichiarato) |
 | GIF palla+griglia 320×240×30 frame (video encoder) | 8.144 B | 6,91 MB | 849× |
 | Confronto onesto vs JPEG/PNG/ZIP/DEFLATE su vista esplosa 5 frame | 424 B | 7,2 MB | 40×–17.000× a seconda della baseline |
+| Screenshot UI sintetico anti-aliased, 455 colori esatti (encoder auto) | 18.751 B (passo 4, vs 7.949 B col vecchio fallback fisso) | 384.000 B | 20,5× (qualità visibilmente migliore: ombra/pattern di sfondo preservati) |
 
 ## 4. Criticità note (non nascoste, da affrontare quando serve)
 
@@ -248,11 +252,24 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
    bordo diventa la propria istruzione. Servirebbe un fitting tipo Hough
    transform per linee/cerchi. Non implementato: è la lacuna più seria
    dell'encoder v1.
-2. **Quantizzazione lossy 3-3-2 grezza** oltre 256 colori. Funziona ma è
-   rozza (banding visibile su gradienti). Un quantizzatore migliore
-   (median-cut vero, o merge percettivo) darebbe risultati più puliti sulle
-   foto, senza però cambiare l'esito di fondo (le foto restano il caso a
-   basso/nessun guadagno).
+2. **Quantizzazione lossy oltre 256 colori — migliorata ma non risolta
+   del tutto.** Non è più il fallback fisso 3-3-2 (passi ±16/±32 sempre,
+   anche quando servirebbe pochissimo): ora `_quantize` in `encoder.py`
+   prova passi di arrotondamento crescenti (2,4,8,...,64 per canale) e usa
+   il più fine che riporta il conteggio colori ≤256. Caso reale misurato
+   in sessione (screenshot UI con testo anti-aliased, icone arrotondate,
+   ombra sfumata, sfondo a puntini — 455 colori esatti): passo 4 basta
+   (palette 217 colori) invece del vecchio passo fisso ~32, con il pattern
+   di sfondo e l'ombra visibili invece di scomparire nel banding. Costo
+   onesto: payload più grande (18.751 B contro 7.949 B col vecchio
+   fallback) — più fedeltà costa più byte, dichiarato via il nuovo campo
+   `EncodeResult.color_step` e `fidelity_label()` (non più un booleano
+   lossless/lossy piatto). Il fallback fisso 3-3-2 è stato rimosso perché
+   con passo 64 restano al più 4×4×4=64 colori possibili per pigeonhole —
+   quindi era già codice morto, mai raggiunto. Resta vero che un vero
+   quantizzatore percettivo (median-cut, o clustering nello spazio colore)
+   darebbe risultati ancora migliori sulle foto vere, senza cambiare
+   l'esito di fondo (le foto restano il caso a basso/nessun guadagno).
 3. **`png.py` non usa filtri di scanline adattivi** (Sub/Up/Paeth): un
    secondo passaggio DEFLATE sui PNG generati li comprime ulteriormente del
    ~25-30%. Non è un bug bloccante (i confronti onesti fatti nella
@@ -521,7 +538,7 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 66 test (3 opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 69 test (3 opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-video anim.gif -o v.bzp

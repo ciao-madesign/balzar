@@ -92,6 +92,54 @@ class TestEncoderRoundtrip(unittest.TestCase):
         rendered = render(decode_payload(result.payload))
         self.assertEqual(rendered.width, w)
 
+    def test_near_256_colors_gets_fine_rounding_not_coarse_fallback(self):
+        """The case that motivated this: anti-aliased UI screenshots land
+        just over 256 colors and deserve +-1/+-2 per channel, not the old
+        crude fixed 3-3-2 palette (+-16/+-32)."""
+        w, h = 24, 24
+        rng = random.Random(1)
+        base = [(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                for _ in range(100)]
+        colors = []
+        for _ in range(w * h):
+            r, g, b = rng.choice(base)
+            # small jitter, like anti-aliasing shades of a few base colors:
+            # independent per-pixel draw -> up to 100*6=600 exact colors
+            # (well over 256), but only ~6x the buckets once rounded
+            jitter = rng.randrange(6)
+            colors.append(((r + jitter) % 256, (g + jitter) % 256, (b + jitter) % 256))
+        rgb = b"".join(bytes(c) for c in colors)
+
+        exact_colors = len(set(colors))
+        self.assertGreater(exact_colors, 256, "test setup should exceed 256 exact colors")
+
+        result = encode_image(w, h, rgb)
+        self.assertFalse(result.lossless)
+        self.assertGreater(result.color_step, 0, "should use graduated rounding")
+        self.assertLessEqual(result.color_step, 16, "jitter of 5 should need only fine rounding")
+        self.assertIn("arrotondamento colore", result.fidelity_label())
+
+        rendered = render(decode_payload(result.payload))
+        self.assertEqual((rendered.width, rendered.height), (w, h))
+
+    def test_true_high_entropy_still_needs_the_coarsest_step(self):
+        """Genuine noise must NOT be reported as finely quantized — it
+        should need the coarsest rounding step, same ballpark as the old
+        fixed 3-3-2 fallback, and say so ('quantizzata grezza')."""
+        w, h = 24, 24
+        rng = random.Random(2)
+        rgb = bytes(rng.randrange(256) for _ in range(w * h * 3))
+        result = encode_image(w, h, rgb)
+        self.assertFalse(result.lossless)
+        self.assertGreaterEqual(result.color_step, 48)
+        self.assertIn("grezza", result.fidelity_label())
+
+    def test_exact_palette_has_zero_color_step(self):
+        result = encode_image(32, 32, _solid_blocks(32, 32))
+        self.assertTrue(result.lossless)
+        self.assertEqual(result.color_step, 0)
+        self.assertEqual(result.fidelity_label(), "esatta (lossless)")
+
 
 if __name__ == "__main__":
     unittest.main()
