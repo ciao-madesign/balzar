@@ -9,10 +9,10 @@
 <body>
   <header>
     <h1>balzar</h1>
-    <p class="tagline">Carica un'immagine: viene analizzata e ridotta a un <em>programma</em> di poche
-      istruzioni (rettangoli, tiling, palette). Il file che scarichi non contiene pixel — l'immagine che
-      vedi sotto è stata <strong>rigenerata da zero</strong> eseguendo quel programma.</p>
-    <p class="honesty">Su contenuti strutturati (icone, schemi, pattern, pixel art) il guadagno è enorme.
+    <p class="tagline">Ogni scheda qui sotto trasforma un file in un <em>programma</em> di poche
+      istruzioni (rettangoli, cerchi, tiling, palette) — quello che scarichi non contiene mai pixel,
+      solo il risultato che vedi è stato <strong>rigenerato da zero</strong> eseguendo quel programma.</p>
+    <p class="honesty">Su contenuti strutturati (icone, schemi, pattern, disegni CAD) il guadagno è enorme.
       Su foto e rumore l'encoder lo dichiara onestamente invece di fingere una compressione che non c'è —
       è il limite di complessità di Kolmogorov descritto nel progetto.</p>
     <p class="nav-links"><a href="come-funziona.html">Come funziona balzar, e confronto con altri sistemi di compressione →</a></p>
@@ -28,6 +28,10 @@
 
   <main>
     <div id="panel-encode">
+      <p class="purpose">Codifica · encoder generico</p>
+      <p class="tagline">Per quando non hai un sorgente vettoriale: carica una foto, uno screenshot
+        o un'icona qualsiasi. L'encoder analizza i pixel e prova a ridurli a un programma — e
+        dichiara onestamente quando il contenuto (una foto, del rumore) non si presta.</p>
       <section id="drop" class="dropzone">
         <input type="file" id="file-input" accept="image/*" hidden>
         <p id="drop-label">Trascina un'immagine qui, oppure <button id="browse-btn" type="button">scegli un file</button></p>
@@ -62,6 +66,12 @@
         <div class="downloads">
           <button id="dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="dl-program" type="button">scarica programma (.bzr)</button>
+          <button id="encode-gen-qr-btn" type="button">genera QR</button>
+        </div>
+        <div id="encode-qr-result" class="qr-block" hidden>
+          <img id="encode-qr-img" class="qr-image" alt="QR del payload">
+          <p id="encode-qr-note" class="honesty"></p>
+          <button id="encode-qr-dl-btn" type="button">scarica QR (PNG)</button>
         </div>
 
         <details>
@@ -72,6 +82,7 @@
     </div>
 
     <div id="panel-vector" hidden>
+      <p class="purpose">Codifica · ingestione CAD esatta</p>
       <p class="tagline">Carica un file <code>.svg</code> o <code>.dxf</code>: viene ingerito
         direttamente (<code>vectorio.py</code>) — niente rasterizzazione, niente quantizzazione.
         Un cerchio nel file sorgente ha già centro e raggio espliciti, si mappa 1:1 su
@@ -112,6 +123,12 @@
           <button id="vector-dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="vector-dl-program" type="button">scarica programma (.bzr)</button>
           <button id="vector-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
+          <button id="vector-gen-qr-btn" type="button">genera QR</button>
+        </div>
+        <div id="vector-qr-result" class="qr-block" hidden>
+          <img id="vector-qr-img" class="qr-image" alt="QR del payload">
+          <p id="vector-qr-note" class="honesty"></p>
+          <button id="vector-qr-dl-btn" type="button">scarica QR (PNG)</button>
         </div>
 
         <details>
@@ -122,6 +139,7 @@
     </div>
 
     <div id="panel-video" hidden>
+      <p class="purpose">Codifica · delta multi-frame</p>
       <p class="tagline">Carica una GIF animata: viene codificata col modello differenziale
         (<code>video.py</code>) — il frame 0 per intero, ogni frame successivo costa solo i
         pixel che cambiano. A differenza di "Comprimi immagine" (che guarda solo il primo
@@ -160,6 +178,12 @@
         <div class="downloads">
           <button id="video-dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="video-dl-program" type="button">scarica programma (.bzr)</button>
+          <button id="video-gen-qr-btn" type="button">genera QR</button>
+        </div>
+        <div id="video-qr-result" class="qr-block" hidden>
+          <img id="video-qr-img" class="qr-image" alt="QR del payload">
+          <p id="video-qr-note" class="honesty"></p>
+          <button id="video-qr-dl-btn" type="button">scarica QR (PNG)</button>
         </div>
 
         <details>
@@ -170,6 +194,7 @@
     </div>
 
     <div id="panel-sequence" hidden>
+      <p class="purpose">Codifica · più file, un solo payload navigabile</p>
       <p class="tagline">Carica 2 o più file <strong>dello stesso tipo</strong>: solo
         <code>.svg</code>, solo <code>.dxf</code>, oppure immagini raster (PNG/JPEG/...).
         Ogni file diventa un frame — usa le frecce per mettere i file nell'ordine giusto
@@ -213,6 +238,12 @@
         <div class="downloads">
           <button id="sequence-dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="sequence-dl-program" type="button">scarica programma (.bzr)</button>
+          <button id="sequence-gen-qr-btn" type="button">genera QR</button>
+        </div>
+        <div id="sequence-qr-result" class="qr-block" hidden>
+          <img id="sequence-qr-img" class="qr-image" alt="QR del payload">
+          <p id="sequence-qr-note" class="honesty"></p>
+          <button id="sequence-qr-dl-btn" type="button">scarica QR (PNG)</button>
         </div>
 
         <details>
@@ -223,6 +254,7 @@
     </div>
 
     <div id="panel-open" hidden>
+      <p class="purpose">Consumo · apri un payload già esistente</p>
       <p class="tagline">Hai già un file <code>.bzr</code> o <code>.bzp</code> (scaricato da qui, o
         prodotto dalla CLI/app desktop)? Caricalo qui: viene decodificato e <strong>rigenerato</strong> —
         nessun terminale necessario. Se il programma usa solo operazioni vettoriali (rettangoli, cerchi,
@@ -250,8 +282,15 @@
           <button id="open-dl-png" type="button">scarica PNG</button>
           <button id="open-dl-gif" type="button" hidden>scarica GIF</button>
           <button id="open-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
+          <button id="open-dl-payload" type="button">scarica payload (.bzp)</button>
+          <button id="open-gen-qr-btn" type="button">genera QR</button>
         </div>
         <p id="open-svg-reason" class="honesty" hidden></p>
+        <div id="open-qr-result" class="qr-block" hidden>
+          <img id="open-qr-img" class="qr-image" alt="QR del payload">
+          <p id="open-qr-note" class="honesty"></p>
+          <button id="open-qr-dl-btn" type="button">scarica QR (PNG)</button>
+        </div>
 
         <details>
           <summary>programma (DSL)</summary>

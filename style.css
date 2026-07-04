@@ -49,6 +49,20 @@ h1 {
 .tagline { color: var(--fg); max-width: 68ch; }
 .honesty { color: var(--muted); font-size: 0.92rem; max-width: 68ch; }
 
+.purpose {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  margin-bottom: 0.6rem;
+}
+
 .tabs {
   display: flex;
   gap: 0.4rem;
@@ -177,7 +191,29 @@ table.stats td:last-child { text-align: right; font-variant-numeric: tabular-num
 .downloads {
   display: flex;
   gap: 0.75rem;
+  flex-wrap: wrap;
   margin-top: 1.25rem;
+}
+
+.qr-block {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+.qr-image {
+  width: 100%;
+  max-width: 220px;
+  height: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
 }
 
 .file-list {

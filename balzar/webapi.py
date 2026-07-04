@@ -407,6 +407,46 @@ def _png_frame(rendered, index: int, max_dim: int | None = None) -> bytes:
     return buf.getvalue()
 
 
+def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
+    """Payload bytes -> a printable QR image (single code, or an
+    auto-sized grid if the payload doesn't fit one) — reuses
+    balzar/qr.py exactly as the CLI/GUI do. Generation only needs the
+    pure-Python `qrcode` package (+ Pillow, already a dependency); unlike
+    *reading* a QR (pyzbar/libzbar0, native, not wired into the web demo)
+    this has no extra system dependency, so it is safe to expose here."""
+    payload_b64 = body.get("payload_base64")
+    if not payload_b64:
+        return 400, {"ok": False, "error": "campo 'payload_base64' mancante"}
+
+    try:
+        import qrcode  # noqa: F401  (import check only; qr.py does the real import)
+    except ImportError:
+        return 500, {"ok": False,
+                     "error": "generazione QR non disponibile su questo deployment "
+                             "(pacchetto 'qrcode' mancante)"}
+
+    from .payload import fits_in_qr
+    from .qr import payload_to_qr_image
+
+    payload = base64.b64decode(payload_b64)
+    if len(base64.b64encode(payload)) > limits.max_payload_b64_bytes:
+        return 400, {"ok": False, "error": "payload troppo grande per generare un QR qui"}
+
+    img = payload_to_qr_image(payload)
+
+    import io as _io
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+
+    return 200, {
+        "ok": True,
+        "single_qr": fits_in_qr(payload),
+        "width": img.size[0],
+        "height": img.size[1],
+        "qr_png_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+    }
+
+
 def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
     """Open an existing .bzr/.bzp (no terminal needed): decode + render,
     return a PNG/GIF to look at and download, plus SVG if the program
@@ -443,6 +483,8 @@ def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
     buf = _io.BytesIO()
     img.save(buf, format="PNG")
 
+    from .payload import encode_payload
+
     response = {
         "ok": True,
         "width": result.width,
@@ -453,6 +495,9 @@ def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
         "preview_scaled": preview_scaled,
         "preview_png_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
     }
+    # re-encode canonically so "genera QR" works the same whether the
+    # upload was a .bzr (source text) or a .bzp (already a payload)
+    response.update(_payload_response_fields(encode_payload(program_text), limits))
 
     full_png_b64 = base64.b64encode(
         png_bytes(result.width, result.height, result.frame_rgb(0))).decode("ascii")

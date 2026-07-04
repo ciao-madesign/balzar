@@ -1,6 +1,6 @@
-"""Web demo backend (balzar/webapi.py): the three new encoding flows
-(vector, video, sequence) added to the Vercel demo. Success paths,
-error paths, and the truncation/omission behavior driven by Limits."""
+"""Web demo backend (balzar/webapi.py): the new encoding flows (vector,
+video, sequence) and the QR generator added to the Vercel demo. Success
+paths, error paths, and the truncation/omission behavior driven by Limits."""
 
 import base64
 import io
@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from balzar.webapi import (LOCAL_LIMITS, Limits, handle_encode_sequence,
-                           handle_encode_vector, handle_encode_video)
+                           handle_encode_vector, handle_encode_video, handle_qr)
 
 SVG_FLANGE = """<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
   <circle cx="100" cy="100" r="80" fill="none" stroke="#000000"/>
@@ -232,6 +232,44 @@ class TestHandleEncodeSequence(unittest.TestCase):
                 {"filename": "b.dxf"}]
         status, resp = handle_encode_sequence({"files": files}, LOCAL_LIMITS)
         self.assertEqual(status, 400)
+
+
+class TestHandleQr(unittest.TestCase):
+    def test_small_payload_is_a_single_qr(self):
+        status, resp = handle_qr({"payload_base64": _b64(b"hello world")}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertTrue(resp["single_qr"])
+        self.assertIn("qr_png_base64", resp)
+
+    def test_large_payload_becomes_a_grid(self):
+        big = b"x" * 6000
+        status, resp = handle_qr({"payload_base64": _b64(big)}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertFalse(resp["single_qr"])
+
+    def test_missing_payload(self):
+        status, resp = handle_qr({}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_qr_roundtrips_via_zbar_if_available(self):
+        try:
+            from pyzbar.pyzbar import decode as zbar_decode
+        except ImportError:
+            self.skipTest("pyzbar non installato")
+        from PIL import Image
+
+        from balzar.payload import assemble_chunks, from_base64
+
+        payload = b"balzar QR roundtrip check"
+        status, resp = handle_qr({"payload_base64": _b64(payload)}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        img = Image.open(io.BytesIO(base64.b64decode(resp["qr_png_base64"])))
+        results = zbar_decode(img)
+        self.assertEqual(len(results), 1)
+        chunk = from_base64(results[0].data.decode("ascii"))
+        self.assertEqual(assemble_chunks([chunk]), payload)
 
 
 if __name__ == "__main__":

@@ -401,11 +401,21 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
   file, viene decodificato e rigenerato, scarichi PNG (o GIF se
   multi-frame, o SVG vettoriale se il programma è nel sottoinsieme
-  supportato — vedi sopra) con un click.
+  supportato — vedi sopra), o il payload stesso (`.bzp`, ri-codificato
+  canonicamente anche se l'upload era un `.bzr` testuale) con un click.
+
+Ogni tab mostra in cima un badge esplicito ("Codifica" o "Consumo") con
+lo scopo di quel flusso specifico, e — dove esiste un payload — un
+bottone **"genera QR"** (`api/qr.py` + `handle_qr`): riusa
+`balzar/qr.py` così com'è, singolo codice o griglia auto-dimensionata a
+seconda della dimensione. Genera un'immagine, non la legge: usa solo
+`qrcode` (puro Python + Pillow), **nessuna dipendenza nativa** — a
+differenza di `pyzbar`/`libzbar0` che serve solo per leggere un QR da
+una foto e non è mai stato esposto sulla demo web.
 
 ```bash
 # deploy
-vercel deploy   # legge vercel.json + requirements.txt (Pillow)
+vercel deploy   # legge vercel.json + requirements.txt (Pillow, qrcode)
 ```
 
 `api/encode.py` importa `balzar` direttamente dalla cartella del progetto
@@ -445,6 +455,7 @@ api/encode.py           funzione serverless Vercel: comprimi immagine -> payload
 api/encode_vector.py    funzione serverless Vercel: SVG/DXF -> payload
 api/encode_video.py     funzione serverless Vercel: GIF animata -> payload (delta)
 api/encode_sequence.py  funzione serverless Vercel: 2+ file -> payload multi-frame
+api/qr.py               funzione serverless Vercel: payload -> immagine QR (genera, non legge)
 api/render.py           funzione serverless Vercel: apri .bzr/.bzp -> PNG/GIF/SVG
 index.html, app.js, style.css   frontend statico della demo (5 tab)
 ```

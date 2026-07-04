@@ -157,6 +157,64 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
+// ---------------------------------------------------------- generatore QR
+//
+// Condiviso da tutti i tab che producono un payload: prende il
+// payload_base64 gia' nel risultato (mai ricalcolato lato client) e lo
+// manda a /api/qr, che riusa balzar/qr.py cosi' com'e' (nessuna
+// dipendenza nativa: qrcode e' puro Python, a differenza di pyzbar che
+// serve solo per *leggere* un QR da una foto).
+function setupQrButton(prefix, getPayloadBase64) {
+  const btn = document.getElementById(`${prefix}-gen-qr-btn`);
+  const resultEl = document.getElementById(`${prefix}-qr-result`);
+  const imgEl = document.getElementById(`${prefix}-qr-img`);
+  const noteEl = document.getElementById(`${prefix}-qr-note`);
+  const dlBtn = document.getElementById(`${prefix}-qr-dl-btn`);
+  let lastQrPngBase64 = null;
+
+  btn.addEventListener("click", async () => {
+    const payloadB64 = getPayloadBase64();
+    if (!payloadB64) {
+      resultEl.hidden = false;
+      noteEl.textContent = "Payload non disponibile per generare un QR (omesso perché troppo grande).";
+      noteEl.classList.add("error");
+      return;
+    }
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Genero…";
+    try {
+      const res = await fetch("/api/qr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payload_base64: payloadB64 }),
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+
+      lastQrPngBase64 = json.qr_png_base64;
+      imgEl.src = "data:image/png;base64," + lastQrPngBase64;
+      noteEl.classList.remove("error");
+      noteEl.textContent = json.single_qr
+        ? "QR singolo — scansionalo con qualunque lettore o con 'balzar scan'."
+        : "Il payload non entra in un solo QR: griglia auto-dimensionata, scansiona l'immagine intera con 'balzar scan'.";
+      resultEl.hidden = false;
+    } catch (err) {
+      noteEl.classList.add("error");
+      noteEl.textContent = "Errore: " + err.message;
+      resultEl.hidden = false;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
+
+  dlBtn.addEventListener("click", () => {
+    if (!lastQrPngBase64) return;
+    downloadBlob(base64ToBytes(lastQrPngBase64), "payload_qr.png", "image/png");
+  });
+}
+
 dlPayloadBtn.addEventListener("click", () => {
   if (!lastResult) return;
   downloadBlob(base64ToBytes(lastResult.payload_base64), "output.bzp", "application/octet-stream");
@@ -166,6 +224,8 @@ dlProgramBtn.addEventListener("click", () => {
   if (!lastResult) return;
   downloadBlob(new TextEncoder().encode(lastResult.program_text), "output.bzr", "text/plain");
 });
+
+setupQrButton("encode", () => (lastResult && !lastResult.payload_omitted) ? lastResult.payload_base64 : null);
 
 // ---------------------------------------------------------- tabs
 
@@ -303,6 +363,8 @@ vectorDlSvg.addEventListener("click", () => {
   downloadBlob(new TextEncoder().encode(lastVectorResult.svg_text), "rigenerato.svg", "image/svg+xml");
 });
 
+setupQrButton("vector", () => (lastVectorResult && !lastVectorResult.payload_omitted) ? lastVectorResult.payload_base64 : null);
+
 // ------------------------------------------------------------ video (GIF animata)
 
 const videoDrop = document.getElementById("video-drop");
@@ -408,6 +470,8 @@ videoDlProgram.addEventListener("click", () => {
   if (!lastVideoResult) return;
   downloadBlob(new TextEncoder().encode(lastVideoResult.program_text), "output.bzr", "text/plain");
 });
+
+setupQrButton("video", () => (lastVideoResult && !lastVideoResult.payload_omitted) ? lastVideoResult.payload_base64 : null);
 
 // -------------------------------------------------------- sequenza multi-file
 
@@ -591,6 +655,8 @@ sequenceDlProgram.addEventListener("click", () => {
   downloadBlob(new TextEncoder().encode(lastSequenceResult.program_text), "sequenza.bzr", "text/plain");
 });
 
+setupQrButton("sequence", () => (lastSequenceResult && !lastSequenceResult.payload_omitted) ? lastSequenceResult.payload_base64 : null);
+
 // ------------------------------------------------- apri programma (.bzr/.bzp)
 
 const openDrop = document.getElementById("open-drop");
@@ -604,6 +670,7 @@ const openProgramText = document.getElementById("open-program-text");
 const openDlPng = document.getElementById("open-dl-png");
 const openDlGif = document.getElementById("open-dl-gif");
 const openDlSvg = document.getElementById("open-dl-svg");
+const openDlPayload = document.getElementById("open-dl-payload");
 const openSvgReason = document.getElementById("open-svg-reason");
 
 let lastOpenResult = null;
@@ -684,6 +751,11 @@ function renderOpenResult(r) {
     openSvgReason.textContent = "SVG non disponibile: " + r.svg_reason;
   }
 
+  openDlPayload.disabled = !!r.payload_omitted;
+  openDlPayload.title = r.payload_omitted
+    ? "payload più grande del limite di risposta del server: usa la CLI in locale"
+    : "";
+
   openResultEl.hidden = false;
 }
 
@@ -695,7 +767,13 @@ openDlGif.addEventListener("click", () => {
   if (!lastOpenResult || !lastOpenResult.gif_base64) return;
   downloadBlob(base64ToBytes(lastOpenResult.gif_base64), "rigenerato.gif", "image/gif");
 });
+openDlPayload.addEventListener("click", () => {
+  if (!lastOpenResult || !lastOpenResult.payload_base64) return;
+  downloadBlob(base64ToBytes(lastOpenResult.payload_base64), "rigenerato.bzp", "application/octet-stream");
+});
 openDlSvg.addEventListener("click", () => {
   if (!lastOpenResult || !lastOpenResult.svg_text) return;
   downloadBlob(new TextEncoder().encode(lastOpenResult.svg_text), "rigenerato.svg", "image/svg+xml");
 });
+
+setupQrButton("open", () => (lastOpenResult && !lastOpenResult.payload_omitted) ? lastOpenResult.payload_base64 : null);

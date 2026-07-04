@@ -364,12 +364,14 @@ completo esporta-QR→scansiona-foto→payload bit-identico.
 
 ### 2.9 Demo web (solo vetrina, non il prodotto)
 
-`index.html` + `app.js` + `style.css` + cinque funzioni serverless Vercel
+`index.html` + `app.js` + `style.css` + sei funzioni serverless Vercel
 (`api/encode.py`, `api/encode_vector.py`, `api/encode_video.py`,
-`api/encode_sequence.py`, `api/render.py`) + `balzar/webapi.py` (logica
-condivisa con profili di limiti espliciti: `VERCEL_LIMITS` vs
-`LOCAL_LIMITS`, quest'ultimo non ancora agganciato a un vero deployment).
-Cinque tab nella pagina:
+`api/encode_sequence.py`, `api/qr.py`, `api/render.py`) +
+`balzar/webapi.py` (logica condivisa con profili di limiti espliciti:
+`VERCEL_LIMITS` vs `LOCAL_LIMITS`, quest'ultimo non ancora agganciato a
+un vero deployment). Cinque tab nella pagina, ognuno con un badge
+"Codifica"/"Consumo" esplicito in cima al pannello che ne dichiara lo
+scopo (nessuna spiegazione implicita lasciata all'utente):
 
 1. **"Comprimi immagine"** (il flusso originale, `api/encode.py`) — encoder
    raster, guarda solo il primo frame di un file multi-frame.
@@ -396,14 +398,30 @@ Cinque tab nella pagina:
 5. **"Apri programma (.bzr/.bzp)"** (`api/render.py` + `handle_render`) —
    chiude il caso d'uso "ho scaricato un `.bzr` da qui e non ho un
    terminale": carica il file, viene decodificato e rigenerato, scarichi
-   PNG (e GIF se multi-frame, e SVG se il programma è vettoriale — §2.5)
-   senza installare nulla.
+   PNG (e GIF se multi-frame, e SVG se il programma è vettoriale — §2.5),
+   e — novità di questa sessione — anche il payload (`.bzp`) stesso,
+   ri-codificato canonicamente dal programma decodificato così il bottone
+   "genera QR" (vedi sotto) funziona anche quando l'upload originale era
+   un `.bzr` testuale, non un `.bzp` già pronto.
 
-Tutti e cinque verificati end-to-end in sessione (Playwright contro un
-server locale che espone le stesse funzioni `handle_*` — vedi nota sotto
-sul perché non contro il deploy reale): upload → risultato coerente con
-gli stessi numeri misurati dalla CLI sugli stessi file (es. la sequenza
-CAD a 3 step: 169 B, 34.083× identico a `sequenza_flangia_cad/`).
+**Generatore QR** (`api/qr.py` + `handle_qr`), disponibile su tutti e
+cinque i tab dove esiste un payload: riusa `balzar/qr.py` esattamente
+com'è (singolo codice o griglia auto-dimensionata). A differenza della
+*lettura* di un QR (`pyzbar`/`libzbar0`, nativa, mai esposta sul web
+demo — serve un ambiente con quella libreria di sistema), la
+*generazione* usa solo `qrcode`, puro Python + Pillow: nessuna nuova
+dipendenza di sistema, sicuro da aggiungere a `requirements.txt` per
+Vercel. Verificato non solo visivamente ma con un vero round-trip ZBar
+in sessione: screenshot del QR generato dalla pagina → `pyzbar.decode`
+→ `assemble_chunks`/`decode_payload` → programma bit-identico
+all'originale caricato.
+
+Tutti e cinque i tab (più il generatore QR) verificati end-to-end in
+sessione (Playwright contro un server locale che espone le stesse
+funzioni `handle_*` — vedi nota sotto sul perché non contro il deploy
+reale): upload → risultato coerente con gli stessi numeri misurati dalla
+CLI sugli stessi file (es. la sequenza CAD a 3 step: 169 B, 34.083×
+identico a `sequenza_flangia_cad/`).
 
 **Bug reale trovato e corretto durante la verifica**: la lista file del
 tab "Sequenza" si accumula (permette di aggiungere file in più batch),
@@ -452,7 +470,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-116 test, tutti verdi (`python3 -m unittest discover -s tests`):
+120 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -462,9 +480,11 @@ bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
 vs flipbook, capitoli in ordine sparso/mancanti/corrotti, sequenze
-vettoriali/raster multi-file, esploso automatico per layer, i tre nuovi
-flussi della demo web (successo, errori onesti invece di crash, troncamento
-in base ai limiti).
+vettoriali/raster multi-file, esploso automatico per layer, i quattro
+flussi della demo web (successo, errori onesti invece di crash,
+troncamento in base ai limiti) più il generatore QR (incluso un
+round-trip reale via ZBar in `test_webapi.py`, skippato se `pyzbar` non
+è installato).
 
 ## 3. Numeri misurati (non stimati) fin qui
 

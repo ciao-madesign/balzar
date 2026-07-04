@@ -16,6 +16,10 @@
     "api/encode_sequence.py": {
       "maxDuration": 300,
       "memory": 1024
+    },
+    "api/qr.py": {
+      "maxDuration": 60,
+      "memory": 512
     }
   }
 }
