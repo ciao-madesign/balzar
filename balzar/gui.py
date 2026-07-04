@@ -60,6 +60,8 @@ class BalzarApp:
         self.job: Job | None = None
         self._anim_after: str | None = None
         self._anim_index = 0
+        self._frame_count = 1
+        self._playing = True
         self._photo_refs: list = []  # keep PhotoImage references alive
 
         self._build_ui()
@@ -100,6 +102,20 @@ class BalzarApp:
         self.canvas_regen = tk.Canvas(panes, width=PREVIEW_MAX, height=PREVIEW_MAX,
                                       highlightthickness=1, highlightbackground="#888")
         self.canvas_regen.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
+
+        nav = ttk.Frame(panes)
+        nav.grid(row=2, column=0, columnspan=2, pady=(6, 0))
+        self.btn_prev = ttk.Button(nav, text="◀ Indietro",
+                                   command=self.prev_frame, state="disabled")
+        self.btn_prev.pack(side="left", padx=4)
+        self.btn_play = ttk.Button(nav, text="⏸ Pausa",
+                                   command=self.toggle_play, state="disabled")
+        self.btn_play.pack(side="left", padx=4)
+        self.btn_next = ttk.Button(nav, text="Avanti ▶",
+                                   command=self.next_frame, state="disabled")
+        self.btn_next.pack(side="left", padx=4)
+        self.frame_label = ttk.Label(nav, text="")
+        self.frame_label.pack(side="left", padx=12)
 
         bottom = ttk.Frame(self.root, padding=8)
         bottom.pack(fill="x")
@@ -389,8 +405,14 @@ class BalzarApp:
                               for f in job.frames_rgb[:60]]
         self._photo_refs = self._orig_photos + self._regen_photos
         self._anim_index = 0
+        self._playing = True
+        self._frame_count = max(len(self._orig_photos), len(self._regen_photos), 1)
+        multi = self._frame_count > 1
+        for b in (self.btn_prev, self.btn_play, self.btn_next):
+            b.configure(state="normal" if multi else "disabled")
+        self.btn_play.configure(text="⏸ Pausa")
         self._draw_frame()
-        if max(len(self._orig_photos), len(self._regen_photos)) > 1:
+        if multi:
             self._animate()
 
         self.stats_text.configure(state="normal")
@@ -412,11 +434,44 @@ class BalzarApp:
                 canvas.create_image(canvas.winfo_width() // 2 or PREVIEW_MAX // 2,
                                     canvas.winfo_height() // 2 or PREVIEW_MAX // 2,
                                     image=photo)
+        if self._frame_count > 1:
+            self.frame_label.configure(
+                text=f"Step {self._anim_index % self._frame_count + 1}/{self._frame_count}")
+        else:
+            self.frame_label.configure(text="")
 
     def _animate(self) -> None:
         self._anim_index += 1
         self._draw_frame()
         self._anim_after = self.root.after(120, self._animate)
+
+    def _stop_animation(self) -> None:
+        if self._anim_after:
+            self.root.after_cancel(self._anim_after)
+            self._anim_after = None
+        self._playing = False
+        self.btn_play.configure(text="▶ Play")
+
+    def prev_frame(self) -> None:
+        """Manual back-and-forth navigation — every frame is already a
+        fully decoded image in memory, so 'previous' is just an index
+        change, not a re-render (random access, not sequential playback)."""
+        self._stop_animation()
+        self._anim_index = (self._anim_index - 1) % self._frame_count
+        self._draw_frame()
+
+    def next_frame(self) -> None:
+        self._stop_animation()
+        self._anim_index = (self._anim_index + 1) % self._frame_count
+        self._draw_frame()
+
+    def toggle_play(self) -> None:
+        if self._playing:
+            self._stop_animation()
+        else:
+            self._playing = True
+            self.btn_play.configure(text="⏸ Pausa")
+            self._animate()
 
 
 def main() -> None:

@@ -93,6 +93,39 @@ Misura reale: GIF 320×240, 30 frame, palla che attraversa una griglia
 tecnica → payload 8.144 byte contro 6.912.000 byte di RGB grezzo = **849×**,
 lossless su tutti i 30 frame.
 
+**Caso d'uso "sequenza di montaggio navigabile"** (`examples/sequenza_montaggio.bzr`):
+10 step di assemblaggio progressivo (i pezzi si aggiungono, mai tolti) +
+BOM che cresce di una riga per step + indicatore testuale di stato che si
+riscrive ogni step (`FILL` di una piccola regione + `TEXT`). Scritto a
+mano con blocchi sequenziali (non `LOOP`: ogni step aggiunge un pezzo
+qualitativamente diverso, il DSL non ha condizionali per esprimerlo in
+un ciclo). Numeri reali misurati in sessione:
+
+| Rappresentazione | Byte totali |
+|---|---|
+| RGB grezzo (10 frame 760×520) | 11.856.000 |
+| 10 PNG indipendenti (il nostro `png.py`) | 57.810 |
+| Ri-deflate dei 10 PNG concatenati (stima ZIP) | 42.807 |
+| 10 frame codificati indipendentemente con l'encoder immagine (flipbook) | 157.713 |
+| **Payload balzar (delta, 10 step)** | **766** |
+
+766 byte per l'intera sequenza, in un solo QR con ampio margine (limite
+2.953). Il confronto che conta di più: **75× più piccolo della somma dei
+10 PNG indipendenti**, **206× più piccolo del flipbook con lo stesso
+nostro encoder** — la differenza è quasi interamente dovuta al fatto che
+la BOM e il disegno **si accumulano** invece di essere ridisegnati da
+zero ogni step (lo stesso principio del modello differenziale, applicato
+non solo ai pixel ma anche al testo).
+
+**Navigazione avanti/indietro**: gratuita in un senso preciso — dopo il
+render, `RenderResult.frames` è già una lista ad accesso casuale, non uno
+stream sequenziale; "indietro" non è un problema di decodifica, è solo
+un cambio di indice. Prima di questa sessione la GUI desktop faceva però
+**solo auto-play in loop**, senza controlli manuali: aggiunti pulsanti
+◀ Indietro / ⏸ Pausa/▶ Play / Avanti ▶ + etichetta "Step N/M" in
+`balzar/gui.py`, verificati sotto Xvfb (navigazione manuale, toggle
+play/pausa, indice modulo corretto in entrambe le direzioni).
+
 ### 2.4 Supporto fisico (serie di QR)
 
 `chunk_payload` / `assemble_chunks` in `balzar/payload.py`: un payload più

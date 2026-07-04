@@ -1,0 +1,94 @@
+# Sequenza di montaggio in 10 step: esploso progressivo (i pezzi si
+# aggiungono, non si tolgono) + BOM che cresce di una riga per step +
+# indicatore di stato testuale. Modello differenziale (sez. 4.3): ogni
+# FRAME costa solo le istruzioni nuove di quello step, non i pixel.
+
+CANVAS w=760 h=520 bg=1
+PALETTE i=0 rgb=#1A1A2E
+PALETTE i=2 rgb=#C0392B
+PALETTE i=3 rgb=#27AE60
+PALETTE i=8 rgb=#7F8C8D
+PALETTE i=11 rgb=#2E86AB
+
+TEXT x=20 y=10 text="SEQUENZA DI MONTAGGIO - GRUPPO FLANGIA FL-100" color=0 scale=2
+LINE x1=0 y1=40 x2=759 y2=40 color=8
+TEXT x=480 y=48 text="POS  P/N        DESCRIZIONE          QTY" color=0 scale=1
+LINE x1=470 y1=63 x2=750 y2=63 color=8
+
+REGION name=STEPBAR x=0 y=478 w=760 h=42
+
+# --- STEP 1: carcassa ---
+CIRCLE cx=150 cy=220 r=110 color=0 fill=0
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 1/10: POSIZIONA CARCASSA CR-100" color=0 scale=1
+TEXT x=480 y=73 text="1    CR-100      CARCASSA BASE        1" color=0 scale=1
+FRAME
+
+# --- STEP 2: flangia interna ---
+CIRCLE cx=150 cy=220 r=45 color=0 fill=0
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 2/10: MONTA FLANGIA INTERNA FL-20" color=0 scale=1
+TEXT x=480 y=93 text="2    FL-20       FLANGIA INTERNA      1" color=0 scale=1
+FRAME
+
+# --- STEP 3: bullone 1/4 (nord) ---
+CIRCLE cx=150 cy=140 r=12 color=0 fill=0
+CIRCLE cx=150 cy=140 r=5 color=2 fill=1
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 3/10: AVVITA BULLONE 1/4 B-4471-A" color=0 scale=1
+TEXT x=480 y=113 text="3    B-4471-A    BULLONE M6X30        1" color=0 scale=1
+FRAME
+
+# --- STEP 4: bullone 2/4 (est) ---
+CIRCLE cx=230 cy=220 r=12 color=0 fill=0
+CIRCLE cx=230 cy=220 r=5 color=2 fill=1
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 4/10: AVVITA BULLONE 2/4 B-4471-A" color=0 scale=1
+TEXT x=480 y=133 text="4    B-4471-A    BULLONE M6X30        2" color=0 scale=1
+FRAME
+
+# --- STEP 5: bullone 3/4 (sud) ---
+CIRCLE cx=150 cy=300 r=12 color=0 fill=0
+CIRCLE cx=150 cy=300 r=5 color=2 fill=1
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 5/10: AVVITA BULLONE 3/4 B-4471-A" color=0 scale=1
+TEXT x=480 y=153 text="5    B-4471-A    BULLONE M6X30        3" color=0 scale=1
+FRAME
+
+# --- STEP 6: bullone 4/4 (ovest) ---
+CIRCLE cx=70 cy=220 r=12 color=0 fill=0
+CIRCLE cx=70 cy=220 r=5 color=2 fill=1
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 6/10: AVVITA BULLONE 4/4 B-4471-A" color=0 scale=1
+TEXT x=480 y=173 text="6    B-4471-A    BULLONE M6X30        4" color=0 scale=1
+FRAME
+
+# --- STEP 7: albero ---
+RECT x=260 y=200 w=140 h=40 color=11 fill=1
+RECT x=260 y=200 w=140 h=40 color=0 fill=0
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 7/10: INSERISCI ALBERO AL-330" color=0 scale=1
+TEXT x=480 y=193 text="7    AL-330      ALBERO L=250 D30    1" color=0 scale=1
+FRAME
+
+# --- STEP 8: disco terminale ---
+CIRCLE cx=420 cy=220 r=35 color=0 fill=0
+CIRCLE cx=420 cy=220 r=10 color=2 fill=1
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 8/10: MONTA DISCO TERMINALE DS-50" color=0 scale=1
+TEXT x=480 y=213 text="8    DS-50       DISCO TERMINALE     1" color=0 scale=1
+FRAME
+
+# --- STEP 9: anello di sicurezza ---
+CIRCLE cx=400 cy=220 r=25 color=2 fill=0
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 9/10: MONTA ANELLO SICUREZZA OR-45" color=0 scale=1
+TEXT x=480 y=233 text="9    OR-45       ANELLO SICUREZZA    1" color=0 scale=1
+FRAME
+
+# --- STEP 10: controllo qualita' / completato ---
+CIRCLE cx=150 cy=220 r=112 color=3 fill=0
+FILL region=STEPBAR color=1
+TEXT x=20 y=485 text="STEP 10/10: MONTAGGIO COMPLETATO" color=3 scale=2
+TEXT x=480 y=253 text="10   QC-OK       CONTROLLO QC OK     1" color=3 scale=1
+FRAME

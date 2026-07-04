@@ -30,11 +30,16 @@ sistemi embedded.
 | `examples/frattale.bzr` | 230 byte | 768×512 (1,2 MB RGB) | ~5.100× |
 | `examples/schema_tecnico.bzr` | ~490 byte | 800×600 (1,4 MB RGB) | ~2.900× |
 | `examples/etichetta_bom.bzr` (esploso + testo BOM) | 559 byte | 640×520 (998 KB RGB) | ~1.786× |
+| `examples/sequenza_montaggio.bzr` (10 step navigabili + BOM crescente) | 766 byte | 10 frame 760×520 (11,9 MB RGB) | ~15.478× |
 
 Tutti i payload entrano in un QR code versione 40 (capacità ~2953 byte). Per
 `etichetta_bom.bzr` vale la pena notare il confronto diretto: il PNG della
 stessa identica immagine pesa 5.496 byte e **non** entra in un QR — il
 payload balzar (559 byte) sì, con ampio margine (dettagli in `CLAUDE.md` §8).
+Per `sequenza_montaggio.bzr` il confronto più parlante non è contro il raw
+RGB: è che i 10 frame codificati **indipendentemente** (10 PNG separati)
+pesano 75× di più (57.810 byte) — l'intera sequenza sta comunque in un solo
+QR, i 10 PNG no.
 
 ## Uso rapido
 
@@ -84,8 +89,11 @@ Il prodotto finale è un **programma offline tipo zipper**: apri un file,
 lo comprimi in payload generativo, lo salvi; apri un `.bzp` e lo
 "decomprimi" rigenerandolo. `balzar/gui.py` è l'app (Tkinter, quindi
 stdlib pura + Pillow), con anteprima fianco a fianco originale/rigenerato
-(animata per i video), statistiche di guadagno oneste, salvataggio
-`.bzp`/`.bzr`, export del contenuto rigenerato (PNG/GIF) e dei capitoli QR.
+(animata per i video, con controlli ◀ Indietro / Pausa/Play / Avanti ▶ e
+indicatore "Step N/M" per navigare manualmente una sequenza multi-frame —
+utile per procedure di montaggio step-by-step, non solo per la riproduzione
+automatica), statistiche di guadagno oneste, salvataggio `.bzp`/`.bzr`,
+export del contenuto rigenerato (PNG/GIF) e dei capitoli QR.
 
 Per distribuirla come eseguibile singolo senza Python installato:
 
