@@ -434,6 +434,17 @@ server locale (`http.server` + le stesse funzioni `handle_encode*` di
 stessa limitazione già nota per `VERCEL_LIMITS` (criticità §4.6): il
 deploy reale va controllato da un ambiente con accesso di rete.
 
+**`come-funziona.html`**: pagina statica separata (nessuna funzione
+serverless, nessun JS oltre l'HTML), linkata dall'header di `index.html`.
+Spiega il modello (seed+programma→interprete→pixel, l'analogia
+spartito/registrazione), il limite di Kolmogorov, e una tabella di
+confronto per tipo di contenuto (icone/pattern, CAD/vettoriale, sequenze
+multi-step, video/animazioni UI, screenshot, foto, audio, dati
+strutturati) contro il sistema che si userebbe oggi — con i numeri già
+misurati altrove in questo documento (§3, §8), non nuovi né stimati.
+Dichiara onestamente le tre righe a guadagno nullo (foto, audio, dati
+strutturati non ancora implementati) invece di ometterle.
+
 ### 2.10 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`

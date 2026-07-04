@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Come funziona balzar</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>balzar</h1>
+    <p class="tagline">Non è un compressore: è un <em>generatore</em>. Un contenuto non viene
+      memorizzato, viene <strong>rigenerato deterministicamente</strong> da una descrizione minima —
+      un seme più un programma di poche istruzioni.</p>
+    <p class="nav-links">← <a href="index.html">torna alla demo</a></p>
+  </header>
+
+  <main>
+
+    <section class="card">
+      <h2>L'idea in breve</h2>
+      <p>Un file tradizionale — PNG, ZIP, MP4 — contiene i dati già pronti, solo ricodificati in
+        modo più compatto: uno stream di byte che un decoder riespande in un altro stream di byte
+        molto simile all'originale. <strong>balzar non fa questo.</strong> Il payload che genera
+        (<code>.bzp</code>) non contiene un solo pixel: contiene una lista di istruzioni —
+        <code>CIRCLE cx=170 cy=150 r=110</code>, <code>TEXT x=90 y=400 text="B-4471-A"</code> — che,
+        eseguite da un interprete deterministico, <em>producono</em> l'immagine. È la differenza tra
+        un file audio compresso e uno spartito: lo spartito non contiene il suono, contiene le
+        istruzioni per produrlo ogni volta che qualcuno lo suona.</p>
+    </section>
+
+    <section class="card">
+      <h2>Come funziona tecnicamente</h2>
+      <ol class="steps">
+        <li><strong>Input minimo</strong> — un seme più un programma di regole (poche centinaia di
+          byte), scritto a mano o generato da un encoder automatico a partire da un'immagine, un
+          disegno vettoriale (SVG/DXF) o una sequenza di file.</li>
+        <li><strong>Interprete deterministico</strong> (<code>balzar/interpreter.py</code>) — esegue
+          il programma passo per passo: nessun numero casuale "vero" (PRNG proprio, seed esplicito),
+          nessuna dipendenza da libreria esterna per la parte che conta.</li>
+        <li><strong>Applicazione delle regole</strong> (<code>balzar/ops.py</code>) — trasformazioni
+          geometriche (rotazioni, specchi, scalatura), operazioni strutturali (copia, tiling), e
+          primitive generative (rettangoli, cerchi, linee, testo, rumore, frattali).</li>
+        <li><strong>Output completo</strong> — l'immagine o la sequenza di frame finale, identica
+          bit per bit ogni volta che lo stesso payload viene rieseguito, su qualunque piattaforma.</li>
+      </ol>
+      <p class="honesty">Per aprire un payload serve balzar (l'interprete) — non è diverso dal
+        bisogno di un lettore PDF per un PDF. Non è un meccanismo di segretezza: il formato è
+        documentato, chiunque può scrivere un decoder compatibile.</p>
+    </section>
+
+    <section class="card">
+      <h2>Il limite onesto: complessità di Kolmogorov</h2>
+      <p>Il principio ha un nome preciso e un limite altrettanto preciso. Contenuto
+        <strong>strutturato</strong> — un'icona, uno schema tecnico, un pattern ripetuto, un
+        frattale — si descrive con poche istruzioni: il guadagno è di ordini di grandezza.
+        Contenuto <strong>casuale o fotografico</strong> non ha una descrizione più corta dei suoi
+        stessi pixel: nessun algoritmo, balzar incluso, può comprimerlo davvero. Quando succede,
+        l'encoder lo dichiara nel risultato invece di fingere un guadagno che non esiste — è un
+        requisito di prodotto, non un dettaglio tecnico.</p>
+    </section>
+
+    <section class="card">
+      <h2>Confronto con i sistemi di compressione tradizionali</h2>
+      <p>Non è un confronto tra "chi comprime di più" in astratto: sistemi diversi sono ottimizzati
+        per contenuti diversi. La tabella mostra, per ogni tipo di contenuto, cosa userebbe oggi la
+        maggior parte delle persone, cosa fa balzar al suo posto, e se il guadagno è reale — con
+        numeri misurati su file di questo stesso progetto, non stime.</p>
+
+      <div class="legend">
+        <span><span class="dot good"></span>guadagno grande (ordini di grandezza)</span>
+        <span><span class="dot partial"></span>guadagno modesto o parziale</span>
+        <span><span class="dot bad"></span>nessun guadagno (dichiarato onestamente)</span>
+      </div>
+
+      <div class="table-scroll">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th>Tipo di contenuto</th>
+              <th>Sistema tradizionale</th>
+              <th>Cosa fa balzar</th>
+              <th>Guadagno misurato</th>
+              <th>Applicazione tipica</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Icone, pattern, sprite geometrici</td>
+              <td>PNG/GIF (DEFLATE)</td>
+              <td>Ridisegna con <code>RECT</code>/<code>CIRCLE</code>/<code>TILE</code>, nessun pixel salvato</td>
+              <td class="gain-cell gain-high">~11.400× (276 B → 1024×1024)</td>
+              <td>Sprite/icone per firmware ed embedded</td>
+            </tr>
+            <tr>
+              <td>Disegni CAD/tecnici (SVG/DXF)</td>
+              <td>Export PDF/immagine del disegno, o il file CAD nativo</td>
+              <td>Ingestione diretta (<code>vectorio.py</code>): un cerchio nel sorgente diventa <code>CIRCLE</code>, mai un pixel di mezzo</td>
+              <td class="gain-cell gain-high">249 B per un disegno che sta in un solo QR</td>
+              <td>Manuali ricambi/BOM offline in officina</td>
+            </tr>
+            <tr>
+              <td>Sequenze di montaggio/esploso multi-step</td>
+              <td>Serie di foto/PDF separati, o un video</td>
+              <td>Un payload multi-frame con delta tra step (<code>sequence.py</code>/<code>explode.py</code>)</td>
+              <td class="gain-cell gain-high">169–766 B per l'intera sequenza, 34.000×–44.000×</td>
+              <td>Formazione tecnica, manutenzione sul campo</td>
+            </tr>
+            <tr>
+              <td>Animazioni/icone UI con poche transizioni note</td>
+              <td>GIF animata o codec video (H.264/VP9)</td>
+              <td>Delta a rettangoli tra frame (<code>video.py</code>): il frame 0 per intero, i successivi solo dove cambia qualcosa</td>
+              <td class="gain-cell gain-high">849× su un caso reale (30 frame, 320×240)</td>
+              <td>Boot animation, stati UI su pannelli embedded</td>
+            </tr>
+            <tr>
+              <td>Screenshot UI con testo e anti-aliasing</td>
+              <td>PNG</td>
+              <td>Quantizzazione best-effort a passi crescenti, copertura a rettangoli</td>
+              <td class="gain-cell gain-partial">~20× ma con perdita di fedeltà dichiarata (non lossless)</td>
+              <td>Solo se non esiste una sorgente vettoriale dell'interfaccia</td>
+            </tr>
+            <tr>
+              <td>Fotografie reali</td>
+              <td>JPEG/HEIC (DCT + quantizzazione percettiva)</td>
+              <td>Encoder raster applicato comunque, per onestà di misura</td>
+              <td class="gain-cell gain-none">nessuno — payload più grande del sorgente (0,7×)</td>
+              <td>Nessuna: JPEG resta la scelta giusta</td>
+            </tr>
+            <tr>
+              <td>Audio campionato (voce, musica registrata)</td>
+              <td>MP3/AAC/FLAC (modelli percettivi maturi)</td>
+              <td>Non supportato — dominio fuori scope per principio</td>
+              <td class="gain-cell gain-none">nessuno, per definizione</td>
+              <td>Nessuna (una notazione simbolica MIDI sarebbe un dominio diverso, non implementato)</td>
+            </tr>
+            <tr>
+              <td>Dati strutturati non-immagine (XML/JSON ripetitivi)</td>
+              <td>gzip/DEFLATE generico</td>
+              <td>Non ancora implementato — servirebbe un encoder "template + diff" a parte</td>
+              <td class="gain-cell gain-partial">ipotetico, non misurato</td>
+              <td>Roadmap futura, nessun lavoro iniziato</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="honesty">Numeri e metodologia completi in
+        <a href="https://github.com/ciao-madesign/balzar/blob/main/CLAUDE.md" target="_blank" rel="noopener">CLAUDE.md</a>
+        (sezioni 3 e 8) — ogni riga è misurata su un file reale di questo progetto, non stimata.</p>
+    </section>
+
+    <section class="card">
+      <h2>Quando ha senso, quando no</h2>
+      <p>Ha senso quando il contenuto è <strong>strutturato e la sorgente è disponibile</strong>:
+        manuali tecnici ed esplosi/BOM per officina e manutenzione sul campo (il caso guida del
+        progetto), asset per firmware/embedded, distribuzione offline via QR in zone senza rete,
+        pattern procedurali per videogiochi/app, branding generativo su packaging fisico.</p>
+      <p>Non ha senso — e balzar lo dichiara, non lo nasconde — per foto, registrazioni audio, o
+        qualunque contenuto già vicino al rumore: lì i codec esistenti (JPEG, H.265, MP3) sono già
+        ottimizzati da decenni e un passaggio in più peggiora, non migliora.</p>
+    </section>
+
+  </main>
+
+  <footer>
+    <p><a href="index.html">← prova la demo</a> ·
+      <a href="https://github.com/ciao-madesign/balzar" target="_blank" rel="noopener">codice sorgente</a></p>
+  </footer>
+</body>
+</html>

@@ -228,6 +228,113 @@ table.stats td:last-child { text-align: right; font-variant-numeric: tabular-num
   text-align: center;
 }
 
+/* ---------------------------------------------------- pagina "come funziona" */
+
+.nav-links {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}
+.nav-links a { color: var(--accent); text-decoration: none; }
+.nav-links a:hover { text-decoration: underline; }
+
+.steps {
+  counter-reset: step;
+  list-style: none;
+  margin: 1.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.steps li {
+  counter-increment: step;
+  position: relative;
+  padding: 0.75rem 1rem 0.75rem 3rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0.9rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.steps code { font-size: 0.9em; }
+
+section.card {
+  margin-top: 2rem;
+}
+section.card h2 {
+  font-size: 1.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+table.compare {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+table.compare th, table.compare td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+table.compare th {
+  background: var(--panel);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  position: sticky;
+  top: 0;
+}
+table.compare tr:last-child td { border-bottom: none; }
+table.compare td.gain-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.gain-high { color: var(--good); font-weight: 700; }
+.gain-none { color: var(--bad); font-weight: 700; }
+.gain-partial { color: var(--fg); font-weight: 600; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.legend span.dot {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+}
+.legend .dot.good { background: var(--good); }
+.legend .dot.bad { background: var(--bad); }
+.legend .dot.partial { background: var(--accent); }
+
 details {
   margin-top: 1.25rem;
   border: 1px solid var(--border);
