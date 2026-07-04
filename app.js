@@ -169,20 +169,427 @@ dlProgramBtn.addEventListener("click", () => {
 
 // ---------------------------------------------------------- tabs
 
-const tabEncode = document.getElementById("tab-encode");
-const tabOpen = document.getElementById("tab-open");
-const panelEncode = document.getElementById("panel-encode");
-const panelOpen = document.getElementById("panel-open");
+const TAB_NAMES = ["encode", "vector", "video", "sequence", "open"];
+const tabButtons = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`tab-${n}`)]));
+const tabPanels = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`panel-${n}`)]));
 
 function activateTab(tab) {
-  const isEncode = tab === "encode";
-  tabEncode.classList.toggle("active", isEncode);
-  tabOpen.classList.toggle("active", !isEncode);
-  panelEncode.hidden = !isEncode;
-  panelOpen.hidden = isEncode;
+  for (const name of TAB_NAMES) {
+    const active = name === tab;
+    tabButtons[name].classList.toggle("active", active);
+    tabPanels[name].hidden = !active;
+  }
 }
-tabEncode.addEventListener("click", () => activateTab("encode"));
-tabOpen.addEventListener("click", () => activateTab("open"));
+for (const name of TAB_NAMES) {
+  tabButtons[name].addEventListener("click", () => activateTab(name));
+}
+
+// -------------------------------------------------------- ingestione vettoriale (SVG/DXF)
+
+const vectorDrop = document.getElementById("vector-drop");
+const vectorFileInput = document.getElementById("vector-file-input");
+const vectorBrowseBtn = document.getElementById("vector-browse-btn");
+const vectorMaxDim = document.getElementById("vector-max-dim");
+const vectorStatusEl = document.getElementById("vector-status");
+const vectorResultEl = document.getElementById("vector-result");
+const vectorOriginalFigure = document.getElementById("vector-original-figure");
+const vectorImgOriginal = document.getElementById("vector-img-original");
+const vectorImgRendered = document.getElementById("vector-img-rendered");
+const vectorStatsTable = document.getElementById("vector-stats-table");
+const vectorSkippedEl = document.getElementById("vector-skipped");
+const vectorProgramText = document.getElementById("vector-program-text");
+const vectorDlPayload = document.getElementById("vector-dl-payload");
+const vectorDlProgram = document.getElementById("vector-dl-program");
+const vectorDlSvg = document.getElementById("vector-dl-svg");
+
+let lastVectorResult = null;
+
+vectorBrowseBtn.addEventListener("click", () => vectorFileInput.click());
+vectorFileInput.addEventListener("change", () => {
+  if (vectorFileInput.files[0]) handleVectorFile(vectorFileInput.files[0]);
+});
+["dragenter", "dragover"].forEach(evt =>
+  vectorDrop.addEventListener(evt, e => { e.preventDefault(); vectorDrop.classList.add("dragover"); })
+);
+["dragleave", "drop"].forEach(evt =>
+  vectorDrop.addEventListener(evt, e => { e.preventDefault(); vectorDrop.classList.remove("dragover"); })
+);
+vectorDrop.addEventListener("drop", e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleVectorFile(file);
+});
+
+function setVectorStatus(msg, isError) {
+  vectorStatusEl.hidden = false;
+  vectorStatusEl.textContent = msg;
+  vectorStatusEl.classList.toggle("error", !!isError);
+}
+
+async function handleVectorFile(file) {
+  vectorResultEl.hidden = true;
+  const lower = file.name.toLowerCase();
+  if (!lower.endsWith(".svg") && !lower.endsWith(".dxf")) {
+    setVectorStatus(`Estensione non riconosciuta: atteso .svg o .dxf`, true);
+    return;
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    setVectorStatus(`File troppo grande (${(file.size / 1048576).toFixed(1)} MB): il limite è ~3.3 MB.`, true);
+    return;
+  }
+  setVectorStatus(`Ingestione di "${file.name}" in corso…`);
+  try {
+    const data = await fileToBase64(file);
+    const res = await fetch("/api/encode_vector", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data, filename: file.name, max_dim: parseInt(vectorMaxDim.value, 10) }),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+
+    lastVectorResult = json;
+    if (lower.endsWith(".svg")) {
+      vectorOriginalFigure.hidden = false;
+      vectorImgOriginal.src = "data:image/svg+xml;base64," + data;
+    } else {
+      vectorOriginalFigure.hidden = true;
+    }
+    renderVectorResult(json);
+    setVectorStatus(`Fatto: ${file.name}`);
+  } catch (err) {
+    setVectorStatus("Errore: " + err.message, true);
+  }
+}
+
+function renderVectorResult(r) {
+  vectorImgRendered.src = "data:image/png;base64," + r.preview_png_base64;
+  vectorProgramText.textContent = r.program_text;
+
+  const rows = [
+    ["formato sorgente", r.source_format.toUpperCase()],
+    ["dimensioni", `${r.width}×${r.height} px`],
+    ["elementi convertiti", r.element_count !== undefined ? r.element_count : "—"],
+    ["elementi saltati", r.skipped.length],
+    ["istruzioni generate", r.instruction_count],
+    ["RGB grezzo equivalente", fmtBytes(r.raw_rgb_bytes)],
+    ["payload balzar", fmtBytes(r.payload_bytes)],
+    ["fattore vs RGB grezzo", `<span class="stat-good">${r.expansion_vs_raw.toFixed(1)}×</span>`],
+    ["entra in un QR code", r.fits_qr ? "sì" : "no"],
+  ];
+  vectorStatsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+  vectorSkippedEl.hidden = r.skipped.length === 0;
+  if (r.skipped.length) {
+    vectorSkippedEl.innerHTML = "saltato: " + r.skipped.map(s => `<br>&nbsp;&nbsp;• ${s}`).join("");
+  }
+
+  vectorDlPayload.disabled = !!r.payload_omitted;
+  vectorDlProgram.disabled = !!r.program_truncated;
+  vectorDlSvg.hidden = !r.svg_available;
+
+  vectorResultEl.hidden = false;
+}
+
+vectorDlPayload.addEventListener("click", () => {
+  if (!lastVectorResult) return;
+  downloadBlob(base64ToBytes(lastVectorResult.payload_base64), "output.bzp", "application/octet-stream");
+});
+vectorDlProgram.addEventListener("click", () => {
+  if (!lastVectorResult) return;
+  downloadBlob(new TextEncoder().encode(lastVectorResult.program_text), "output.bzr", "text/plain");
+});
+vectorDlSvg.addEventListener("click", () => {
+  if (!lastVectorResult || !lastVectorResult.svg_text) return;
+  downloadBlob(new TextEncoder().encode(lastVectorResult.svg_text), "rigenerato.svg", "image/svg+xml");
+});
+
+// ------------------------------------------------------------ video (GIF animata)
+
+const videoDrop = document.getElementById("video-drop");
+const videoFileInput = document.getElementById("video-file-input");
+const videoBrowseBtn = document.getElementById("video-browse-btn");
+const videoMaxDim = document.getElementById("video-max-dim");
+const videoStatusEl = document.getElementById("video-status");
+const videoResultEl = document.getElementById("video-result");
+const videoImgOriginal = document.getElementById("video-img-original");
+const videoImgRendered = document.getElementById("video-img-rendered");
+const videoStatsTable = document.getElementById("video-stats-table");
+const videoProgramText = document.getElementById("video-program-text");
+const videoDlPayload = document.getElementById("video-dl-payload");
+const videoDlProgram = document.getElementById("video-dl-program");
+
+let lastVideoResult = null;
+
+videoBrowseBtn.addEventListener("click", () => videoFileInput.click());
+videoFileInput.addEventListener("change", () => {
+  if (videoFileInput.files[0]) handleVideoFile(videoFileInput.files[0]);
+});
+["dragenter", "dragover"].forEach(evt =>
+  videoDrop.addEventListener(evt, e => { e.preventDefault(); videoDrop.classList.add("dragover"); })
+);
+["dragleave", "drop"].forEach(evt =>
+  videoDrop.addEventListener(evt, e => { e.preventDefault(); videoDrop.classList.remove("dragover"); })
+);
+videoDrop.addEventListener("drop", e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleVideoFile(file);
+});
+
+function setVideoStatus(msg, isError) {
+  videoStatusEl.hidden = false;
+  videoStatusEl.textContent = msg;
+  videoStatusEl.classList.toggle("error", !!isError);
+}
+
+async function handleVideoFile(file) {
+  videoResultEl.hidden = true;
+  if (file.size > MAX_FILE_BYTES) {
+    setVideoStatus(`File troppo grande (${(file.size / 1048576).toFixed(1)} MB): il limite è ~3.3 MB.`, true);
+    return;
+  }
+  setVideoStatus(`Codifica di "${file.name}" in corso…`);
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    videoImgOriginal.src = dataUrl;
+    const data = dataUrl.split(",", 2)[1];
+
+    const res = await fetch("/api/encode_video", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data, max_dim: parseInt(videoMaxDim.value, 10) }),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+
+    lastVideoResult = json;
+    renderVideoResult(json);
+    setVideoStatus(`Fatto: ${file.name}`);
+  } catch (err) {
+    setVideoStatus("Errore: " + err.message, true);
+  }
+}
+
+function renderVideoResult(r) {
+  videoImgRendered.src = "data:image/gif;base64," + r.preview_gif_base64;
+
+  const rows = [
+    ["dimensioni", `${r.width}×${r.height} px`],
+    ["frame", r.frame_count],
+    ["colori (palette)", r.palette_size + (r.lossless ? "" : " (quantizzati, non esatti)")],
+    ["pixel cambiati dopo il frame 0", r.delta_pixels_total.toLocaleString("it-IT")],
+    ["istruzioni generate", r.instruction_count],
+    ["RGB grezzo equivalente", fmtBytes(r.raw_rgb_bytes)],
+    ["payload balzar", fmtBytes(r.payload_bytes)],
+    ["fattore vs RGB grezzo", `<span class="stat-good">${r.expansion_vs_raw.toFixed(1)}×</span>`],
+    ["entra in un QR code", r.fits_qr ? "sì" : "no"],
+  ];
+  if (r.preview_scaled) {
+    rows.push(["anteprima", "ridotta per la visualizzazione (il payload genera la risoluzione piena)"]);
+  }
+  videoStatsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+  videoDlPayload.disabled = !!r.payload_omitted;
+  videoDlProgram.disabled = !!r.program_truncated;
+  videoProgramText.textContent = r.program_text;
+
+  videoResultEl.hidden = false;
+}
+
+videoDlPayload.addEventListener("click", () => {
+  if (!lastVideoResult) return;
+  downloadBlob(base64ToBytes(lastVideoResult.payload_base64), "output.bzp", "application/octet-stream");
+});
+videoDlProgram.addEventListener("click", () => {
+  if (!lastVideoResult) return;
+  downloadBlob(new TextEncoder().encode(lastVideoResult.program_text), "output.bzr", "text/plain");
+});
+
+// -------------------------------------------------------- sequenza multi-file
+
+const sequenceDrop = document.getElementById("sequence-drop");
+const sequenceFileInput = document.getElementById("sequence-file-input");
+const sequenceBrowseBtn = document.getElementById("sequence-browse-btn");
+const sequenceMaxDim = document.getElementById("sequence-max-dim");
+const sequenceFileList = document.getElementById("sequence-file-list");
+const sequenceEncodeBtn = document.getElementById("sequence-encode-btn");
+const sequenceClearBtn = document.getElementById("sequence-clear-btn");
+const sequenceStatusEl = document.getElementById("sequence-status");
+const sequenceResultEl = document.getElementById("sequence-result");
+const sequenceImgRendered = document.getElementById("sequence-img-rendered");
+const sequenceStatsTable = document.getElementById("sequence-stats-table");
+const sequenceProgramText = document.getElementById("sequence-program-text");
+const sequenceDlPayload = document.getElementById("sequence-dl-payload");
+const sequenceDlProgram = document.getElementById("sequence-dl-program");
+const sequencePrevBtn = document.getElementById("sequence-prev");
+const sequenceNextBtn = document.getElementById("sequence-next");
+const sequenceFrameLabel = document.getElementById("sequence-frame-label");
+
+let pendingSequenceFiles = []; // File objects, in the order to encode
+let lastSequenceResult = null;
+let sequenceFrameIndex = 0;
+
+sequenceBrowseBtn.addEventListener("click", () => sequenceFileInput.click());
+sequenceFileInput.addEventListener("change", () => {
+  addSequenceFiles(Array.from(sequenceFileInput.files));
+  sequenceFileInput.value = "";
+});
+["dragenter", "dragover"].forEach(evt =>
+  sequenceDrop.addEventListener(evt, e => { e.preventDefault(); sequenceDrop.classList.add("dragover"); })
+);
+["dragleave", "drop"].forEach(evt =>
+  sequenceDrop.addEventListener(evt, e => { e.preventDefault(); sequenceDrop.classList.remove("dragover"); })
+);
+sequenceDrop.addEventListener("drop", e => {
+  addSequenceFiles(Array.from(e.dataTransfer.files));
+});
+
+function setSequenceStatus(msg, isError) {
+  sequenceStatusEl.hidden = false;
+  sequenceStatusEl.textContent = msg;
+  sequenceStatusEl.classList.toggle("error", !!isError);
+}
+
+function addSequenceFiles(files) {
+  pendingSequenceFiles.push(...files);
+  renderSequenceFileList();
+}
+
+function renderSequenceFileList() {
+  sequenceFileList.innerHTML = "";
+  pendingSequenceFiles.forEach((file, i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <span class="file-order">${i + 1}.</span>
+      <span class="file-name">${file.name}</span>
+      <button type="button" data-action="up" ${i === 0 ? "disabled" : ""}>▲</button>
+      <button type="button" data-action="down" ${i === pendingSequenceFiles.length - 1 ? "disabled" : ""}>▼</button>
+      <button type="button" data-action="remove">✕</button>
+    `;
+    li.querySelector('[data-action="up"]').addEventListener("click", () => moveSequenceFile(i, -1));
+    li.querySelector('[data-action="down"]').addEventListener("click", () => moveSequenceFile(i, 1));
+    li.querySelector('[data-action="remove"]').addEventListener("click", () => removeSequenceFile(i));
+    sequenceFileList.appendChild(li);
+  });
+  sequenceEncodeBtn.hidden = pendingSequenceFiles.length < 2;
+  sequenceClearBtn.hidden = pendingSequenceFiles.length === 0;
+}
+
+sequenceClearBtn.addEventListener("click", () => {
+  pendingSequenceFiles = [];
+  lastSequenceResult = null;
+  sequenceResultEl.hidden = true;
+  sequenceStatusEl.hidden = true;
+  renderSequenceFileList();
+});
+
+function moveSequenceFile(i, delta) {
+  const j = i + delta;
+  if (j < 0 || j >= pendingSequenceFiles.length) return;
+  [pendingSequenceFiles[i], pendingSequenceFiles[j]] = [pendingSequenceFiles[j], pendingSequenceFiles[i]];
+  renderSequenceFileList();
+}
+
+function removeSequenceFile(i) {
+  pendingSequenceFiles.splice(i, 1);
+  renderSequenceFileList();
+}
+
+sequenceEncodeBtn.addEventListener("click", async () => {
+  sequenceResultEl.hidden = true;
+  if (pendingSequenceFiles.length < 2) return;
+  const totalBytes = pendingSequenceFiles.reduce((sum, f) => sum + f.size, 0);
+  if (totalBytes > MAX_FILE_BYTES) {
+    setSequenceStatus(
+      `File totali troppo grandi (${(totalBytes / 1048576).toFixed(1)} MB): il limite combinato è ~3.3 MB.`,
+      true
+    );
+    return;
+  }
+  setSequenceStatus(`Codifica di ${pendingSequenceFiles.length} file in corso…`);
+  try {
+    const files = await Promise.all(pendingSequenceFiles.map(async f => ({
+      filename: f.name,
+      data: await fileToBase64(f),
+    })));
+    const res = await fetch("/api/encode_sequence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files, max_dim: parseInt(sequenceMaxDim.value, 10) }),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+
+    lastSequenceResult = json;
+    sequenceFrameIndex = 0;
+    renderSequenceResult(json);
+    setSequenceStatus(`Fatto: ${pendingSequenceFiles.length} file → ${json.frame_count} frame`);
+  } catch (err) {
+    setSequenceStatus("Errore: " + err.message, true);
+  }
+});
+
+function sequenceFrames(r) {
+  return r.preview_frames_png_base64 || (r.preview_png_base64 ? [r.preview_png_base64] : []);
+}
+
+function showSequenceFrame() {
+  const frames = sequenceFrames(lastSequenceResult);
+  if (!frames.length) return;
+  sequenceImgRendered.src = "data:image/png;base64," + frames[sequenceFrameIndex];
+  sequenceFrameLabel.textContent = `Step ${sequenceFrameIndex + 1}/${frames.length}`;
+}
+
+sequencePrevBtn.addEventListener("click", () => {
+  const frames = sequenceFrames(lastSequenceResult);
+  if (!frames.length) return;
+  sequenceFrameIndex = (sequenceFrameIndex - 1 + frames.length) % frames.length;
+  showSequenceFrame();
+});
+sequenceNextBtn.addEventListener("click", () => {
+  const frames = sequenceFrames(lastSequenceResult);
+  if (!frames.length) return;
+  sequenceFrameIndex = (sequenceFrameIndex + 1) % frames.length;
+  showSequenceFrame();
+});
+
+function renderSequenceResult(r) {
+  showSequenceFrame();
+
+  const rows = [
+    ["formato sorgente", (r.source_format || "raster").toUpperCase()],
+    ["file → frame", r.frame_count],
+    ["dimensioni", `${r.width}×${r.height} px`],
+    ["istruzioni generate", r.instruction_count],
+    ["RGB grezzo equivalente", fmtBytes(r.raw_rgb_bytes)],
+    ["payload balzar", fmtBytes(r.payload_bytes)],
+    ["fattore vs RGB grezzo", `<span class="stat-good">${r.expansion_vs_raw.toFixed(1)}×</span>`],
+    ["entra in un QR code", r.fits_qr ? "sì" : "no"],
+  ];
+  if (r.skipped && r.skipped.length) {
+    rows.push(["elementi saltati", r.skipped.length]);
+  }
+  sequenceStatsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+  sequenceDlPayload.disabled = !!r.payload_omitted;
+  sequenceDlProgram.disabled = !!r.program_truncated;
+  sequenceProgramText.textContent = r.program_text;
+
+  sequenceResultEl.hidden = false;
+}
+
+sequenceDlPayload.addEventListener("click", () => {
+  if (!lastSequenceResult) return;
+  downloadBlob(base64ToBytes(lastSequenceResult.payload_base64), "sequenza.bzp", "application/octet-stream");
+});
+sequenceDlProgram.addEventListener("click", () => {
+  if (!lastSequenceResult) return;
+  downloadBlob(new TextEncoder().encode(lastSequenceResult.program_text), "sequenza.bzr", "text/plain");
+});
 
 // ------------------------------------------------- apri programma (.bzr/.bzp)
 

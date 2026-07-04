@@ -364,25 +364,75 @@ completo esporta-QR→scansiona-foto→payload bit-identico.
 
 ### 2.9 Demo web (solo vetrina, non il prodotto)
 
-`index.html` + `app.js` + `style.css` + due funzioni serverless Vercel
-(`api/encode.py`, `api/render.py`) + `balzar/webapi.py` (logica condivisa
-con profili di limiti espliciti: `VERCEL_LIMITS` vs `LOCAL_LIMITS`,
-quest'ultimo non ancora agganciato a un vero deployment). Due tab nella
-pagina: **"Comprimi immagine"** (il flusso originale, `api/encode.py`) e
-**"Apri programma (.bzr/.bzp)"** (`api/render.py` + `handle_render` in
-`webapi.py`) — quest'ultima chiude il caso d'uso "ho scaricato un `.bzr`
-da qui e non ho un terminale": carica il file, viene decodificato e
-rigenerato, scarichi PNG (e GIF se multi-frame, e SVG se il programma è
-vettoriale — §2.5) senza installare nulla. Verificato end-to-end in
-sessione (Playwright): `.bzr` e `.bzp` entrambi riconosciuti, bottone SVG
-che appare/sparisce correttamente in base al programma, video multi-frame
-→ bottone GIF, file non valido → errore 400 con messaggio chiaro.
+`index.html` + `app.js` + `style.css` + cinque funzioni serverless Vercel
+(`api/encode.py`, `api/encode_vector.py`, `api/encode_video.py`,
+`api/encode_sequence.py`, `api/render.py`) + `balzar/webapi.py` (logica
+condivisa con profili di limiti espliciti: `VERCEL_LIMITS` vs
+`LOCAL_LIMITS`, quest'ultimo non ancora agganciato a un vero deployment).
+Cinque tab nella pagina:
+
+1. **"Comprimi immagine"** (il flusso originale, `api/encode.py`) — encoder
+   raster, guarda solo il primo frame di un file multi-frame.
+2. **"Vettoriale (SVG/DXF)"** (`api/encode_vector.py` + `handle_encode_vector`)
+   — ingestione diretta via `vectorio.py`, nessuna rasterizzazione. L'SVG
+   originale viene mostrato nel browser nativamente (`<img>` renderizza SVG
+   senza bisogno del backend) accanto al risultato rigenerato da balzar;
+   per DXF (che il browser non sa renderizzare) si mostra solo il
+   rigenerato. Offre anche il download SVG (sempre disponibile: l'output
+   di `vectorio.py` usa solo il sottoinsieme vettoriale-sicuro, mai
+   rifiutato da `svg.py`).
+3. **"Video (GIF animata)"** (`api/encode_video.py` + `handle_encode_video`)
+   — a differenza del tab 1, guarda **tutti** i frame e usa il vero delta
+   di `video.py`; una GIF con un solo frame viene rifiutata con un
+   messaggio che rimanda al tab 1.
+4. **"Sequenza (multi-file)"** (`api/encode_sequence.py` +
+   `handle_encode_sequence`) — 2+ file in ordine scelto dall'utente
+   (interfaccia con frecce ▲/▼ per riordinare prima di codificare, niente
+   drag-and-drop per affidabilità) diventano un payload multi-frame,
+   navigabile avanti/indietro nel risultato con gli stessi controlli
+   `◀ Indietro`/`Avanti ▶` della GUI desktop. Dispatch automatico
+   vettoriale (solo `.svg` o solo `.dxf`, mai misti) vs raster, stessa
+   regola della CLI (`balzar encode-sequence`).
+5. **"Apri programma (.bzr/.bzp)"** (`api/render.py` + `handle_render`) —
+   chiude il caso d'uso "ho scaricato un `.bzr` da qui e non ho un
+   terminale": carica il file, viene decodificato e rigenerato, scarichi
+   PNG (e GIF se multi-frame, e SVG se il programma è vettoriale — §2.5)
+   senza installare nulla.
+
+Tutti e cinque verificati end-to-end in sessione (Playwright contro un
+server locale che espone le stesse funzioni `handle_*` — vedi nota sotto
+sul perché non contro il deploy reale): upload → risultato coerente con
+gli stessi numeri misurati dalla CLI sugli stessi file (es. la sequenza
+CAD a 3 step: 169 B, 34.083× identico a `sequenza_flangia_cad/`).
+
+**Bug reale trovato e corretto durante la verifica**: la lista file del
+tab "Sequenza" si accumula (permette di aggiungere file in più batch),
+ma non si svuotava mai da sola — codificare una prima sequenza e poi
+caricarne una seconda di tipo diverso (es. DXF poi PNG) mischiava i file
+vecchi con quelli nuovi, il dispatch vettoriale/raster sceglieva raster
+per la presenza di estensioni miste, e il tentativo di aprire un `.dxf`
+con Pillow falliva con un'eccezione non gestita (500 invece di un errore
+onesto). Fix in due parti: aggiunto un bottone "Svuota elenco" esplicito
+in `app.js`, e resa `handle_encode_sequence` robusta anche lato server
+(cattura `VectorIngestError`/`OSError` invece di lasciarli propagare come
+500) — stesso principio applicato a `handle_encode_video` per un file non
+immagine. Nessuna delle due funzioni nuove crasha più su input scorretto,
+entrambe rispondono 400 con un messaggio chiaro.
 
 Vercel impone limiti reali (~3,3MB upload utile, ~4,5MB risposta, timeout)
 gestiti esplicitamente con messaggi chiari invece di errori criptici —
 vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
 `balzar/webapi.py`. **Questi limiti non esistono nell'app desktop**, che
 è il prodotto vero.
+
+**Nota sull'ambiente di sviluppo di questa sessione**: `balzar-eight.vercel.app`
+non è raggiungibile da questo sandbox (proxy di rete con policy
+organizzativa che nega l'host, confermato dallo stato del proxy — non un
+problema del sito). La verifica end-to-end sopra è quindi contro un
+server locale (`http.server` + le stesse funzioni `handle_encode*` di
+`webapi.py`, non contro `api/*.py`/Vercel), non contro il deploy reale —
+stessa limitazione già nota per `VERCEL_LIMITS` (criticità §4.6): il
+deploy reale va controllato da un ambiente con accesso di rete.
 
 ### 2.10 CLI
 
@@ -391,17 +441,19 @@ vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
 
 ### 2.11 Test
 
-99 test, tutti verdi (`python3 -m unittest discover -s tests`):
+116 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
 `test_video.py`, `test_svg.py`, `test_vectorio.py`, `test_sequence.py`,
-`test_explode.py`. Copertura: round-trip
+`test_explode.py`, `test_webapi.py`. Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
 vs flipbook, capitoli in ordine sparso/mancanti/corrotti, sequenze
-vettoriali/raster multi-file, esploso automatico per layer.
+vettoriali/raster multi-file, esploso automatico per layer, i tre nuovi
+flussi della demo web (successo, errori onesti invece di crash, troncamento
+in base ai limiti).
 
 ## 3. Numeri misurati (non stimati) fin qui
 
@@ -471,11 +523,23 @@ vettoriali/raster multi-file, esploso automatico per layer.
 6. **Vercel: `vercel.json` non testato con un deploy reale** in questa
    sessione (nessun deploy effettuato, solo simulato con un server locale
    equivalente). Verificare `maxDuration`/`memory` reggono sul piano
-   effettivamente usato.
+   effettivamente usato. **Confermato di nuovo in questa sessione**:
+   `balzar-eight.vercel.app` non è raggiungibile dall'ambiente di sviluppo
+   usato (policy di rete organizzativa, non un problema del sito) — ogni
+   verifica end-to-end della demo web resta contro un server locale
+   equivalente finché qualcuno con accesso di rete non controlla il
+   deploy reale dopo il push.
 7. **Limite architetturale di fondo, non un bug**: qualunque incremento
    dell'encoder resta vincolato alla complessità di Kolmogorov del
    contenuto. Non esiste un encoder che comprima bene contenuto genuinamente
    casuale — non è un obiettivo raggiungibile, è escluso per definizione.
+8. **Nessun round-trip verso DXF**: `vectorio.py` ingerisce DXF ma non
+   esiste un writer che rigeneri un `.dxf` dal payload — la ricostruzione
+   di un DXF ingerito produce solo PNG/SVG (§2.6), mai lo stesso formato
+   dell'originale. Segnalato esplicitamente dall'utente come lavoro da
+   fare **quando si sarà pronti**, non ora — vedi Sviluppi §5 punto 12.
+   Stesso discorso, meno prioritario perché fuori dall'obiettivo dichiarato
+   del progetto, per JPEG (l'encoder raster produce sempre PNG in uscita).
 
 ## 5. Sviluppi possibili (ordinati per valore/sforzo stimato)
 
@@ -489,6 +553,16 @@ vettoriali/raster multi-file, esploso automatico per layer.
    La **rotazione** (2D o 3D) resta esplicitamente rimandata — l'esploso
    automatico oggi è solo traslazione radiale, per scelta discussa in
    sessione, non per limite tecnico non affrontato.
+2c. ~~Demo web: tab vettoriale/video/sequenza~~ — **fatto** (`api/encode_vector.py`,
+   `api/encode_video.py`, `api/encode_sequence.py`, `handle_encode_vector`/
+   `handle_encode_video`/`handle_encode_sequence` in `webapi.py`): vedi
+   §2.9. Decisione esplicita di sessione: **prima chiudere il ciclo
+   encoding→QR→demo web sui formati già supportati (PNG/SVG/DXF)**,
+   rimandando STEP e un encoder per XML/JSON (proposti nella stessa
+   discussione) a una sessione di scoping separata — vedi §7.1/§7.3 per
+   perché STEP in particolare non è "il prossimo incremento facile"
+   (serve un parser EXPRESS *e* primitive 3D nel DSL, nessuna delle due
+   esiste oggi).
 3. **Supporto hardware dedicato: lettore QR + schermo.** Idea proposta in
    sessione per l'adozione reale in officina/ONG (applicazioni §6.1 e
    §6.3): un dispositivo fisico che fotografa QR (singoli o griglia,
@@ -547,7 +621,17 @@ vettoriali/raster multi-file, esploso automatico per layer.
     parametri" invece di "rettangoli di pixel". Concettualmente vicino al
     modello LOOP+espressioni del DSL, ma richiederebbe un encoder
     interamente nuovo, non un'estensione di `encoder.py`. Speculativo,
-    nessun lavoro iniziato.
+    nessun lavoro iniziato. Esplicitamente rimandato in una sessione
+    recente insieme a STEP (§7.1/§7.3), a favore di chiudere prima i
+    flussi sui formati già supportati.
+12. **Round-trip completo verso DXF** (e, minore, verso JPEG): oggi
+    ricostruire un DXF ingerito produce solo PNG/SVG, mai un `.dxf`
+    rigenerato — non esiste un writer DXF. Segnalato esplicitamente
+    dall'utente come lavoro utile ma non prioritario ora ("quando saremo
+    pronti") — vedi criticità §4.8. Servirebbe un serializzatore delle
+    `_Shape` di `vectorio.py` (già strutturate per kind/geom/layer) nel
+    formato a coppie codice/valore DXF — probabilmente il pezzo più
+    semplice di questa lista, perché il modello dati esiste già.
 
 ## 6. Applicazioni target (valutate, non solo elencate)
 

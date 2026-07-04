@@ -4,6 +4,18 @@
     "api/encode.py": {
       "maxDuration": 300,
       "memory": 1024
+    },
+    "api/encode_vector.py": {
+      "maxDuration": 300,
+      "memory": 1024
+    },
+    "api/encode_video.py": {
+      "maxDuration": 300,
+      "memory": 1024
+    },
+    "api/encode_sequence.py": {
+      "maxDuration": 300,
+      "memory": 1024
     }
   }
 }

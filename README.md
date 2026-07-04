@@ -374,13 +374,28 @@ vale più di un match esatto del glifo.
 La demo su Vercel serve unicamente a far provare l'encoder dal browser;
 il prodotto è l'app desktop qui sopra, che non ha i limiti di upload,
 risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
-`app.js` + `style.css`) con due tab, due funzioni serverless Python:
+`app.js` + `style.css`) con cinque tab, cinque funzioni serverless Python:
 
 - **"Comprimi immagine"** (`api/encode.py`): carica una foto, la analizza
   lato server con l'encoder reale (stesso codice della CLI), mostra
   fianco a fianco l'originale e l'immagine **rigenerata dall'interprete**
   a partire dal payload — mai l'upload originale ridisegnato. Scarichi il
-  payload binario (`.bzp`) o il programma DSL (`.bzr`).
+  payload binario (`.bzp`) o il programma DSL (`.bzr`). Guarda solo il
+  primo frame di un file multi-frame.
+- **"Vettoriale (SVG/DXF)"** (`api/encode_vector.py`): ingestione diretta
+  via `vectorio.py`, nessuna rasterizzazione. Un SVG caricato viene
+  mostrato anche nella sua forma originale (il browser renderizza SVG
+  nativamente, nessun round-trip col server necessario per quello);
+  offre anche il download di un SVG vettoriale vero, sempre disponibile
+  perché `vectorio.py` emette solo il sottoinsieme di op vettoriale-sicure.
+- **"Video (GIF animata)"** (`api/encode_video.py`): a differenza di
+  "Comprimi immagine", guarda **tutti** i frame e usa il vero delta di
+  `video.py` invece di codificare solo il primo.
+- **"Sequenza (multi-file)"** (`api/encode_sequence.py`): carica 2+ file
+  dello stesso tipo (solo `.svg`, solo `.dxf`, oppure immagini raster),
+  mettili nell'ordine giusto con le frecce ▲/▼, ottieni un payload
+  multi-frame navigabile avanti/indietro nel risultato — stesso dispatch
+  vettoriale/raster automatico della CLI (`balzar encode-sequence`).
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
@@ -416,16 +431,22 @@ balzar/
   imageio.py      lettura immagini/GIF animate (unico modulo con Pillow)
   qr.py           payload <-> immagine QR (singola o griglia), lettura ZBar
   gui.py          applicazione desktop (Tkinter)
+  sequence.py     sequenze multi-file (vettoriali dedup, raster delta)
+  explode.py      esploso automatico per layer/gruppo (CAD/SVG)
   webapi.py       logica dell'API web con profili di limiti
   cli.py          render / encode / encode-image / encode-vector /
-                  encode-video / decode / info / chunks / scan / assemble / gui
+                  encode-video / encode-sequence / explode-vector /
+                  decode / info / chunks / scan / assemble / gui
 balzar-app.py     entry point per PyInstaller
 examples/         programmi dimostrativi (.bzr) + sorgenti vettoriali (.svg/.dxf)
 tests/            determinismo, round-trip, op, espansione, encoder, video,
-                  qr, svg, vectorio
-api/encode.py     funzione serverless Vercel: comprimi immagine -> payload
-api/render.py     funzione serverless Vercel: apri .bzr/.bzp -> PNG/GIF/SVG
-index.html, app.js, style.css   frontend statico della demo (2 tab)
+                  qr, svg, vectorio, sequence, explode, webapi
+api/encode.py           funzione serverless Vercel: comprimi immagine -> payload
+api/encode_vector.py    funzione serverless Vercel: SVG/DXF -> payload
+api/encode_video.py     funzione serverless Vercel: GIF animata -> payload (delta)
+api/encode_sequence.py  funzione serverless Vercel: 2+ file -> payload multi-frame
+api/render.py           funzione serverless Vercel: apri .bzr/.bzp -> PNG/GIF/SVG
+index.html, app.js, style.css   frontend statico della demo (5 tab)
 ```
 
 Per aggiungere un'operazione basta registrarla in `ops.py` con la sua firma
@@ -460,9 +481,16 @@ e il formato è interpretabile come regole discrete.
   (`balzar/sequence.py`, `balzar/explode.py`, comandi
   `encode-sequence`/`explode-vector`); la **rotazione** (2D o 3D)
   dell'esploso resta rimandata per scelta, non per limite tecnico;
+- ~~demo web: tab vettoriale/video/sequenza~~ — **fatto**
+  (`api/encode_vector.py`/`api/encode_video.py`/`api/encode_sequence.py`);
+  STEP e un encoder per XML/JSON, proposti nella stessa discussione, sono
+  stati esplicitamente rimandati a una sessione di scoping separata;
 - supporto hardware dedicato (lettore QR + schermo, prototipo su
   smartphone Android riadattato) per adozione in officina/ONG — non
   ancora iniziato, vedi `CLAUDE.md` §5 punto 3;
+- round-trip completo verso DXF (oggi la ricostruzione di un DXF ingerito
+  produce solo PNG/SVG, mai un `.dxf` rigenerato) — segnalato dall'utente
+  come utile ma non prioritario ora;
 - rilevamento di linee/cerchi (Hough) sul raster, per contenuto senza
   sorgente vettoriale disponibile (screenshot, scansioni);
 - filtri PNG adattivi in `png.py` per output competitivo con encoder PNG

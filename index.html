@@ -18,6 +18,9 @@
 
     <div class="tabs" role="tablist">
       <button class="tab active" id="tab-encode" type="button">Comprimi immagine</button>
+      <button class="tab" id="tab-vector" type="button">Vettoriale (SVG/DXF)</button>
+      <button class="tab" id="tab-video" type="button">Video (GIF animata)</button>
+      <button class="tab" id="tab-sequence" type="button">Sequenza (multi-file)</button>
       <button class="tab" id="tab-open" type="button">Apri programma (.bzr / .bzp)</button>
     </div>
   </header>
@@ -63,6 +66,157 @@
         <details>
           <summary>programma generato (DSL)</summary>
           <pre id="program-text"></pre>
+        </details>
+      </section>
+    </div>
+
+    <div id="panel-vector" hidden>
+      <p class="tagline">Carica un file <code>.svg</code> o <code>.dxf</code>: viene ingerito
+        direttamente (<code>vectorio.py</code>) — niente rasterizzazione, niente quantizzazione.
+        Un cerchio nel file sorgente ha già centro e raggio espliciti, si mappa 1:1 su
+        <code>CIRCLE</code>.</p>
+
+      <section id="vector-drop" class="dropzone">
+        <input type="file" id="vector-file-input" accept=".svg,.dxf" hidden>
+        <p>Trascina un file <code>.svg</code>/<code>.dxf</code> qui, oppure
+          <button id="vector-browse-btn" type="button">scegli un file</button></p>
+        <label class="dim-picker">
+          lato massimo canvas
+          <select id="vector-max-dim">
+            <option value="400">400 px</option>
+            <option value="800" selected>800 px</option>
+            <option value="1200">1200 px</option>
+          </select>
+        </label>
+      </section>
+
+      <section id="vector-status" class="status" hidden></section>
+
+      <section id="vector-result" class="result" hidden>
+        <div class="images">
+          <figure id="vector-original-figure" hidden>
+            <figcaption>originale caricato (SVG, reso nativamente dal browser)</figcaption>
+            <img id="vector-img-original" alt="SVG originale">
+          </figure>
+          <figure>
+            <figcaption>rigenerato da balzar (payload → interprete → pixel)</figcaption>
+            <img id="vector-img-rendered" alt="contenuto rigenerato">
+          </figure>
+        </div>
+
+        <table class="stats" id="vector-stats-table"></table>
+        <p id="vector-skipped" class="honesty" hidden></p>
+
+        <div class="downloads">
+          <button id="vector-dl-payload" type="button">scarica payload (.bzp)</button>
+          <button id="vector-dl-program" type="button">scarica programma (.bzr)</button>
+          <button id="vector-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
+        </div>
+
+        <details>
+          <summary>programma generato (DSL)</summary>
+          <pre id="vector-program-text"></pre>
+        </details>
+      </section>
+    </div>
+
+    <div id="panel-video" hidden>
+      <p class="tagline">Carica una GIF animata: viene codificata col modello differenziale
+        (<code>video.py</code>) — il frame 0 per intero, ogni frame successivo costa solo i
+        pixel che cambiano. A differenza di "Comprimi immagine" (che guarda solo il primo
+        frame) qui viene ricostruita l'intera animazione.</p>
+
+      <section id="video-drop" class="dropzone">
+        <input type="file" id="video-file-input" accept=".gif,image/gif" hidden>
+        <p>Trascina una GIF animata qui, oppure
+          <button id="video-browse-btn" type="button">scegli un file</button></p>
+        <label class="dim-picker">
+          risoluzione di analisi
+          <select id="video-max-dim">
+            <option value="200">200 px</option>
+            <option value="300" selected>300 px</option>
+            <option value="400">400 px</option>
+          </select>
+        </label>
+      </section>
+
+      <section id="video-status" class="status" hidden></section>
+
+      <section id="video-result" class="result" hidden>
+        <div class="images">
+          <figure>
+            <figcaption>originale caricato</figcaption>
+            <img id="video-img-original" alt="GIF originale">
+          </figure>
+          <figure>
+            <figcaption>rigenerato da balzar (delta tra frame)</figcaption>
+            <img id="video-img-rendered" alt="GIF rigenerata">
+          </figure>
+        </div>
+
+        <table class="stats" id="video-stats-table"></table>
+
+        <div class="downloads">
+          <button id="video-dl-payload" type="button">scarica payload (.bzp)</button>
+          <button id="video-dl-program" type="button">scarica programma (.bzr)</button>
+        </div>
+
+        <details>
+          <summary>programma generato (DSL)</summary>
+          <pre id="video-program-text"></pre>
+        </details>
+      </section>
+    </div>
+
+    <div id="panel-sequence" hidden>
+      <p class="tagline">Carica 2 o più file <strong>dello stesso tipo</strong>: solo
+        <code>.svg</code>, solo <code>.dxf</code>, oppure immagini raster (PNG/JPEG/...).
+        Ogni file diventa un frame — usa le frecce per mettere i file nell'ordine giusto
+        (es. gli step di un montaggio) prima di codificare. Il risultato è navigabile
+        avanti/indietro qui sotto.</p>
+
+      <section id="sequence-drop" class="dropzone">
+        <input type="file" id="sequence-file-input" accept=".svg,.dxf,image/*" multiple hidden>
+        <p>Trascina 2+ file qui, oppure
+          <button id="sequence-browse-btn" type="button">scegli i file</button></p>
+        <label class="dim-picker">
+          lato massimo canvas
+          <select id="sequence-max-dim">
+            <option value="400">400 px</option>
+            <option value="800" selected>800 px</option>
+          </select>
+        </label>
+      </section>
+
+      <ol id="sequence-file-list" class="file-list"></ol>
+      <div class="downloads">
+        <button id="sequence-encode-btn" type="button" hidden>Codifica sequenza</button>
+        <button id="sequence-clear-btn" type="button" hidden>Svuota elenco</button>
+      </div>
+
+      <section id="sequence-status" class="status" hidden></section>
+
+      <section id="sequence-result" class="result" hidden>
+        <div class="frame-nav">
+          <button id="sequence-prev" type="button">◀ Indietro</button>
+          <span id="sequence-frame-label">Step 1/1</span>
+          <button id="sequence-next" type="button">Avanti ▶</button>
+        </div>
+        <figure>
+          <figcaption>rigenerato da balzar (step corrente)</figcaption>
+          <img id="sequence-img-rendered" alt="frame corrente della sequenza">
+        </figure>
+
+        <table class="stats" id="sequence-stats-table"></table>
+
+        <div class="downloads">
+          <button id="sequence-dl-payload" type="button">scarica payload (.bzp)</button>
+          <button id="sequence-dl-program" type="button">scarica programma (.bzr)</button>
+        </div>
+
+        <details>
+          <summary>programma generato (DSL)</summary>
+          <pre id="sequence-program-text"></pre>
         </details>
       </section>
     </div>
