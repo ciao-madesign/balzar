@@ -37,6 +37,17 @@ def load_rgb(data: bytes, max_dim: int = 400) -> tuple[int, int, bytes]:
     return w, h, img.tobytes()
 
 
+def load_rgb_fixed(data: bytes, width: int, height: int) -> bytes:
+    """Decode arbitrary image bytes and force them onto an exact
+    width x height canvas (NEAREST resize if the natural size differs) —
+    used by sequence.py so independent still files share one raster grid,
+    which is what encode_video's shared-palette delta requires."""
+    img = Image.open(io.BytesIO(data)).convert("RGB")
+    if img.size != (width, height):
+        img = img.resize((width, height), Image.NEAREST)
+    return img.tobytes()
+
+
 def load_frames(data: bytes, max_dim: int = 400,
                 max_frames: int = 120) -> tuple[int, int, list[bytes]]:
     """Decode an animated image (GIF/APNG/...) to (w, h, [RGB frames]).

@@ -4,6 +4,8 @@
     python -m balzar encode        program.bzr   -o payload.bzp [--base64]
     python -m balzar encode-image  photo.png      -o payload.bzp [--max-dim N]
     python -m balzar encode-vector drawing.svg    -o payload.bzp [--max-dim N]
+    python -m balzar encode-sequence step1.dxf step2.dxf ... -o payload.bzp
+    python -m balzar explode-vector drawing.dxf   -o payload.bzp [--steps N]
     python -m balzar decode        payload.bzp    -o program.bzr
     python -m balzar info          payload.bzp
 
@@ -13,6 +15,10 @@ content per byte of payload. `encode-image` runs the best-effort automatic
 raster encoder (balzar/encoder.py) on an arbitrary image file (requires
 Pillow). `encode-vector` ingests an SVG/DXF file directly (balzar/vectorio.py,
 stdlib only) — no rasterization, no quantization, exact geometry.
+`encode-sequence` combines several files (homogeneous SVG/DXF, or raster
+images) into one multi-frame payload (balzar/sequence.py). `explode-vector`
+auto-generates an exploded-view animation from a single multi-layer CAD/SVG
+file, grouping by layer/`<g>` (balzar/explode.py).
 """
 
 from __future__ import annotations
@@ -209,6 +215,81 @@ def cmd_encode_video(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_encode_sequence(args: argparse.Namespace) -> int:
+    from .sequence import SequenceError
+
+    exts = {os.path.splitext(p)[1].lower() for p in args.inputs}
+    is_vector = exts <= {".svg", ".dxf"}
+
+    try:
+        if is_vector:
+            from .sequence import encode_vector_sequence
+            result = encode_vector_sequence(args.inputs, max_dim=args.max_dim)
+            raw = None
+        else:
+            try:
+                from .sequence import encode_raster_sequence
+            except ImportError:
+                print("errore: encode-sequence su immagini raster richiede Pillow "
+                      "(pip install pillow)", file=sys.stderr)
+                return 1
+            result = encode_raster_sequence(args.inputs, max_dim=args.max_dim)
+            raw = result.width * result.height * 3 * result.frame_count
+    except SequenceError as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    out = args.output or (os.path.splitext(args.inputs[0])[0] + "_sequenza.bzp")
+    with open(out, "wb") as fh:
+        fh.write(result.payload)
+
+    print(f"sequenza:     {len(args.inputs)} file -> {result.frame_count} frame, "
+          f"{result.width}x{result.height}")
+    if hasattr(result, "skipped"):
+        print(f"elementi:     {len(result.skipped)} saltati")
+        for reason in result.skipped:
+            print(f"  saltato:    {reason}")
+    print(f"istruzioni:   {result.instruction_count}")
+    print(f"payload:      {out}: {_fmt(len(result.payload))} byte "
+          f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'})")
+    if raw is not None:
+        if len(result.payload) < raw:
+            print(f"guadagno:     {_fmt(raw / len(result.payload))}x "
+                  f"rispetto al raw RGB ({_fmt(raw)} byte)")
+        else:
+            print(f"guadagno:     NESSUNO - payload piu' grande del raw RGB "
+                  f"({_fmt(raw)} byte)")
+    return 0
+
+
+def cmd_explode_vector(args: argparse.Namespace) -> int:
+    from .explode import ExplodeError, explode_vector_file
+
+    try:
+        result = explode_vector_file(args.input, steps=args.steps,
+                                     spacing=args.spacing, max_dim=args.max_dim)
+    except ExplodeError as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    out = args.output or (os.path.splitext(args.input)[0] + "_esploso.bzp")
+    with open(out, "wb") as fh:
+        fh.write(result.payload)
+
+    print(f"sorgente:     {args.input} ({result.source_format.upper()}), "
+          f"{result.width}x{result.height}")
+    print(f"gruppi:       {result.group_count} layer/gruppi esplosi in "
+          f"{result.frame_count} frame")
+    if result.skipped:
+        print(f"elementi:     {len(result.skipped)} saltati")
+        for reason in result.skipped:
+            print(f"  saltato:    {reason}")
+    print(f"istruzioni:   {result.instruction_count}")
+    print(f"payload:      {out}: {_fmt(len(result.payload))} byte "
+          f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'})")
+    return 0
+
+
 def cmd_chunks(args: argparse.Namespace) -> int:
     _, payload = _load_program(args.input)
     os.makedirs(args.output, exist_ok=True)
@@ -377,6 +458,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-dim", type=int, default=400)
     p.add_argument("--max-frames", type=int, default=120)
     p.set_defaults(func=cmd_encode_video)
+
+    p = sub.add_parser("encode-sequence",
+                       help="piu' file (vettoriali omogenei o raster) -> un payload multi-frame")
+    p.add_argument("inputs", nargs="+", help="2+ file .svg/.dxf (stesso formato) o immagini raster")
+    p.add_argument("-o", "--output", default=None)
+    p.add_argument("--max-dim", type=int, default=800,
+                   help="lato massimo del canvas generato (default 800)")
+    p.set_defaults(func=cmd_encode_sequence)
+
+    p = sub.add_parser("explode-vector",
+                       help="CAD/SVG a piu' layer -> esploso automatico multi-frame")
+    p.add_argument("input", help="file .svg o .dxf con piu' di un layer/gruppo")
+    p.add_argument("-o", "--output", default=None)
+    p.add_argument("--steps", type=int, default=6,
+                   help="frame di esplosione dopo quello assemblato (default 6)")
+    p.add_argument("--spacing", type=float, default=0.6,
+                   help="frazione della distanza dal centro aggiunta per step (default 0.6)")
+    p.add_argument("--max-dim", type=int, default=800)
+    p.set_defaults(func=cmd_explode_vector)
 
     p = sub.add_parser("decode", help="payload -> programma DSL canonico")
     p.add_argument("input")

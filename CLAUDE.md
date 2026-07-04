@@ -258,13 +258,93 @@ Verificato end-to-end (`tests/test_vectorio.py` + rendering reale in
 sessione): `examples/flangia_sorgente.svg`/`.dxf` (flangia con fori
 imbullonati + etichetta di testo, lo stesso soggetto di
 `schema_tecnico.bzr` ma come sorgente vettoriale esterna) convertiti con
-**zero elementi saltati**, payload 230 B (SVG) / 255 B (DXF), entrambi in
-un singolo QR con ampio margine. Il risultato SVG è a sua volta
-ri-esportabile come SVG vettoriale reale via `svg.py` (usa solo
+**zero elementi saltati**, payload 230 B (SVG, 9 elementi) / 249 B (DXF,
+6 entità), entrambi in un singolo QR con ampio margine. Il risultato SVG è
+a sua volta ri-esportabile come SVG vettoriale reale via `svg.py` (usa solo
 `CIRCLE`/`LINE`/`TEXT`), chiudendo il cerchio SVG→balzar→SVG senza mai
 passare per un pixel.
 
-### 2.7 App desktop (il prodotto)
+Nota di correzione: `element_count` per DXF conta **entità sorgente**, non
+istruzioni DSL emesse — una `LWPOLYLINE` chiusa a 4 punti è 1 entità ma
+diventa 4 segmenti `LINE` (il rettangolo non ha un op dedicato per un
+poligono arbitrario). Il primo tentativo contava le righe emesse, gonfiando
+il numero (7 invece di 4 sull'esempio di test); corretto contando le
+entità effettivamente processate in un contatore separato in `_parse_dxf`.
+
+### 2.7 Sequenze multi-file ed esploso automatico (CAD)
+
+`balzar/sequence.py` e `balzar/explode.py` — risposta diretta alla
+richiesta di validare l'ingestione su multi-file e su esploso automatico.
+Prerequisito: `vectorio.py` è stato ristrutturato separando il parsing
+(`_parse_svg`/`_parse_dxf` → lista di `_Shape` in coordinate sorgente,
+esposta anche come `parse_vector_file`) dalla trasformazione+emissione
+(`_emit_shapes`), cosa che permette a più file di condividere **una sola**
+trasformazione/palette invece che una a testa (altrimenti ogni file avrebbe
+la propria scala e i pezzi non si allineerebbero tra un frame e l'altro).
+
+**`encode_vector_sequence(paths, max_dim=800)`** — più file **dello stesso
+formato** (solo `.svg` o solo `.dxf`, misto rifiutato esplicitamente) →
+un payload multi-`FRAME`. Il delta tra step è un dedup testuale esatto:
+una riga DSL già emessa in uno step precedente (match esatto) non viene
+riemessa in quello successivo. Questo è **corretto solo per contenuto
+puramente additivo** (pezzi che compaiono, mai che si spostano o
+scompaiono) — esattamente il modello di `examples/sequenza_montaggio.bzr`,
+qui applicato a file CAD reali invece che a un programma scritto a mano.
+Misurato su `examples/sequenza_flangia_cad/` (3 file DXF: carcassa →
++flangia → +4 bulloni): 800×800, 3 frame, 9 istruzioni totali, **169 byte**
+contro 5.760.000 byte di RGB grezzo equivalente (34.083×), zero elementi
+saltati.
+
+**`encode_raster_sequence(paths, max_dim=400)`** — più file immagine
+indipendenti (non un GIF animato) forzati su **una** dimensione condivisa
+(quella del primo file dopo lo scaling; i successivi vengono
+ridimensionati con NEAREST se non coincidono) e passati a
+`video.encode_video`, che fa il vero delta a livello di pixel. In pratica
+"più foto separate" diventano lo stesso oggetto di un video con un frame
+per foto. Misurato su 3 PNG sintetici 100×80 con un blocco rosso che si
+sposta: 12 istruzioni, **166 byte** contro 72.000 byte RGB grezzo (434×),
+lossless.
+
+**`balzar/explode.py`: `explode_vector_file(path, steps=6, spacing=0.6,
+max_dim=800)`** — un solo file CAD/SVG con **più di un layer/gruppo**
+(layer DXF, codice gruppo 8 / `<g id>` SVG — la stessa chiave di
+raggruppamento già presente su ogni `_Shape`) → payload con `steps+1`
+frame: frame 0 assemblato, ogni frame successivo sposta ogni gruppo
+radialmente verso l'esterno, lungo il vettore dal baricentro **del
+disegno intero** al baricentro **del proprio gruppo** (un gruppo che si
+trova già sul baricentro non si sposta: non c'è nulla da esplodere via da
+se stesso). Un file con un solo layer viene **rifiutato con il motivo
+esatto**, non silenziosamente processato come se non ci fosse nulla da
+esplodere.
+
+Punto tecnico non ovvio, diverso dal delta di `sequence.py`: qui **non si
+riusa il dedup testuale**. Il canvas del motore è cumulativo (`FRAME` fa
+uno snapshot, non pulisce mai nulla) — se un gruppo si sposta e la riga
+DSL della sua vecchia posizione venisse saltata perché "già vista", la
+vecchia posizione resterebbe visibile per sempre (un fantasma). La
+correttezza richiede un repaint completo per frame: un `FILL` su una
+`REGION` grande quanto l'intero canvas riporta tutto a sfondo, poi si
+ridisegnano tutte le forme nella posizione corrente. Costa di più per
+frame di un delta puro, **ma è l'unico modello corretto per contenuto che
+si muove**, a differenza del contenuto puramente additivo di
+`sequence.py`. La rotazione (2D o 3D) è esplicitamente fuori scope per
+questo modulo — solo esplosione radiale in linea retta.
+
+Misurato su `examples/flangia_esploso.dxf` (6 layer: carcassa, flangia
+interna, 4 bulloni): 800×800, 7 frame (`--steps 6`), 57 istruzioni,
+**303 byte**, entra in un singolo QR con ampio margine, 44.356× rispetto
+all'RGB grezzo equivalente (13,44 MB). Verificato visivamente (render PNG
+per frame): i bulloni si allontanano radialmente dal centro senza artefatti
+di "fantasma" nelle posizioni precedenti e senza clipping ai bordi del
+canvas anche nell'ultimo frame.
+
+Comandi CLI: `balzar encode-sequence file1 file2 ... -o out.bzp
+[--max-dim N]` (dispatch automatico vettoriale/raster in base
+all'estensione), `balzar explode-vector file.dxf -o out.bzp [--steps N]
+[--spacing N]`. Test: `tests/test_sequence.py` (8 test),
+`tests/test_explode.py` (6 test).
+
+### 2.8 App desktop (il prodotto)
 
 `balzar/gui.py` + `balzar-app.py` — Tkinter (stdlib) + Pillow. Apri
 immagine/GIF/payload → encoding in thread separato (la finestra non si
@@ -282,7 +362,7 @@ Verificato con screenshot reale sotto Xvfb: apertura GIF, encoding video
 delta, anteprima animata, pannello statistiche, bottoni attivi, ciclo
 completo esporta-QR→scansiona-foto→payload bit-identico.
 
-### 2.8 Demo web (solo vetrina, non il prodotto)
+### 2.9 Demo web (solo vetrina, non il prodotto)
 
 `index.html` + `app.js` + `style.css` + due funzioni serverless Vercel
 (`api/encode.py`, `api/render.py`) + `balzar/webapi.py` (logica condivisa
@@ -304,22 +384,24 @@ vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
 `balzar/webapi.py`. **Questi limiti non esistono nell'app desktop**, che
 è il prodotto vero.
 
-### 2.9 CLI
+### 2.10 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
 — vedi `balzar/cli.py` per l'elenco completo con esempi in `README.md`.
 
-### 2.10 Test
+### 2.11 Test
 
-85 test, tutti verdi (`python3 -m unittest discover -s tests`):
+99 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
-`test_video.py`, `test_svg.py`, `test_vectorio.py`. Copertura: round-trip
+`test_video.py`, `test_svg.py`, `test_vectorio.py`, `test_sequence.py`,
+`test_explode.py`. Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
-vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
+vs flipbook, capitoli in ordine sparso/mancanti/corrotti, sequenze
+vettoriali/raster multi-file, esploso automatico per layer.
 
 ## 3. Numeri misurati (non stimati) fin qui
 
@@ -335,7 +417,10 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
 | Confronto onesto vs JPEG/PNG/ZIP/DEFLATE su vista esplosa 5 frame | 424 B | 7,2 MB | 40×–17.000× a seconda della baseline |
 | Screenshot UI sintetico anti-aliased, 455 colori esatti (encoder auto) | 18.751 B (passo 4, vs 7.949 B col vecchio fallback fisso) | 384.000 B | 20,5× (qualità visibilmente migliore: ombra/pattern di sfondo preservati) |
 | `examples/flangia_sorgente.svg` (ingestione vettoriale, 0 elementi saltati) | 230 B | 800×800 | in un solo QR, margine ampio |
-| `examples/flangia_sorgente.dxf` (stesso soggetto, ingestione DXF, 0 saltati) | 255 B | 789×800 | in un solo QR, margine ampio |
+| `examples/flangia_sorgente.dxf` (stesso soggetto, ingestione DXF, 0 saltati) | 249 B | 800×800 | in un solo QR, margine ampio |
+| `examples/sequenza_flangia_cad/` (sequenza vettoriale, 3 file DXF: carcassa→+flangia→+bulloni) | 169 B | 800×800×3 frame = 5,76 MB RGB | 34.083× |
+| 3 PNG sintetici 100×80 indipendenti (sequenza raster, encode_raster_sequence) | 166 B | 72.000 B RGB | 434× |
+| `examples/flangia_esploso.dxf` (esploso automatico, 6 layer, 6 step) | 303 B | 800×800×7 frame = 13,44 MB RGB | 44.356×, un solo QR |
 
 ## 4. Criticità note (non nascoste, da affrontare quando serve)
 
@@ -398,6 +483,12 @@ vs flipbook, capitoli in ordine sparso/mancanti/corrotti.
    (`balzar/vectorio.py`, comando `balzar encode-vector`): vedi §2.6.
 2. ~~Comando `balzar scan` + generazione QR reale~~ — **fatto** (`balzar/qr.py`,
    `balzar chunks --qr`, `balzar scan`, pulsanti GUI): vedi §2.4.
+2b. ~~Ingestione multi-file (sequenze CAD/immagini) ed esploso automatico
+   per layer~~ — **fatto** (`balzar/sequence.py`, `balzar/explode.py`,
+   comandi `balzar encode-sequence`/`balzar explode-vector`): vedi §2.7.
+   La **rotazione** (2D o 3D) resta esplicitamente rimandata — l'esploso
+   automatico oggi è solo traslazione radiale, per scelta discussa in
+   sessione, non per limite tecnico non affrontato.
 3. **Supporto hardware dedicato: lettore QR + schermo.** Idea proposta in
    sessione per l'adozione reale in officina/ONG (applicazioni §6.1 e
    §6.3): un dispositivo fisico che fotografa QR (singoli o griglia,
@@ -655,10 +746,13 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 85 test (3 opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 99 test (3 opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
+python3 -m balzar encode-vector drawing.svg -o f.bzp
 python3 -m balzar encode-video anim.gif -o v.bzp
+python3 -m balzar encode-sequence step1.dxf step2.dxf step3.dxf -o seq.bzp
+python3 -m balzar explode-vector drawing.dxf -o esploso.bzp --steps 6
 python3 -m balzar chunks v.bzp -o qr/ --qr       # immagine QR reale (1 o griglia)
 python3 -m balzar scan qr/v_qr.png -o ricostruito.bzp --render out/
 ```

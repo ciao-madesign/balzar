@@ -31,6 +31,8 @@ sistemi embedded.
 | `examples/schema_tecnico.bzr` | ~490 byte | 800×600 (1,4 MB RGB) | ~2.900× |
 | `examples/etichetta_bom.bzr` (esploso + testo BOM) | 559 byte | 640×520 (998 KB RGB) | ~1.786× |
 | `examples/sequenza_montaggio.bzr` (10 step navigabili + BOM crescente) | 766 byte | 10 frame 760×520 (11,9 MB RGB) | ~15.478× |
+| `examples/sequenza_flangia_cad/` (3 file DXF, ingeriti come sequenza) | 169 byte | 3 frame 800×800 (5,76 MB RGB) | ~34.083× |
+| `examples/flangia_esploso.dxf` (esploso automatico, 6 layer, 6 step) | 303 byte | 7 frame 800×800 (13,44 MB RGB) | ~44.356× |
 
 Tutti i payload entrano in un QR code versione 40 (capacità ~2953 byte). Per
 `etichetta_bom.bzr` vale la pena notare il confronto diretto: il PNG della
@@ -66,6 +68,15 @@ python3 -m balzar encode-image foto.png -o foto.bzp
 # video: GIF animata -> payload delta-based; render con anteprima GIF
 python3 -m balzar encode-video animazione.gif -o video.bzp --max-dim 400
 python3 -m balzar render video.bzp -o out/ --gif
+
+# vettoriale diretto: SVG/DXF -> payload, nessun raster in mezzo
+python3 -m balzar encode-vector disegno.svg -o disegno.bzp
+
+# sequenza multi-file (vettoriali omogenei o immagini raster) -> un payload
+python3 -m balzar encode-sequence step1.dxf step2.dxf step3.dxf -o sequenza.bzp
+
+# esploso automatico: un CAD/SVG a piu' layer -> animazione di esploso
+python3 -m balzar explode-vector disegno.dxf -o esploso.bzp --steps 6
 
 # supporto fisico: payload -> immagine QR (1 codice o griglia auto) e ritorno
 pip install qrcode pyzbar pillow   # pyzbar richiede anche libzbar0 di sistema
@@ -289,6 +300,48 @@ geometricamente esatto", non "pixel-perfect rispetto a un render di
 riferimento" (per cui servirebbe un motore di rendering SVG/DXF esterno,
 fuori scope).
 
+## Sequenze multi-file ed esploso automatico (CAD)
+
+Due strumenti costruiti sopra `vectorio.py`, per due problemi diversi:
+
+**`balzar encode-sequence`** — più file separati (invece di un video/GIF
+già montato) diventano un solo payload multi-frame. Vettoriali: solo
+SVG **oppure** solo DXF, mai misti; il delta tra step è un dedup
+testuale (una riga già disegnata in uno step precedente non costa nulla
+in quello dopo) — corretto per contenuto che si accumula (pezzi che
+compaiono), non per contenuto che si sposta. Raster: ogni file è un
+fotogramma indipendente, forzato su una dimensione condivisa e passato
+al vero delta a pixel di `video.py`.
+
+```bash
+python3 -m balzar encode-sequence \
+    examples/sequenza_flangia_cad/step1_carcassa.dxf \
+    examples/sequenza_flangia_cad/step2_flangia.dxf \
+    examples/sequenza_flangia_cad/step3_bulloni.dxf \
+    -o sequenza.bzp
+# 3 file DXF -> 3 frame, 800x800, 169 byte (contro 5,76 MB RGB equivalente)
+```
+
+**`balzar explode-vector`** — un solo file CAD/SVG con più layer/gruppi
+diventa un esploso automatico: ogni layer si allontana radialmente dal
+baricentro del disegno, un passo alla volta. A differenza di
+`encode-sequence`, qui ogni frame è un repaint completo (`FILL` su tutto
+il canvas + ridisegno), non un delta — necessario perché il motore non
+cancella mai nulla da solo (`FRAME` fa uno snapshot cumulativo) e un
+pezzo che si sposta lascerebbe un "fantasma" nella vecchia posizione se
+si riusasse il dedup. Rotazione 2D/3D non è supportata: solo traslazione
+radiale in linea retta.
+
+```bash
+python3 -m balzar explode-vector examples/flangia_esploso.dxf -o esploso.bzp --steps 6
+# 6 layer (carcassa, flangia interna, 4 bulloni) -> 7 frame, 303 byte,
+# 44.356x rispetto all'RGB grezzo equivalente, entra in un solo QR
+```
+
+Un file con un solo layer (nessun raggruppamento possibile) viene
+rifiutato con il motivo esatto, non silenziosamente accettato come "niente
+da esplodere".
+
 ## Export SVG (vettoriale reale)
 
 `balzar/svg.py` è un secondo target di rendering per lo stesso DSL —
@@ -399,18 +452,21 @@ e il formato è interpretabile come regole discrete.
 
 ## Estensioni previste
 
-- **ingestione diretta di formati vettoriali (SVG/DXF)**: priorità sopra il
-  rilevamento Hough sul raster, perché i dati sono già discreti nel formato
-  sorgente (un cerchio SVG è già centro+raggio) invece di doverli dedurre
-  da pixel — vedi `CLAUDE.md` §5.1 per il ragionamento completo;
-  serve solo un nuovo modulo di ingestione, le primitive (`LINE`/`CIRCLE`)
-  esistono già;
+- ~~ingestione diretta di formati vettoriali (SVG/DXF)~~ — **fatto**
+  (`balzar/vectorio.py`, comando `encode-vector`);
+- ~~comando `balzar scan` + generazione QR reale~~ — **fatto**
+  (`balzar/qr.py`, comandi `chunks --qr`/`scan`);
+- ~~sequenze multi-file ed esploso automatico per layer~~ — **fatto**
+  (`balzar/sequence.py`, `balzar/explode.py`, comandi
+  `encode-sequence`/`explode-vector`); la **rotazione** (2D o 3D)
+  dell'esploso resta rimandata per scelta, non per limite tecnico;
+- supporto hardware dedicato (lettore QR + schermo, prototipo su
+  smartphone Android riadattato) per adozione in officina/ONG — non
+  ancora iniziato, vedi `CLAUDE.md` §5 punto 3;
 - rilevamento di linee/cerchi (Hough) sul raster, per contenuto senza
   sorgente vettoriale disponibile (screenshot, scansioni);
-- comando `balzar scan`: lettura di una griglia fisica di QR in un colpo
-  solo (provato ad-hoc con ZBar in sessione, non ancora integrato — vedi
-  `CLAUDE.md` §5.2);
-- generazione diretta del QR code dal payload;
+- filtri PNG adattivi in `png.py` per output competitivo con encoder PNG
+  di libreria;
 - scene 3D descritte con lo stesso modello (stato + trasformazioni) — il
   candidato più lontano: servirebbe sia un parser CAD reale (es. STEP) sia
   primitive 3D nel DSL, nessuna delle due esiste oggi (dettagli in

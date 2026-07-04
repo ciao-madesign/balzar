@@ -16,6 +16,13 @@ Both parsers are pure stdlib (xml.etree for SVG, a plain group-code
 reader for DXF) — no new dependency, matching the core engine's
 zero-dependency contract.
 
+Parsing is split from transform+emission (`_parse_svg`/`_parse_dxf` ->
+raw `_Shape` list in source-world coordinates, `_emit_shapes` -> DSL
+lines) so a *shared* coordinate transform and palette can span several
+files — that is what makes multi-file sequences (sequence.py) and
+automatic per-layer explosion (explode.py) possible without each file
+drifting to its own scale/canvas size.
+
 This is best-effort, not lossless-verified like encoder.py: there is no
 raster original to diff against. Unsupported constructs (curves beyond
 straight segments, gradients, patterns, arcs, non-translate transforms,
@@ -52,6 +59,75 @@ class VectorIngestError(ValueError):
     pass
 
 
+# ------------------------------------------------------- shared shape model
+
+@dataclass
+class _Shape:
+    kind: str                              # CIRCLE | LINE | RECT | TEXT
+    color: tuple[int, int, int]
+    layer: str                             # grouping key: DXF layer / SVG <g id>
+    filled: bool = True
+    # geometry, meaning depends on kind:
+    #   CIRCLE: (cx, cy, r)         LINE: (x1, y1, x2, y2)
+    #   RECT:   (x, y, w, h)        TEXT: (x, y, size)  (y = baseline, source convention)
+    geom: tuple = ()
+    text: str = ""
+
+    def center(self) -> tuple[float, float]:
+        if self.kind == "CIRCLE":
+            return self.geom[0], self.geom[1]
+        if self.kind == "LINE":
+            return (self.geom[0] + self.geom[2]) / 2, (self.geom[1] + self.geom[3]) / 2
+        if self.kind == "RECT":
+            return self.geom[0] + self.geom[2] / 2, self.geom[1] + self.geom[3] / 2
+        return self.geom[0], self.geom[1]
+
+    def bounds(self) -> tuple[float, float, float, float]:
+        if self.kind == "CIRCLE":
+            cx, cy, r = self.geom
+            return cx - r, cy - r, cx + r, cy + r
+        if self.kind == "LINE":
+            x1, y1, x2, y2 = self.geom
+            return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        if self.kind == "RECT":
+            x, y, w, h = self.geom
+            return x, y, x + w, y + h
+        x, y, size = self.geom
+        return x, y - size, x + size * len(self.text) * 0.7, y
+
+    def translated(self, dx: float, dy: float) -> "_Shape":
+        if self.kind in ("CIRCLE", "RECT"):
+            g = list(self.geom)
+            g[0] += dx
+            g[1] += dy
+            geom = tuple(g)
+        elif self.kind == "LINE":
+            x1, y1, x2, y2 = self.geom
+            geom = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+        else:
+            x, y, size = self.geom
+            geom = (x + dx, y + dy, size)
+        return _Shape(self.kind, self.color, self.layer, self.filled, geom, self.text)
+
+
+class _PaletteBuilder:
+    def __init__(self) -> None:
+        self.index: dict[tuple[int, int, int], int] = {}
+
+    def get(self, rgb: tuple[int, int, int]) -> int:
+        if rgb not in self.index:
+            if len(self.index) >= MAX_COLORS:
+                raise VectorIngestError(
+                    f"più di {MAX_COLORS} colori distinti — non tipico per un "
+                    f"disegno CAD/vettoriale, caso non supportato")
+            self.index[rgb] = len(self.index)
+        return self.index[rgb]
+
+    def palette_lines(self) -> list[str]:
+        return [f"PALETTE i={i} rgb=#{r:02X}{g:02X}{b:02X}"
+                for (r, g, b), i in sorted(self.index.items(), key=lambda kv: kv[1])]
+
+
 # ---------------------------------------------------------------- geometry
 
 def _fit_transform(min_x: float, min_y: float, max_x: float, max_y: float,
@@ -69,25 +145,54 @@ def _fit_transform(min_x: float, min_y: float, max_x: float, max_y: float,
         py = round((max_y - y) * scale) if flip_y else round((y - min_y) * scale)
         return px, py
 
-    return transform, canvas_w, canvas_h
+    return transform, canvas_w, canvas_h, scale
 
 
-class _PaletteBuilder:
-    def __init__(self) -> None:
-        self.index: dict[tuple[int, int, int], int] = {}
+def shapes_bounds(shapes: list[_Shape]) -> tuple[float, float, float, float]:
+    xs0, ys0, xs1, ys1 = zip(*(s.bounds() for s in shapes))
+    return min(xs0), min(ys0), max(xs1), max(ys1)
 
-    def get(self, rgb: tuple[int, int, int]) -> int:
-        if rgb not in self.index:
-            if len(self.index) >= MAX_COLORS:
-                raise VectorIngestError(
-                    f"più di {MAX_COLORS} colori distinti nel file — non tipico "
-                    f"per un disegno CAD/vettoriale, caso non supportato")
-            self.index[rgb] = len(self.index)
-        return self.index[rgb]
 
-    def palette_lines(self) -> list[str]:
-        return [f"PALETTE i={i} rgb=#{r:02X}{g:02X}{b:02X}"
-                for (r, g, b), i in sorted(self.index.items(), key=lambda kv: kv[1])]
+def _emit_shape(shape: _Shape, transform, px_scale: float, palette: _PaletteBuilder) -> str:
+    idx = palette.get(shape.color)
+    if shape.kind == "CIRCLE":
+        cx, cy, r = shape.geom
+        c = transform(cx, cy)
+        r_px = max(1, round(r * px_scale))
+        return f"CIRCLE cx={c[0]} cy={c[1]} r={r_px} color={idx} fill={1 if shape.filled else 0}"
+    if shape.kind == "LINE":
+        x1, y1, x2, y2 = shape.geom
+        p1, p2 = transform(x1, y1), transform(x2, y2)
+        return f"LINE x1={p1[0]} y1={p1[1]} x2={p2[0]} y2={p2[1]} color={idx}"
+    if shape.kind == "RECT":
+        x, y, w, h = shape.geom
+        p1, p2 = transform(x, y), transform(x + w, y + h)
+        rw = max(1, abs(p2[0] - p1[0])); rh = max(1, abs(p2[1] - p1[1]))
+        x0, y0 = min(p1[0], p2[0]), min(p1[1], p2[1])
+        return (f"RECT x={x0} y={y0} w={rw} h={rh} color={idx} "
+               f"fill={1 if shape.filled else 0}")
+    x, y, size = shape.geom
+    p = transform(x, y)
+    scale = max(1, round(size * px_scale / 7))
+    safe = shape.text.replace('"', "'")
+    return f'TEXT x={p[0]} y={p[1]} text="{safe}" color={idx} scale={scale}'
+
+
+def _emit_shapes(shapes: list[_Shape], transform, px_scale: float,
+                 palette: _PaletteBuilder, seen: set[str] | None = None) -> list[str]:
+    """DSL lines for `shapes`. If `seen` is given, lines already produced
+    in a previous call (by exact text match) are skipped and `seen` is
+    updated — this is the delta mechanism sequence.py uses across frames:
+    genuinely new geometry costs bytes, geometry already on screen doesn't."""
+    lines = []
+    for shape in shapes:
+        line = _emit_shape(shape, transform, px_scale, palette)
+        if seen is not None:
+            if line in seen:
+                continue
+            seen.add(line)
+        lines.append(line)
+    return lines
 
 
 def _finish(lines: list[str], palette: _PaletteBuilder, width: int, height: int,
@@ -179,7 +284,8 @@ def _svg_bounds(root) -> tuple[float, float, float, float]:
     return 0.0, 0.0, w, h
 
 
-def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
+def _parse_svg(svg_text: str) -> tuple[list[_Shape], tuple[float, float, float, float], list[str]]:
+    """SVG text -> (raw shapes in SVG-world coordinates, bounds, skipped)."""
     import xml.etree.ElementTree as ET
 
     try:
@@ -187,21 +293,15 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
     except ET.ParseError as exc:
         raise VectorIngestError(f"SVG non valido: {exc}") from None
 
-    min_x, min_y, max_x, max_y = _svg_bounds(root)
-    transform, width, height = _fit_transform(min_x, min_y, max_x, max_y, max_dim, flip_y=False)
-
-    palette = _PaletteBuilder()
-    palette.get((255, 255, 255))  # reserve white as index 0: CANVAS bg=0 relies on this
-    lines: list[str] = []
+    bounds = _svg_bounds(root)
+    shapes: list[_Shape] = []
     skipped: list[str] = []
-    element_count = 0
 
     def tag(elem) -> str:
         t = elem.tag
         return t[len(_SVG_NS):] if t.startswith(_SVG_NS) else t
 
-    def walk(elem, ox: float, oy: float) -> None:
-        nonlocal element_count
+    def walk(elem, ox: float, oy: float, layer: str) -> None:
         name = tag(elem)
         if name in ("svg", "g", "defs", "title", "desc", "metadata"):
             try:
@@ -209,8 +309,9 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
             except VectorIngestError as exc:
                 skipped.append(f"<g>: {exc}")
                 return
+            sub_layer = elem.attrib.get("id", layer) if name == "g" else layer
             for child in elem:
-                walk(child, ox + dx, oy + dy)
+                walk(child, ox + dx, oy + dy, sub_layer)
             return
 
         fill = _svg_paint(elem, "fill", (0, 0, 0))
@@ -226,24 +327,14 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
                 h = float(elem.attrib["height"])
                 if color is None:
                     skipped.append("<rect>: nessun fill/stroke"); return
-                p1 = transform(x, y)
-                p2 = transform(x + w, y + h)
-                idx = palette.get(color)
-                lines.append(f"RECT x={p1[0]} y={p1[1]} w={max(1, p2[0]-p1[0])} "
-                            f"h={max(1, p2[1]-p1[1])} color={idx} fill={0 if outline else 1}")
-                element_count += 1
+                shapes.append(_Shape("RECT", color, layer, not outline, (x, y, w, h)))
             elif name == "circle":
                 cx = float(elem.attrib["cx"]) + ox
                 cy = float(elem.attrib["cy"]) + oy
                 r = float(elem.attrib["r"])
                 if color is None:
                     skipped.append("<circle>: nessun fill/stroke"); return
-                c = transform(cx, cy)
-                r_px = round(r * (width / max(max_x - min_x, 1e-9)))
-                idx = palette.get(color)
-                lines.append(f"CIRCLE cx={c[0]} cy={c[1]} r={max(1, r_px)} "
-                            f"color={idx} fill={0 if outline else 1}")
-                element_count += 1
+                shapes.append(_Shape("CIRCLE", color, layer, not outline, (cx, cy, r)))
             elif name == "ellipse":
                 rx = float(elem.attrib["rx"])
                 ry = float(elem.attrib["ry"])
@@ -254,12 +345,7 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
                 cy = float(elem.attrib["cy"]) + oy
                 if color is None:
                     skipped.append("<ellipse>: nessun fill/stroke"); return
-                c = transform(cx, cy)
-                r_px = round(rx * (width / max(max_x - min_x, 1e-9)))
-                idx = palette.get(color)
-                lines.append(f"CIRCLE cx={c[0]} cy={c[1]} r={max(1, r_px)} "
-                            f"color={idx} fill={0 if outline else 1}")
-                element_count += 1
+                shapes.append(_Shape("CIRCLE", color, layer, not outline, (cx, cy, rx)))
             elif name == "line":
                 x1 = float(elem.attrib.get("x1", 0)) + ox
                 y1 = float(elem.attrib.get("y1", 0)) + oy
@@ -268,10 +354,7 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
                 col = stroke if stroke is not None else fill
                 if col is None:
                     skipped.append("<line>: nessun stroke"); return
-                p1, p2 = transform(x1, y1), transform(x2, y2)
-                idx = palette.get(col)
-                lines.append(f"LINE x1={p1[0]} y1={p1[1]} x2={p2[0]} y2={p2[1]} color={idx}")
-                element_count += 1
+                shapes.append(_Shape("LINE", col, layer, geom=(x1, y1, x2, y2)))
             elif name in ("polyline", "polygon"):
                 pts_raw = elem.attrib.get("points", "").strip()
                 nums = [float(v) for v in re.split(r"[\s,]+", pts_raw) if v]
@@ -281,19 +364,16 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
                 col = stroke if stroke is not None else fill
                 if col is None:
                     skipped.append(f"<{name}>: nessun colore"); return
-                idx = palette.get(col)
                 seq = pts + [pts[0]] if name == "polygon" else pts
                 for a, b in zip(seq, seq[1:]):
-                    pa, pb = transform(*a), transform(*b)
-                    lines.append(f"LINE x1={pa[0]} y1={pa[1]} x2={pb[0]} y2={pb[1]} color={idx}")
-                element_count += 1
+                    shapes.append(_Shape("LINE", col, layer, geom=(*a, *b)))
             elif name == "path":
                 d = elem.attrib.get("d", "")
                 if re.search(r"[CScQqTtAa]", d):
                     skipped.append("<path>: curve (C/S/Q/T/A) non supportate, solo M/L/Z")
                     return
                 tokens = re.findall(r"[MLZmlz]|-?\d+\.?\d*(?:[eE]-?\d+)?", d)
-                pts, cur, i = [], None, 0
+                pts, i = [], 0
                 while i < len(tokens):
                     cmd = tokens[i]
                     if cmd.upper() == "Z":
@@ -312,11 +392,8 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
                 col = stroke if stroke is not None else fill
                 if col is None:
                     skipped.append("<path>: nessun colore"); return
-                idx = palette.get(col)
                 for a, b in zip(pts, pts[1:]):
-                    pa, pb = transform(*a), transform(*b)
-                    lines.append(f"LINE x1={pa[0]} y1={pa[1]} x2={pb[0]} y2={pb[1]} color={idx}")
-                element_count += 1
+                    shapes.append(_Shape("LINE", col, layer, geom=(*a, *b)))
             elif name == "text":
                 x = float(elem.attrib.get("x", 0)) + ox
                 y = float(elem.attrib.get("y", 0)) + oy
@@ -324,22 +401,26 @@ def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
                 if not text:
                     return
                 size = float(re.sub(r"[a-z%]+$", "", elem.attrib.get("font-size", "16")))
-                scale = max(1, round(size / 7))
                 col = fill if fill is not None else (0, 0, 0)
-                # SVG's y is the text baseline; our TEXT op's y is the glyph
-                # box's top — shift up by ~the font size (approx ascent)
-                p = transform(x, y - size)
-                idx = palette.get(col)
-                safe = text.replace('"', "'")
-                lines.append(f'TEXT x={p[0]} y={p[1]} text="{safe}" color={idx} scale={scale}')
-                element_count += 1
+                # SVG's y is the text baseline; shift up by ~font size (approx
+                # ascent) so it lines up with TEXT's top-of-glyph convention
+                shapes.append(_Shape("TEXT", col, layer, geom=(x, y - size, size), text=text))
             else:
                 skipped.append(f"<{name}>: elemento non supportato")
         except (KeyError, ValueError) as exc:
             skipped.append(f"<{name}>: {exc}")
 
-    walk(root, 0.0, 0.0)
-    return _finish(lines, palette, width, height, element_count, skipped, "svg")
+    walk(root, 0.0, 0.0, "_root")
+    return shapes, bounds, skipped
+
+
+def ingest_svg(svg_text: str, max_dim: int = 800) -> VectorIngestResult:
+    shapes, (min_x, min_y, max_x, max_y), skipped = _parse_svg(svg_text)
+    transform, width, height, scale = _fit_transform(min_x, min_y, max_x, max_y, max_dim, flip_y=False)
+    palette = _PaletteBuilder()
+    palette.get((255, 255, 255))
+    lines = _emit_shapes(shapes, transform, scale, palette)
+    return _finish(lines, palette, width, height, len(shapes), skipped, "svg")
 
 
 # --------------------------------------------------------------------- DXF
@@ -374,10 +455,15 @@ def _dxf_pairs(text: str):
             continue
 
 
-def ingest_dxf(dxf_text: str, max_dim: int = 800) -> VectorIngestResult:
+def _parse_dxf(dxf_text: str) -> tuple[list[_Shape], tuple[float, float, float, float], list[str], int]:
+    """DXF text -> (raw shapes in DXF-world coordinates, bounds, skipped).
+
+    Layer (group code 8) becomes the shape's grouping key — the natural
+    "this is one part" unit in real CAD drawings, used both here (color
+    fallback context) and by explode.py (auto-explode grouping).
+    """
     pairs = list(_dxf_pairs(dxf_text))
 
-    # isolate the ENTITIES section
     entities_raw: list[tuple[int, str]] = []
     in_entities = False
     i = 0
@@ -396,7 +482,6 @@ def ingest_dxf(dxf_text: str, max_dim: int = 800) -> VectorIngestResult:
     if not entities_raw:
         raise VectorIngestError("nessuna sezione ENTITIES trovata nel file DXF")
 
-    # split into individual entities on group code 0
     entities: list[list[tuple[int, str]]] = []
     for code, val in entities_raw:
         if code == 0:
@@ -413,59 +498,63 @@ def ingest_dxf(dxf_text: str, max_dim: int = 800) -> VectorIngestResult:
     def get_all(entity, code, cast=float):
         return [cast(v) for c, v in entity if c == code]
 
-    lines: list[str] = []
+    shapes: list[_Shape] = []
     skipped: list[str] = []
-    element_count = 0
-    palette = _PaletteBuilder()
-    palette.get((255, 255, 255))  # reserve white as index 0: CANVAS bg=0 relies on this
-    raw_shapes: list[tuple] = []  # (kind, ...coords) in DXF world units, resolved after bounds known
-    colors: list[int | None] = []
-
     xs: list[float] = []
     ys: list[float] = []
+    entity_count = 0  # entities converted, not shapes emitted (one LWPOLYLINE -> N line segments)
 
     for entity in entities:
         kind = entity[0][1]
         color_code = get(entity, 62, int, None)
+        layer = get(entity, 8, str, "0")
+        color = _aci_to_rgb(color_code)
+        if color_code is not None and color_code not in _ACI_COLORS and color_code not in (0, 256):
+            skipped.append(f"colore ACI {color_code} non nella tabella nota, reso in grigio neutro")
+
         if kind == "LINE":
             x1, y1 = get(entity, 10), get(entity, 20)
             x2, y2 = get(entity, 11), get(entity, 21)
             if None in (x1, y1, x2, y2):
                 skipped.append("LINE: coordinate mancanti"); continue
-            raw_shapes.append(("LINE", x1, y1, x2, y2))
-            colors.append(color_code)
+            shapes.append(_Shape("LINE", color, layer, geom=(x1, y1, x2, y2)))
             xs += [x1, x2]; ys += [y1, y2]
+            entity_count += 1
         elif kind == "CIRCLE":
             cx, cy, r = get(entity, 10), get(entity, 20), get(entity, 40)
             if None in (cx, cy, r):
                 skipped.append("CIRCLE: coordinate/raggio mancanti"); continue
-            raw_shapes.append(("CIRCLE", cx, cy, r))
-            colors.append(color_code)
+            shapes.append(_Shape("CIRCLE", color, layer, False, (cx, cy, r)))
             xs += [cx - r, cx + r]; ys += [cy - r, cy + r]
+            entity_count += 1
         elif kind == "LWPOLYLINE":
             pxs, pys = get_all(entity, 10), get_all(entity, 20)
             pts = list(zip(pxs, pys))
             closed = bool(get(entity, 70, int, 0) & 1)
             if len(pts) < 2:
                 skipped.append("LWPOLYLINE: punti insufficienti"); continue
-            raw_shapes.append(("POLY", pts, closed))
-            colors.append(color_code)
+            seq = pts + [pts[0]] if closed else pts
+            for a, b in zip(seq, seq[1:]):
+                shapes.append(_Shape("LINE", color, layer, geom=(*a, *b)))
             xs += pxs; ys += pys
+            entity_count += 1
         elif kind in ("TEXT", "MTEXT"):
             x, y = get(entity, 10), get(entity, 20)
             h = get(entity, 40, float, 2.5)
             txt = get(entity, 1, str, "")
             if None in (x, y) or not txt:
                 skipped.append(f"{kind}: dati mancanti"); continue
-            raw_shapes.append(("TEXT", x, y, h, txt))
-            colors.append(color_code)
-            xs.append(x); ys.append(y)
+            # DXF's insertion point is the baseline and Y grows upward, so
+            # the glyph top is at y+h in world space
+            shapes.append(_Shape("TEXT", color, layer, geom=(x, y + h, h), text=txt))
+            xs.append(x); ys.append(y + h)
+            entity_count += 1
         elif kind in ("SECTION", "ENDSEC", "EOF"):
             continue
         else:
             skipped.append(f"{kind}: entità non supportata")
 
-    if not raw_shapes:
+    if not shapes:
         raise VectorIngestError("nessuna entità convertibile trovata (LINE/CIRCLE/"
                                "LWPOLYLINE/TEXT) nel file DXF")
 
@@ -475,44 +564,33 @@ def ingest_dxf(dxf_text: str, max_dim: int = 800) -> VectorIngestResult:
         max_x += 1
     if max_y - min_y < 1e-9:
         max_y += 1
-    transform, width, height = _fit_transform(min_x, min_y, max_x, max_y, max_dim, flip_y=True)
-    px_scale = width / max(max_x - min_x, 1e-9)
+    return shapes, (min_x, min_y, max_x, max_y), skipped, entity_count
 
-    for shape, color_code in zip(raw_shapes, colors):
-        idx = palette.get(_aci_to_rgb(color_code))
-        if color_code is not None and color_code not in _ACI_COLORS and color_code not in (0, 256):
-            skipped.append(f"colore ACI {color_code} non nella tabella nota, reso in grigio neutro")
-        kind = shape[0]
-        if kind == "LINE":
-            _, x1, y1, x2, y2 = shape
-            p1, p2 = transform(x1, y1), transform(x2, y2)
-            lines.append(f"LINE x1={p1[0]} y1={p1[1]} x2={p2[0]} y2={p2[1]} color={idx}")
-            element_count += 1
-        elif kind == "CIRCLE":
-            _, cx, cy, r = shape
-            c = transform(cx, cy)
-            lines.append(f"CIRCLE cx={c[0]} cy={c[1]} r={max(1, round(r * px_scale))} "
-                        f"color={idx} fill=0")
-            element_count += 1
-        elif kind == "POLY":
-            _, pts, closed = shape
-            seq = pts + [pts[0]] if closed else pts
-            for a, b in zip(seq, seq[1:]):
-                pa, pb = transform(*a), transform(*b)
-                lines.append(f"LINE x1={pa[0]} y1={pa[1]} x2={pb[0]} y2={pb[1]} color={idx}")
-            element_count += 1
-        elif kind == "TEXT":
-            _, x, y, h, txt = shape
-            # DXF's insertion point is the baseline and Y grows upward, so
-            # the glyph top is at y+h in world space (opposite sign to the
-            # SVG case, because flip_y already reverses the Y convention)
-            p = transform(x, y + h)
-            scale = max(1, round(h * px_scale / 7))
-            safe = txt.replace('"', "'")
-            lines.append(f'TEXT x={p[0]} y={p[1]} text="{safe}" color={idx} scale={scale}')
-            element_count += 1
 
-    return _finish(lines, palette, width, height, element_count, skipped, "dxf")
+def ingest_dxf(dxf_text: str, max_dim: int = 800) -> VectorIngestResult:
+    shapes, (min_x, min_y, max_x, max_y), skipped, entity_count = _parse_dxf(dxf_text)
+    transform, width, height, scale = _fit_transform(min_x, min_y, max_x, max_y, max_dim, flip_y=True)
+    # DXF TEXT's y-flip needs the same +h adjustment applied consistently;
+    # already baked into geom during parsing (see _parse_dxf)
+    palette = _PaletteBuilder()
+    palette.get((255, 255, 255))
+    lines = _emit_shapes(shapes, transform, scale, palette)
+    return _finish(lines, palette, width, height, entity_count, skipped, "dxf")
+
+
+def parse_vector_file(path: str) -> tuple[list[_Shape], tuple[float, float, float, float], list[str], str]:
+    """Dispatch by extension, parsing only (no transform/emission yet) —
+    the building block sequence.py/explode.py share."""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    lower = path.lower()
+    if lower.endswith(".svg"):
+        shapes, bounds, skipped = _parse_svg(text)
+        return shapes, bounds, skipped, "svg"
+    if lower.endswith(".dxf"):
+        shapes, bounds, skipped, _entity_count = _parse_dxf(text)
+        return shapes, bounds, skipped, "dxf"
+    raise VectorIngestError(f"estensione non riconosciuta: '{path}' (attesi .svg/.dxf)")
 
 
 def ingest_vector_file(path: str, max_dim: int = 800) -> VectorIngestResult:
