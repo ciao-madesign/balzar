@@ -234,6 +234,46 @@ class TestHandleEncodeSequence(unittest.TestCase):
         self.assertEqual(status, 400)
 
 
+class TestHandleEncodeIndependent(unittest.TestCase):
+    """mode='independent' dispatch inside handle_encode_sequence: no
+    format restriction, fault isolation per file, single file allowed."""
+
+    def test_mixed_formats_all_succeed(self):
+        files = [{"filename": "a.svg", "data": _b64(SVG_FLANGE.encode())},
+                {"filename": "b.dxf", "data": _b64(DXF_FLANGE.encode())}]
+        status, resp = handle_encode_sequence(
+            {"files": files, "mode": "independent"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["file_count"], 2)
+        self.assertEqual(resp["success_count"], 2)
+        self.assertEqual(resp["items"][0]["filename"], "a.svg")
+        self.assertEqual(resp["items"][1]["filename"], "b.dxf")
+        self.assertTrue(all(it["ok"] for it in resp["items"]))
+
+    def test_broken_file_reported_not_500(self):
+        files = [{"filename": "good.dxf", "data": _b64(DXF_FLANGE.encode())},
+                {"filename": "bad.svg", "data": _b64(b"<svg><circle cx=oops></svg>")}]
+        status, resp = handle_encode_sequence(
+            {"files": files, "mode": "independent"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["success_count"], 1)
+        self.assertTrue(resp["items"][0]["ok"])
+        self.assertFalse(resp["items"][1]["ok"])
+        self.assertIn("error", resp["items"][1])
+
+    def test_single_file_allowed(self):
+        files = [{"filename": "a.dxf", "data": _b64(DXF_FLANGE.encode())}]
+        status, resp = handle_encode_sequence(
+            {"files": files, "mode": "independent"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["file_count"], 1)
+
+    def test_empty_files_rejected(self):
+        status, resp = handle_encode_sequence(
+            {"files": [], "mode": "independent"}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+
+
 class TestHandleQr(unittest.TestCase):
     def test_small_payload_is_a_single_qr(self):
         status, resp = handle_qr({"payload_base64": _b64(b"hello world")}, LOCAL_LIMITS)

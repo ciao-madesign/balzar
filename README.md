@@ -302,15 +302,19 @@ neutro, dichiarato). A differenza dell'encoder raster non c'è un
 originale rasterizzato da cui verificare un lossless bit-a-bit: la
 garanzia qui è "ogni elemento convertito è geometricamente esatto" (per
 le SPLINE, "approssimato con una tolleranza fissa dichiarata" —
-`SPLINE_SAMPLES = 32`), non "pixel-perfect rispetto a un render di
+`SPLINE_SAMPLES = 64`), non "pixel-perfect rispetto a un render di
 riferimento" (per cui servirebbe un motore di rendering SVG/DXF esterno,
-fuori scope).
+fuori scope). **Per contenuto ricco di curve, l'export SVG è la resa
+fedele consigliata**: il nostro `png.py` non fa anti-aliasing (linee
+Bresenham pure), quindi anche una curva ben campionata resta a scalini
+nel PNG — lo stesso output esportato come SVG e aperto in un browser è
+visibilmente più pulito, gratis, grazie all'anti-aliasing nativo.
 
 Testato su un logo CAD reale multi-spline (118 entità `SPLINE`, file di
 terzi non incluso nel repository per copyright): 0 entità saltate,
-payload 20.391 B contro 330.991 B del DXF grezzo — **il punto che conta
+payload 32.172 B contro 330.991 B del DXF grezzo — **il punto che conta
 è che né l'uno né l'altro entrano in un solo QR**, ma il payload ne
-richiede 10 contro i 151 del sorgente grezzo. Esempio incluso (soggetto
+richiede 15 contro i 151 del sorgente grezzo. Esempio incluso (soggetto
 generico): `examples/curva_spline.dxf`.
 
 ## Sequenze multi-file ed esploso automatico (CAD)
@@ -333,6 +337,19 @@ python3 -m balzar encode-sequence \
     examples/sequenza_flangia_cad/step3_bulloni.dxf \
     -o sequenza.bzp
 # 3 file DXF -> 3 frame, 800x800, 169 byte (contro 5,76 MB RGB equivalente)
+```
+
+**`--mode independent`** — stesso comando, ma per quando i file **non**
+sono una sequenza: un mucchio di file scorrelati che vuoi solo codificare
+in un colpo solo. Ogni file diventa un payload a sé (nessuna trasformazione
+condivisa, nessun vincolo di formato — un batch può mescolare `.svg` +
+`.dxf` + immagini raster), scritto come `<nome>.bzp` accanto al sorgente
+(o nella directory passata a `-o`). Un file rotto non blocca gli altri:
+viene segnalato come voce singola in errore, il resto del batch prosegue.
+
+```bash
+python3 -m balzar encode-sequence logo.svg schema.dxf foto.png --mode independent -o out/
+# 3 file, formati diversi -> 3 payload separati in out/, ciascuno indipendente
 ```
 
 **`balzar explode-vector`** — un solo file CAD/SVG con più layer/gruppi
@@ -404,11 +421,15 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
 - **"Video (GIF animata)"** (`api/encode_video.py`): a differenza di
   "Comprimi immagine", guarda **tutti** i frame e usa il vero delta di
   `video.py` invece di codificare solo il primo.
-- **"Sequenza (multi-file)"** (`api/encode_sequence.py`): carica 2+ file
-  dello stesso tipo (solo `.svg`, solo `.dxf`, oppure immagini raster),
-  mettili nell'ordine giusto con le frecce ▲/▼, ottieni un payload
-  multi-frame navigabile avanti/indietro nel risultato — stesso dispatch
-  vettoriale/raster automatico della CLI (`balzar encode-sequence`).
+- **"Sequenza (multi-file)"** (`api/encode_sequence.py`): due modalità con
+  un toggle. **"Sequenza navigabile"**: carica 2+ file dello stesso tipo
+  (solo `.svg`, solo `.dxf`, oppure immagini raster), mettili nell'ordine
+  giusto con le frecce ▲/▼, ottieni un payload multi-frame navigabile
+  avanti/indietro — stesso dispatch automatico della CLI
+  (`balzar encode-sequence`). **"File indipendenti"**: stessi file, ma
+  trattati come un mucchio scorrelato — ogni file diventa una card a sé
+  (anteprima, statistiche, download, QR propri), nessun vincolo di
+  formato, un file rotto non blocca gli altri.
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il

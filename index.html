@@ -195,15 +195,21 @@
 
     <div id="panel-sequence" hidden>
       <p class="purpose">Codifica · più file, un solo payload navigabile</p>
-      <p class="tagline">Carica 2 o più file <strong>dello stesso tipo</strong>: solo
-        <code>.svg</code>, solo <code>.dxf</code>, oppure immagini raster (PNG/JPEG/...).
-        Ogni file diventa un frame — usa le frecce per mettere i file nell'ordine giusto
-        (es. gli step di un montaggio) prima di codificare. Il risultato è navigabile
-        avanti/indietro qui sotto.</p>
+      <p class="tagline">Carica 2 o più file. In modalità <strong>"sequenza navigabile"</strong>
+        devono essere <strong>dello stesso tipo</strong> (solo <code>.svg</code>, solo
+        <code>.dxf</code>, oppure immagini raster) e diventano un solo payload con un frame per
+        file, navigabile avanti/indietro. In modalità <strong>"file indipendenti"</strong> ogni
+        file è codificato per conto suo — nessun vincolo di formato, un file rotto non blocca
+        gli altri, ottieni un payload separato per ciascuno.</p>
+
+      <fieldset class="mode-picker">
+        <label><input type="radio" name="sequence-mode" value="sequence" checked> Sequenza navigabile</label>
+        <label><input type="radio" name="sequence-mode" value="independent"> File indipendenti</label>
+      </fieldset>
 
       <section id="sequence-drop" class="dropzone">
         <input type="file" id="sequence-file-input" accept=".svg,.dxf,image/*" multiple hidden>
-        <p>Trascina 2+ file qui, oppure
+        <p>Trascina i file qui, oppure
           <button id="sequence-browse-btn" type="button">scegli i file</button></p>
         <label class="dim-picker">
           lato massimo canvas
@@ -250,6 +256,11 @@
           <summary>programma generato (DSL)</summary>
           <pre id="sequence-program-text"></pre>
         </details>
+      </section>
+
+      <section id="independent-result" class="result" hidden>
+        <p id="independent-summary" class="honesty"></p>
+        <div id="independent-items"></div>
       </section>
     </div>
 

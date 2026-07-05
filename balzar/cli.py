@@ -5,6 +5,7 @@
     python -m balzar encode-image  photo.png      -o payload.bzp [--max-dim N]
     python -m balzar encode-vector drawing.svg    -o payload.bzp [--max-dim N]
     python -m balzar encode-sequence step1.dxf step2.dxf ... -o payload.bzp
+    python -m balzar encode-sequence a.svg b.dxf c.png --mode independent -o outdir/
     python -m balzar explode-vector drawing.dxf   -o payload.bzp [--steps N]
     python -m balzar decode        payload.bzp    -o program.bzr
     python -m balzar info          payload.bzp
@@ -16,7 +17,9 @@ raster encoder (balzar/encoder.py) on an arbitrary image file (requires
 Pillow). `encode-vector` ingests an SVG/DXF file directly (balzar/vectorio.py,
 stdlib only) — no rasterization, no quantization, exact geometry.
 `encode-sequence` combines several files (homogeneous SVG/DXF, or raster
-images) into one multi-frame payload (balzar/sequence.py). `explode-vector`
+images) into one multi-frame payload (balzar/sequence.py), or with
+`--mode independent` encodes each file on its own (no format restriction,
+one broken file doesn't sink the batch). `explode-vector`
 auto-generates an exploded-view animation from a single multi-layer CAD/SVG
 file, grouping by layer/`<g>` (balzar/explode.py).
 """
@@ -218,6 +221,9 @@ def cmd_encode_video(args: argparse.Namespace) -> int:
 def cmd_encode_sequence(args: argparse.Namespace) -> int:
     from .sequence import SequenceError
 
+    if args.mode == "independent":
+        return _cmd_encode_independent(args)
+
     exts = {os.path.splitext(p)[1].lower() for p in args.inputs}
     is_vector = exts <= {".svg", ".dxf"}
 
@@ -259,6 +265,41 @@ def cmd_encode_sequence(args: argparse.Namespace) -> int:
         else:
             print(f"guadagno:     NESSUNO - payload piu' grande del raw RGB "
                   f"({_fmt(raw)} byte)")
+    return 0
+
+
+def _cmd_encode_independent(args: argparse.Namespace) -> int:
+    """--mode independent: every file gets its own payload, written next
+    to the source (or into -o if given as a directory) — no shared
+    canvas, no delta, files don't need to share a format."""
+    from .sequence import SequenceError, encode_independent
+
+    try:
+        results = encode_independent(args.inputs, max_dim=args.max_dim)
+    except SequenceError as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    out_dir = None
+    if args.output:
+        out_dir = args.output
+        os.makedirs(out_dir, exist_ok=True)
+
+    n_ok = sum(1 for r in results if r.ok)
+    print(f"batch indipendente: {len(results)} file, {n_ok} codificati, "
+          f"{len(results) - n_ok} falliti")
+    for path, result in zip(args.inputs, results):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if not result.ok:
+            print(f"  {result.filename}: ERRORE - {result.error}")
+            continue
+        target_dir = out_dir or os.path.dirname(path) or "."
+        out_path = os.path.join(target_dir, f"{stem}.bzp")
+        with open(out_path, "wb") as fh:
+            fh.write(result.payload)
+        print(f"  {result.filename} ({result.source_format}): "
+              f"{result.instruction_count} istruzioni, {_fmt(len(result.payload))} byte "
+              f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'}) -> {out_path}")
     return 0
 
 
@@ -460,11 +501,17 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_encode_video)
 
     p = sub.add_parser("encode-sequence",
-                       help="piu' file (vettoriali omogenei o raster) -> un payload multi-frame")
+                       help="piu' file -> un payload multi-frame, o file indipendenti "
+                            "(--mode independent)")
     p.add_argument("inputs", nargs="+", help="2+ file .svg/.dxf (stesso formato) o immagini raster")
-    p.add_argument("-o", "--output", default=None)
+    p.add_argument("-o", "--output", default=None,
+                   help="file di output (modo sequence) o directory (modo independent)")
     p.add_argument("--max-dim", type=int, default=800,
                    help="lato massimo del canvas generato (default 800)")
+    p.add_argument("--mode", choices=["sequence", "independent"], default="sequence",
+                   help="'sequence' (default): un payload multi-frame navigabile, i file "
+                        "devono condividere il formato. 'independent': un payload per "
+                        "file, nessun vincolo di formato, un file rotto non blocca gli altri")
     p.set_defaults(func=cmd_encode_sequence)
 
     p = sub.add_parser("explode-vector",

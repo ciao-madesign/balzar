@@ -264,13 +264,27 @@ Harley-Davidson): 382.000 B di DXF, **118 entità, tutte SPLINE** su un
 solo layer — prima di questo lavoro sarebbe stato un fallimento totale
 (0 entità convertibili). Con SPLINE supportata: 118/118 convertite, 0
 saltate (a parte gli avvisi di colore ACI non in tabella), payload
-20.391 B. Punto di misura onesto e utile: **né il sorgente né il payload
-entrano in un solo QR** (sorgente 330.991 B → 151 QR necessari; payload
-20.391 B → 10 QR) — ma il rapporto 16,2× in meno byte (27,4× contro
-l'RGB equivalente) è la differenza reale tra stampare/laminare 151 QR o
-10. Nuovo esempio incluso nel repository (soggetto generico, non
-coperto da copyright): `examples/curva_spline.dxf` (2 onde SPLINE + testo,
-0 saltati, payload 765 B, singolo QR).
+32.172 B (a `SPLINE_SAMPLES=64`, vedi sotto). Punto di misura onesto e
+utile: **né il sorgente né il payload entrano in un solo QR** (sorgente
+330.991 B → 151 QR necessari; payload 32.172 B → 15 QR) — ma il rapporto
+10,3× in meno byte (17,4× contro l'RGB equivalente) è la differenza reale
+tra stampare/laminare 151 QR o 15. Nuovo esempio incluso nel repository
+(soggetto generico, non coperto da copyright): `examples/curva_spline.dxf`
+(2 onde SPLINE + testo, 0 saltati, payload 1.380 B, singolo QR).
+
+**Fedeltà visiva, verificata sullo stesso file**: 32 campioni per SPLINE
+lasciava sfaccettature visibili sui dettagli fini (bordi delle piume);
+alzato a **64** dopo aver isolato che pesa quanto la mancanza di
+anti-aliasing nel nostro `png.py` (Bresenham puro, nessuna sfumatura sui
+bordi). Prova diretta: lo stesso output a 64 campioni, esportato come SVG
+(`svg.py`) e renderizzato da un browser (anti-aliasing nativo, gratis),
+è visivamente più pulito del PNG a 256 campioni — quasi tutta l'asprezza
+percepita viene dal renderer raster proprio, non dalla densità di
+campionamento. Conclusione onesta: **per contenuto ricco di curve, l'export
+SVG è la resa fedele consigliata, il PNG resta esatto ma esteticamente più
+grezzo** — nessun cambiamento al renderer PNG (richiederebbe ripensare il
+modello a palette indicizzata per ammettere colori sfumati sui bordi, un
+lavoro architetturale a parte, non fatto in questa sessione).
 
 Bug reale trovato **grazie a questo test**, corretto nella stessa
 sessione: quando *tutte* le entità di un file sono di un tipo non
@@ -346,6 +360,26 @@ ridimensionati con NEAREST se non coincidono) e passati a
 per foto. Misurato su 3 PNG sintetici 100×80 con un blocco rosso che si
 sposta: 12 istruzioni, **166 byte** contro 72.000 byte RGB grezzo (434×),
 lossless.
+
+**`encode_independent(paths, max_dim=800)`** — terza modalità, aggiunta
+in risposta diretta alla richiesta di poter trattare più file come un
+**mucchio non organizzato** invece che come una sequenza/video: ogni file
+è codificato **per conto suo** (dispatch per estensione, stessa logica di
+`encode-vector`/`encode-image` chiamati uno alla volta), nessuna
+trasformazione condivisa, nessun vincolo di formato — un batch può
+mescolare liberamente `.svg`/`.dxf`/raster, cosa che le altre due funzioni
+rifiutano esplicitamente. Restituisce una lista di `IndependentFileResult`
+(uno per file, con `ok`/`error` propri) invece di un singolo payload
+multi-frame. Differenza di comportamento deliberata rispetto alle altre
+due: un file rotto **non fa fallire il batch intero** — viene registrato
+come voce singola con `ok=False`, gli altri file proseguono. Questo è
+esattamente il punto della modalità "indipendente": è un mucchio di file
+scorrelati, non un tutto navigabile che deve restare coerente. Esposta
+come `balzar encode-sequence ... --mode independent` in CLI (scrive un
+`.bzp` per file, accanto al sorgente o nella directory data con `-o`) e
+come toggle "Sequenza navigabile" / "File indipendenti" nel tab
+"Sequenza" della demo web (`handle_encode_independent` in `webapi.py`,
+`mode: "independent"` nel corpo della richiesta).
 
 **`balzar/explode.py`: `explode_vector_file(path, steps=6, spacing=0.6,
 max_dim=800)`** — un solo file CAD/SVG con **più di un layer/gruppo**
@@ -430,13 +464,21 @@ scopo (nessuna spiegazione implicita lasciata all'utente):
    di `video.py`; una GIF con un solo frame viene rifiutata con un
    messaggio che rimanda al tab 1.
 4. **"Sequenza (multi-file)"** (`api/encode_sequence.py` +
-   `handle_encode_sequence`) — 2+ file in ordine scelto dall'utente
-   (interfaccia con frecce ▲/▼ per riordinare prima di codificare, niente
+   `handle_encode_sequence`) — due modalità scelte con un toggle
+   (`input[name=sequence-mode]`): **"Sequenza navigabile"** (default), 2+
+   file in ordine scelto dall'utente (frecce ▲/▼ per riordinare, niente
    drag-and-drop per affidabilità) diventano un payload multi-frame,
-   navigabile avanti/indietro nel risultato con gli stessi controlli
-   `◀ Indietro`/`Avanti ▶` della GUI desktop. Dispatch automatico
-   vettoriale (solo `.svg` o solo `.dxf`, mai misti) vs raster, stessa
-   regola della CLI (`balzar encode-sequence`).
+   navigabile avanti/indietro con gli stessi controlli `◀ Indietro`/
+   `Avanti ▶` della GUI desktop (dispatch automatico vettoriale — solo
+   `.svg` o solo `.dxf`, mai misti — vs raster, stessa regola della CLI);
+   **"File indipendenti"** (`mode: "independent"`,
+   `handle_encode_independent`), aggiunta su richiesta esplicita per
+   trattare più file come un mucchio non organizzato invece che come una
+   sequenza — ogni file diventa una card separata con la propria
+   anteprima/statistiche/download/QR, nessun vincolo di formato (un batch
+   può mescolare `.svg`+`.dxf`+raster), un file rotto non blocca gli
+   altri (mostrato come card d'errore isolata, non un 400 per l'intera
+   richiesta).
 5. **"Apri programma (.bzr/.bzp)"** (`api/render.py` + `handle_render`) —
    chiude il caso d'uso "ho scaricato un `.bzr` da qui e non ho un
    terminale": carica il file, viene decodificato e rigenerato, scarichi
@@ -512,7 +554,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-125 test, tutti verdi (`python3 -m unittest discover -s tests`):
+134 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -528,7 +570,9 @@ solo fit-point scartate senza crash), i quattro flussi della demo web
 (successo, errori onesti invece di crash,
 troncamento in base ai limiti) più il generatore QR (incluso un
 round-trip reale via ZBar in `test_webapi.py`, skippato se `pyzbar` non
-è installato).
+è installato), e la modalità "file indipendenti" (formati misti,
+isolamento del fallimento per singolo file, sia in `sequence.py` che nel
+suo dispatch in `webapi.py`).
 
 ## 3. Numeri misurati (non stimati) fin qui
 
@@ -548,8 +592,8 @@ round-trip reale via ZBar in `test_webapi.py`, skippato se `pyzbar` non
 | `examples/sequenza_flangia_cad/` (sequenza vettoriale, 3 file DXF: carcassa→+flangia→+bulloni) | 169 B | 800×800×3 frame = 5,76 MB RGB | 34.083× |
 | 3 PNG sintetici 100×80 indipendenti (sequenza raster, encode_raster_sequence) | 166 B | 72.000 B RGB | 434× |
 | `examples/flangia_esploso.dxf` (esploso automatico, 6 layer, 6 step) | 303 B | 800×800×7 frame = 13,44 MB RGB | 44.356×, un solo QR |
-| `examples/curva_spline.dxf` (curve SPLINE reali, 2 onde + testo, 0 saltati) | 765 B | 753×800 | in un solo QR, margine ampio |
-| Logo reale multi-spline (118 entità SPLINE, file di terzi non incluso per copyright) | 20.391 B | 800×233 | 16,2× vs DXF grezzo (330.991 B), 27,4× vs RGB — **né sorgente né payload entrano in un solo QR** (151 QR vs 10 QR necessari: il numero che conta davvero qui) |
+| `examples/curva_spline.dxf` (curve SPLINE reali, 2 onde + testo, 0 saltati) | 1.380 B | 753×800 | in un solo QR, margine ampio |
+| Logo reale multi-spline (118 entità SPLINE, file di terzi non incluso per copyright) | 32.172 B | 800×233 | 10,3× vs DXF grezzo (330.991 B), 17,4× vs RGB — **né sorgente né payload entrano in un solo QR** (151 QR vs 15 QR necessari: il numero che conta davvero qui) |
 
 ## 4. Criticità note (non nascoste, da affrontare quando serve)
 

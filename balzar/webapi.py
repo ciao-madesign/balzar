@@ -323,14 +323,24 @@ def handle_encode_sequence(body: dict, limits: Limits) -> tuple[int, dict]:
     the user reorder them before submitting) -> one multi-frame payload.
     Vector files (.svg/.dxf, homogeneous) go through sequence.py's
     text-dedup delta; raster images go through video.py's pixel delta —
-    same dispatch rule as `balzar encode-sequence` in the CLI."""
+    same dispatch rule as `balzar encode-sequence` in the CLI. If
+    body["mode"] == "independent", dispatches to handle_encode_independent
+    instead: one payload per file, no shared canvas, no format
+    restriction — see that function's docstring."""
     files = body.get("files")
-    if not isinstance(files, list) or len(files) < 2:
+    if not isinstance(files, list):
+        return 400, {"ok": False, "error": "campo 'files' mancante"}
+
+    max_dim = max(16, min(int(body.get("max_dim", 800)), limits.max_analysis_dim))
+
+    if body.get("mode") == "independent":
+        return handle_encode_independent(files, max_dim, limits)
+
+    if len(files) < 2:
         return 400, {"ok": False, "error": "servono almeno 2 file, in ordine"}
 
     names = [f.get("filename", "") for f in files]
     exts = {n.lower().rsplit(".", 1)[-1] if "." in n else "" for n in names}
-    max_dim = max(16, min(int(body.get("max_dim", 800)), limits.max_analysis_dim))
 
     import os
     import tempfile
@@ -393,6 +403,69 @@ def handle_encode_sequence(body: dict, limits: Limits) -> tuple[int, dict]:
         for i in range(len(rendered.frames))
     ]
     return 200, response
+
+
+def handle_encode_independent(files: list, max_dim: int, limits: Limits) -> tuple[int, dict]:
+    """Batch mode: each uploaded file becomes its own payload — no shared
+    canvas, no delta, no format restriction (a batch can freely mix
+    .svg/.dxf/raster). A broken file is reported as its own failed entry,
+    not a 400 for the whole request: that fault isolation is the point of
+    this mode versus the sequence/video paths above."""
+    if not files:
+        return 400, {"ok": False, "error": "campo 'files' vuoto"}
+
+    import os
+    import tempfile
+
+    from .sequence import encode_independent
+
+    with tempfile.TemporaryDirectory() as td:
+        paths = []
+        original_names = []
+        for i, f in enumerate(files):
+            name = f.get("filename") or f"file{i}"
+            data = f.get("data")
+            if not data:
+                return 400, {"ok": False, "error": f"file #{i + 1} ('{name}') senza contenuto"}
+            path = os.path.join(td, f"{i:03d}_{os.path.basename(name)}")
+            with open(path, "wb") as fh:
+                fh.write(base64.b64decode(data))
+            paths.append(path)
+            original_names.append(name)
+
+        results = encode_independent(paths, max_dim=max_dim)
+
+        items = []
+        for name, result in zip(original_names, results):
+            if not result.ok:
+                items.append({"ok": False, "filename": name, "error": result.error})
+                continue
+
+            from .interpreter import render as render_program
+            rendered = render_program(result.program_text)
+            preview_png = _png_frame(rendered, 0, limits.max_preview_dim)
+            program_text, program_truncated = _truncate_program(result.program_text, limits)
+
+            item = {
+                "ok": True,
+                "filename": name,
+                "source_format": result.source_format,
+                "width": result.width,
+                "height": result.height,
+                "instruction_count": result.instruction_count,
+                "skipped": result.skipped,
+                "program_text": program_text,
+                "program_truncated": program_truncated,
+                "preview_png_base64": base64.b64encode(preview_png).decode("ascii"),
+            }
+            if result.element_count is not None:
+                item["element_count"] = result.element_count
+            item.update(_payload_response_fields(result.payload, limits))
+            items.append(item)
+
+    n_ok = sum(1 for it in items if it["ok"])
+    return 200, {"ok": True, "mode": "independent", "file_count": len(items),
+                "success_count": n_ok, "items": items}
 
 
 def _png_frame(rendered, index: int, max_dim: int | None = None) -> bytes:

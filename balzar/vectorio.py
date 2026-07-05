@@ -463,8 +463,18 @@ def _dxf_pairs(text: str):
 # coordinates so rational/weighted splines work too) since a SPLINE entity
 # stores control points + a knot vector, not a series of points to connect
 # directly. Fixed sample count, not adaptive to curvature — a documented,
-# honest tolerance choice, not hidden precision.
-SPLINE_SAMPLES = 32
+# honest tolerance choice, not hidden precision. 64, not 32: measured on a
+# real multi-spline logo (118 SPLINE entities), 32 samples left visible
+# facets on fine detail (feather edges); 64 fixes most of it for ~1.6x the
+# bytes (20,391 B -> 32,172 B on that file, still 10x smaller than the raw
+# DXF). The rest of the perceived roughness is NOT sampling density: our
+# own png.py draws plain Bresenham lines with no anti-aliasing, so even a
+# densely-sampled curve looks faceted there. A browser rendering the SVG
+# export of the SAME 64-sample data (render_svg, svg.py) looks smoother
+# than our own PNG at 256 samples, for free, via the browser's
+# anti-aliasing — so SVG, not PNG, is the fidelity-first output for
+# curve-heavy content; PNG stays exact for axis-aligned/technical drawings.
+SPLINE_SAMPLES = 64
 
 
 def _bspline_find_span(n: int, degree: int, u: float, knots: list[float]) -> int:

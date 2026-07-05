@@ -492,10 +492,17 @@ const sequenceDlProgram = document.getElementById("sequence-dl-program");
 const sequencePrevBtn = document.getElementById("sequence-prev");
 const sequenceNextBtn = document.getElementById("sequence-next");
 const sequenceFrameLabel = document.getElementById("sequence-frame-label");
+const independentResultEl = document.getElementById("independent-result");
+const independentSummaryEl = document.getElementById("independent-summary");
+const independentItemsEl = document.getElementById("independent-items");
 
 let pendingSequenceFiles = []; // File objects, in the order to encode
 let lastSequenceResult = null;
 let sequenceFrameIndex = 0;
+
+function currentSequenceMode() {
+  return document.querySelector('input[name="sequence-mode"]:checked').value;
+}
 
 sequenceBrowseBtn.addEventListener("click", () => sequenceFileInput.click());
 sequenceFileInput.addEventListener("change", () => {
@@ -539,14 +546,24 @@ function renderSequenceFileList() {
     li.querySelector('[data-action="remove"]').addEventListener("click", () => removeSequenceFile(i));
     sequenceFileList.appendChild(li);
   });
-  sequenceEncodeBtn.hidden = pendingSequenceFiles.length < 2;
+  const minFiles = currentSequenceMode() === "independent" ? 1 : 2;
+  sequenceEncodeBtn.hidden = pendingSequenceFiles.length < minFiles;
   sequenceClearBtn.hidden = pendingSequenceFiles.length === 0;
 }
+
+document.querySelectorAll('input[name="sequence-mode"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    sequenceEncodeBtn.textContent = currentSequenceMode() === "independent"
+      ? "Codifica file indipendenti" : "Codifica sequenza";
+    renderSequenceFileList();
+  });
+});
 
 sequenceClearBtn.addEventListener("click", () => {
   pendingSequenceFiles = [];
   lastSequenceResult = null;
   sequenceResultEl.hidden = true;
+  independentResultEl.hidden = true;
   sequenceStatusEl.hidden = true;
   renderSequenceFileList();
 });
@@ -564,8 +581,11 @@ function removeSequenceFile(i) {
 }
 
 sequenceEncodeBtn.addEventListener("click", async () => {
+  const mode = currentSequenceMode();
+  const minFiles = mode === "independent" ? 1 : 2;
   sequenceResultEl.hidden = true;
-  if (pendingSequenceFiles.length < 2) return;
+  independentResultEl.hidden = true;
+  if (pendingSequenceFiles.length < minFiles) return;
   const totalBytes = pendingSequenceFiles.reduce((sum, f) => sum + f.size, 0);
   if (totalBytes > MAX_FILE_BYTES) {
     setSequenceStatus(
@@ -583,19 +603,124 @@ sequenceEncodeBtn.addEventListener("click", async () => {
     const res = await fetch("/api/encode_sequence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, max_dim: parseInt(sequenceMaxDim.value, 10) }),
+      body: JSON.stringify({ files, mode, max_dim: parseInt(sequenceMaxDim.value, 10) }),
     });
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || "errore sconosciuto");
 
-    lastSequenceResult = json;
-    sequenceFrameIndex = 0;
-    renderSequenceResult(json);
-    setSequenceStatus(`Fatto: ${pendingSequenceFiles.length} file → ${json.frame_count} frame`);
+    if (mode === "independent") {
+      renderIndependentResults(json);
+      setSequenceStatus(`Fatto: ${json.success_count}/${json.file_count} file codificati`);
+    } else {
+      lastSequenceResult = json;
+      sequenceFrameIndex = 0;
+      renderSequenceResult(json);
+      setSequenceStatus(`Fatto: ${pendingSequenceFiles.length} file → ${json.frame_count} frame`);
+    }
   } catch (err) {
     setSequenceStatus("Errore: " + err.message, true);
   }
 });
+
+function renderIndependentResults(resp) {
+  independentSummaryEl.textContent =
+    `${resp.success_count} di ${resp.file_count} file codificati con successo.`;
+  independentItemsEl.innerHTML = "";
+
+  resp.items.forEach((item, i) => {
+    const card = document.createElement("div");
+    card.className = "independent-item" + (item.ok ? "" : " failed");
+
+    if (!item.ok) {
+      card.innerHTML = `
+        <div class="independent-item-header">
+          <span>${item.filename}</span>
+          <span class="badge-fail">✕ errore</span>
+        </div>
+        <p class="honesty">${item.error}</p>
+      `;
+      independentItemsEl.appendChild(card);
+      return;
+    }
+
+    const idBase = `indep-${i}`;
+    card.innerHTML = `
+      <div class="independent-item-header">
+        <span>${item.filename}</span>
+        <span class="badge-ok">✓ ${item.source_format.toUpperCase()}</span>
+      </div>
+      <div class="item-body">
+        <img src="data:image/png;base64,${item.preview_png_base64}" alt="rigenerato: ${item.filename}">
+        <table class="stats">
+          <tr><td>dimensioni</td><td>${item.width}×${item.height} px</td></tr>
+          <tr><td>istruzioni</td><td>${item.instruction_count}</td></tr>
+          <tr><td>payload</td><td>${fmtBytes(item.payload_bytes)}</td></tr>
+          <tr><td>entra in un QR code</td><td>${item.fits_qr ? "sì" : "no"}</td></tr>
+          ${item.skipped && item.skipped.length ? `<tr><td>elementi saltati</td><td>${item.skipped.length}</td></tr>` : ""}
+        </table>
+      </div>
+      <div class="downloads">
+        <button type="button" data-action="dl-payload">scarica payload (.bzp)</button>
+        <button type="button" data-action="dl-program">scarica programma (.bzr)</button>
+        <button type="button" data-action="gen-qr">genera QR</button>
+      </div>
+      <div class="qr-block" data-role="qr-result" hidden>
+        <img class="qr-image" alt="QR del payload">
+        <p class="honesty"></p>
+        <button type="button" data-action="dl-qr">scarica QR (PNG)</button>
+      </div>
+    `;
+
+    card.querySelector('[data-action="dl-payload"]').addEventListener("click", () => {
+      downloadBlob(base64ToBytes(item.payload_base64), `${item.filename}.bzp`, "application/octet-stream");
+    });
+    card.querySelector('[data-action="dl-program"]').addEventListener("click", () => {
+      downloadBlob(new TextEncoder().encode(item.program_text), `${item.filename}.bzr`, "text/plain");
+    });
+
+    const qrBlock = card.querySelector('[data-role="qr-result"]');
+    const qrImg = qrBlock.querySelector("img");
+    const qrNote = qrBlock.querySelector("p");
+    let lastQrB64 = null;
+    card.querySelector('[data-action="gen-qr"]').addEventListener("click", async (e) => {
+      if (item.payload_omitted) {
+        qrBlock.hidden = false;
+        qrNote.textContent = "Payload omesso (troppo grande per questa risposta).";
+        return;
+      }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/qr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ payload_base64: item.payload_base64 }),
+        });
+        const qrJson = await res.json();
+        if (!qrJson.ok) throw new Error(qrJson.error || "errore sconosciuto");
+        lastQrB64 = qrJson.qr_png_base64;
+        qrImg.src = "data:image/png;base64," + lastQrB64;
+        qrNote.textContent = qrJson.single_qr
+          ? "QR singolo — scansionalo con qualunque lettore o con 'balzar scan'."
+          : "Il payload non entra in un solo QR: griglia auto-dimensionata.";
+        qrBlock.hidden = false;
+      } catch (err) {
+        qrNote.textContent = "Errore: " + err.message;
+        qrBlock.hidden = false;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    card.querySelector('[data-action="dl-qr"]').addEventListener("click", () => {
+      if (!lastQrB64) return;
+      downloadBlob(base64ToBytes(lastQrB64), `${item.filename}_qr.png`, "image/png");
+    });
+
+    independentItemsEl.appendChild(card);
+  });
+
+  independentResultEl.hidden = false;
+}
 
 function sequenceFrames(r) {
   return r.preview_frames_png_base64 || (r.preview_png_base64 ? [r.preview_png_base64] : []);

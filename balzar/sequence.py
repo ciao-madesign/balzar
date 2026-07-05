@@ -132,3 +132,68 @@ def encode_raster_sequence(paths: list[str], max_dim: int = 400):
         frames.append(rgb)
 
     return encode_video(width, height, frames)
+
+
+@dataclass
+class IndependentFileResult:
+    """One file, encoded entirely on its own — no shared canvas, no delta
+    against the others. Unlike encode_vector_sequence/encode_raster_sequence
+    this never raises for the batch as a whole: a broken file is recorded
+    as its own failed entry (ok=False, error=...) so the rest of the batch
+    still comes back. That fault isolation is the point of "independent"
+    mode — files here are an unrelated pile, not a single navigable whole,
+    so one bad file must not block the others."""
+    filename: str
+    ok: bool
+    error: str = ""
+    source_format: str = ""
+    width: int = 0
+    height: int = 0
+    instruction_count: int = 0
+    element_count: int | None = None
+    payload: bytes = b""
+    program_text: str = ""
+    skipped: list[str] = field(default_factory=list)
+
+
+def encode_independent(paths: list[str], max_dim: int = 800) -> list[IndependentFileResult]:
+    """Batch mode: each file becomes its own payload, dispatched by
+    extension exactly like `balzar encode-vector`/`encode-image` would
+    one at a time. Files do NOT need to share a format — a batch can
+    freely mix .svg/.dxf/raster images, since there is no shared
+    transform or delta to keep consistent across them."""
+    if not paths:
+        raise SequenceError("nessun file da codificare")
+
+    results: list[IndependentFileResult] = []
+    for path in paths:
+        name = os.path.basename(path)
+        lower = path.lower()
+        try:
+            if lower.endswith(".svg") or lower.endswith(".dxf"):
+                from .vectorio import ingest_vector_file
+                r = ingest_vector_file(path, max_dim=max_dim)
+                results.append(IndependentFileResult(
+                    filename=name, ok=True, source_format=r.source_format,
+                    width=r.width, height=r.height,
+                    instruction_count=r.instruction_count,
+                    element_count=r.element_count,
+                    payload=r.payload, program_text=r.program_text,
+                    skipped=r.skipped,
+                ))
+            else:
+                from .encoder import encode_image
+                from .imageio import load_rgb
+                with open(path, "rb") as fh:
+                    data = fh.read()
+                w, h, rgb = load_rgb(data, max_dim=max_dim)
+                enc = encode_image(w, h, rgb)
+                results.append(IndependentFileResult(
+                    filename=name, ok=True, source_format="raster",
+                    width=w, height=h,
+                    instruction_count=enc.instruction_count,
+                    payload=enc.payload, program_text=enc.program_text,
+                ))
+        except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
+            results.append(IndependentFileResult(filename=name, ok=False, error=str(exc)))
+    return results

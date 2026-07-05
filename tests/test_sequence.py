@@ -6,8 +6,8 @@ import tempfile
 import unittest
 
 from balzar.interpreter import render
-from balzar.sequence import (SequenceError, encode_raster_sequence,
-                             encode_vector_sequence)
+from balzar.sequence import (SequenceError, encode_independent,
+                             encode_raster_sequence, encode_vector_sequence)
 
 DXF_STEP1 = """0
 SECTION
@@ -160,6 +160,65 @@ class TestRasterSequence(unittest.TestCase):
         p0 = self._make_png("f0.png", 0)
         with self.assertRaises(SequenceError):
             encode_raster_sequence([p0])
+
+
+class TestIndependentBatch(unittest.TestCase):
+    """encode_independent: each file stands on its own — no shared canvas,
+    no format restriction, and (unlike the sequence functions) one broken
+    file must not sink the whole batch."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def _write(self, name, text):
+        path = os.path.join(self.tmpdir.name, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def test_mixed_svg_and_dxf_both_succeed(self):
+        p1 = self._write("a.svg", SVG_STEP1)
+        p2 = self._write("b.dxf", DXF_STEP1)
+        results = encode_independent([p1, p2])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(r.ok for r in results))
+        self.assertEqual(results[0].source_format, "svg")
+        self.assertEqual(results[1].source_format, "dxf")
+
+    def test_broken_file_does_not_sink_the_batch(self):
+        good = self._write("good.dxf", DXF_STEP1)
+        bad = self._write("bad.svg", "<svg><circle cx=oops></svg>")
+        results = encode_independent([good, bad])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(results[0].ok)
+        self.assertFalse(results[1].ok)
+        self.assertTrue(results[1].error)
+
+    def test_single_file_is_allowed(self):
+        p1 = self._write("a.dxf", DXF_STEP1)
+        results = encode_independent([p1])
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].ok)
+
+    def test_no_files_rejected(self):
+        with self.assertRaises(SequenceError):
+            encode_independent([])
+
+    def test_raster_file_routed_to_image_encoder(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow non installato")
+        path = os.path.join(self.tmpdir.name, "f.png")
+        img = Image.new("RGB", (40, 30), (255, 255, 255))
+        for x in range(10, 20):
+            for y in range(10, 20):
+                img.putpixel((x, y), (0, 0, 200))
+        img.save(path)
+        results = encode_independent([path])
+        self.assertTrue(results[0].ok)
+        self.assertEqual(results[0].source_format, "raster")
 
 
 if __name__ == "__main__":
