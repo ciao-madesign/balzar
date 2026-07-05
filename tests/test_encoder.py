@@ -92,10 +92,11 @@ class TestEncoderRoundtrip(unittest.TestCase):
         rendered = render(decode_payload(result.payload))
         self.assertEqual(rendered.width, w)
 
-    def test_near_256_colors_gets_fine_rounding_not_coarse_fallback(self):
+    def test_near_256_colors_gets_low_error_not_coarse_fallback(self):
         """The case that motivated this: anti-aliased UI screenshots land
-        just over 256 colors and deserve +-1/+-2 per channel, not the old
-        crude fixed 3-3-2 palette (+-16/+-32)."""
+        just over 256 colors and deserve a quantizer that adapts to the
+        few base shades actually present, not a crude fixed grid that
+        treats them like arbitrary color space."""
         w, h = 24, 24
         rng = random.Random(1)
         base = [(rng.randrange(256), rng.randrange(256), rng.randrange(256))
@@ -105,7 +106,8 @@ class TestEncoderRoundtrip(unittest.TestCase):
             r, g, b = rng.choice(base)
             # small jitter, like anti-aliasing shades of a few base colors:
             # independent per-pixel draw -> up to 100*6=600 exact colors
-            # (well over 256), but only ~6x the buckets once rounded
+            # (well over 256), but median-cut collapses each base color's
+            # jittered shades into one representative box
             jitter = rng.randrange(6)
             colors.append(((r + jitter) % 256, (g + jitter) % 256, (b + jitter) % 256))
         rgb = b"".join(bytes(c) for c in colors)
@@ -115,29 +117,29 @@ class TestEncoderRoundtrip(unittest.TestCase):
 
         result = encode_image(w, h, rgb)
         self.assertFalse(result.lossless)
-        self.assertGreater(result.color_step, 0, "should use graduated rounding")
-        self.assertLessEqual(result.color_step, 16, "jitter of 5 should need only fine rounding")
-        self.assertIn("arrotondamento colore", result.fidelity_label())
+        self.assertLessEqual(result.mean_color_error, 2, "jitter of 5 should need only fine quantization")
+        self.assertIn("errore medio colore", result.fidelity_label())
+        self.assertIn("fine", result.fidelity_label())
 
         rendered = render(decode_payload(result.payload))
         self.assertEqual((rendered.width, rendered.height), (w, h))
 
-    def test_true_high_entropy_still_needs_the_coarsest_step(self):
-        """Genuine noise must NOT be reported as finely quantized — it
-        should need the coarsest rounding step, same ballpark as the old
-        fixed 3-3-2 fallback, and say so ('quantizzata grezza')."""
-        w, h = 24, 24
+    def test_true_high_entropy_still_reports_coarse_quantization(self):
+        """Genuine noise (enough of it that 256 boxes can't average it
+        away) must NOT be reported as finely quantized — high mean color
+        error, labeled 'quantizzata grezza'."""
+        w, h = 40, 40
         rng = random.Random(2)
         rgb = bytes(rng.randrange(256) for _ in range(w * h * 3))
         result = encode_image(w, h, rgb)
         self.assertFalse(result.lossless)
-        self.assertGreaterEqual(result.color_step, 48)
+        self.assertGreater(result.mean_color_error, 8)
         self.assertIn("grezza", result.fidelity_label())
 
-    def test_exact_palette_has_zero_color_step(self):
+    def test_exact_palette_has_zero_color_error(self):
         result = encode_image(32, 32, _solid_blocks(32, 32))
         self.assertTrue(result.lossless)
-        self.assertEqual(result.color_step, 0)
+        self.assertEqual(result.mean_color_error, 0.0)
         self.assertEqual(result.fidelity_label(), "esatta (lossless)")
 
 

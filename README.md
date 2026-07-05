@@ -249,7 +249,10 @@ programma DSL, best-effort:
 
 1. **quantizzazione palette**: esatta e lossless se l'immagine ha già
    <=256 colori (icone, screenshot, pixel art, export CAD); altrimenti
-   quantizzazione fissa 3-3-2 bit (256 colori), dichiarata come lossy;
+   quantizzatore percettivo median-cut (<=256 colori adattati alla
+   distribuzione reale, non una griglia fissa), con l'errore medio colore
+   introdotto sempre dichiarato (`EncodeResult.mean_color_error`, 0.0 se
+   esatta) — mai un booleano lossless/lossy piatto;
 2. **rilevamento tiling**: se l'intero canvas è periodico, viene codificata
    una sola piastrella + `TILE`;
 3. **copertura greedy a rettangoli**: scansione riga per riga che

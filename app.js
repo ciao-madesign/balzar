@@ -442,7 +442,7 @@ function renderVideoResult(r) {
   const rows = [
     ["dimensioni", `${r.width}×${r.height} px`],
     ["frame", r.frame_count],
-    ["colori (palette)", r.palette_size + (r.lossless ? "" : " (quantizzati, non esatti)")],
+    ["colori (palette)", r.palette_size + (r.lossless ? "" : ` (median-cut, errore medio colore ${r.mean_color_error})`)],
     ["pixel cambiati dopo il frame 0", r.delta_pixels_total.toLocaleString("it-IT")],
     ["istruzioni generate", r.instruction_count],
     ["RGB grezzo equivalente", fmtBytes(r.raw_rgb_bytes)],

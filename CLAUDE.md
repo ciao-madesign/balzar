@@ -586,7 +586,7 @@ suo dispatch in `webapi.py`).
 | Rumore puro 800×800 (encoder auto) | 2,73 MB | 1,92 MB | **0,7×, nessun guadagno** (dichiarato) |
 | GIF palla+griglia 320×240×30 frame (video encoder) | 8.144 B | 6,91 MB | 849× |
 | Confronto onesto vs JPEG/PNG/ZIP/DEFLATE su vista esplosa 5 frame | 424 B | 7,2 MB | 40×–17.000× a seconda della baseline |
-| Screenshot UI sintetico anti-aliased, 455 colori esatti (encoder auto) | 18.751 B (passo 4, vs 7.949 B col vecchio fallback fisso) | 384.000 B | 20,5× (qualità visibilmente migliore: ombra/pattern di sfondo preservati) |
+| Screenshot UI sintetico anti-aliased, 279 colori esatti (encoder auto, median-cut) | 22.996 B, errore medio colore 0.0 | 442.368 B | 19,2× (256 scatole per 279 colori reali, quasi esatta) |
 | `examples/flangia_sorgente.svg` (ingestione vettoriale, 0 elementi saltati) | 230 B | 800×800 | in un solo QR, margine ampio |
 | `examples/flangia_sorgente.dxf` (stesso soggetto, ingestione DXF, 0 saltati) | 249 B | 800×800 | in un solo QR, margine ampio |
 | `examples/sequenza_flangia_cad/` (sequenza vettoriale, 3 file DXF: carcassa→+flangia→+bulloni) | 169 B | 800×800×3 frame = 5,76 MB RGB | 34.083× |
@@ -609,24 +609,41 @@ suo dispatch in `webapi.py`).
    sorgente non passa mai dal problema (niente pixel da cui dedurre
    nulla). Resta valida per contenuto che arriva *solo* rasterizzato
    (screenshot, scansioni) senza una sorgente vettoriale disponibile.
-2. **Quantizzazione lossy oltre 256 colori — migliorata ma non risolta
-   del tutto.** Non è più il fallback fisso 3-3-2 (passi ±16/±32 sempre,
-   anche quando servirebbe pochissimo): ora `_quantize` in `encoder.py`
-   prova passi di arrotondamento crescenti (2,4,8,...,64 per canale) e usa
-   il più fine che riporta il conteggio colori ≤256. Caso reale misurato
-   in sessione (screenshot UI con testo anti-aliased, icone arrotondate,
-   ombra sfumata, sfondo a puntini — 455 colori esatti): passo 4 basta
-   (palette 217 colori) invece del vecchio passo fisso ~32, con il pattern
-   di sfondo e l'ombra visibili invece di scomparire nel banding. Costo
-   onesto: payload più grande (18.751 B contro 7.949 B col vecchio
-   fallback) — più fedeltà costa più byte, dichiarato via il nuovo campo
-   `EncodeResult.color_step` e `fidelity_label()` (non più un booleano
-   lossless/lossy piatto). Il fallback fisso 3-3-2 è stato rimosso perché
-   con passo 64 restano al più 4×4×4=64 colori possibili per pigeonhole —
-   quindi era già codice morto, mai raggiunto. Resta vero che un vero
-   quantizzatore percettivo (median-cut, o clustering nello spazio colore)
-   darebbe risultati ancora migliori sulle foto vere, senza cambiare
-   l'esito di fondo (le foto restano il caso a basso/nessun guadagno).
+2. **Quantizzazione lossy oltre 256 colori — ora un vero quantizzatore
+   percettivo (median-cut), non più arrotondamento a griglia fissa.**
+   Prima passava per passi di arrotondamento crescenti (2,4,8,...,64 per
+   canale, una griglia uniforme sull'intero spazio colore); ora
+   `_median_cut_quantize` in `encoder.py` divide lo spazio colore in
+   ≤256 "scatole" tagliando ripetutamente quella con il range più ampio
+   (pesato per numero di pixel) lungo il canale più largo, poi rappresenta
+   ogni scatola con la media pesata dei colori che contiene — si adatta
+   alla distribuzione reale invece di imporre una griglia fissa. Caso
+   reale misurato in sessione (screenshot sintetico con icone
+   anti-aliased, ombra sfumata, sfondo a puntini, 279 colori esatti):
+   errore medio colore **0.0** (256 scatole per 279 colori reali, quasi
+   tutti isolati) — il vecchio sistema a griglia fissa non poteva adattarsi
+   così alla distribuzione reale. Il campo `EncodeResult.color_step`
+   (l'ampiezza del passo di arrotondamento) è stato sostituito da
+   `mean_color_error` (distanza RGB media per pixel introdotta, 0.0 se
+   esatta) — una metrica di fedeltà reale, non un parametro interno
+   dell'algoritmo precedente. **Criticità di performance trovata e
+   corretta durante l'implementazione**: il median-cut richiede ordinare
+   ripetutamente le "scatole" da tagliare, e su un'immagine ad alta
+   entropia (rumore, foto) il numero di colori distinti può arrivare a
+   centinaia di migliaia — misurato 26 secondi su un rumore 400×400 prima
+   della correzione. Fix: sopra 4.096 colori distinti (`_pre_bucket`),
+   i colori vengono raggruppati con lo stesso raddoppio di passo usato
+   dal vecchio sistema **solo per limitare l'input al median-cut**, non
+   come quantizzazione finale — tocca solo contenuto a bassa struttura
+   (foto/rumore, che non guadagna comunque nulla), il caso reale
+   (poche centinaia/migliaia di sfumature da anti-aliasing) non lo
+   raggiunge mai. Con la correzione, 800×800 di rumore puro passa da
+   tempo impraticabile a **~30 secondi** (ancora lento ma completabile,
+   coerente con l'essere un caso a guadagno nullo dichiarato, non un
+   caso d'uso reale da ottimizzare oltre). Stesso quantizzatore riusato
+   in `video.py` (`_quantize_frames`), che aveva la stessa vecchia
+   posterizzazione fissa 3-3-2 per il fallback lossy multi-frame —
+   `VideoEncodeResult` guadagna lo stesso campo `mean_color_error`.
 3. **`png.py` non usa filtri di scanline adattivi** (Sub/Up/Paeth): un
    secondo passaggio DEFLATE sui PNG generati li comprime ulteriormente del
    ~25-30%. Non è un bug bloccante (i confronti onesti fatti nella
@@ -736,7 +753,8 @@ suo dispatch in `webapi.py`).
    nel DSL — nessuna delle due esiste oggi. Vedi §7.3 per l'analisi
    dettagliata di perché non è "il prossimo passo facile" nonostante sembri
    il caso ideale sulla carta.
-10. **Quantizzatore percettivo migliore** per il fallback lossy (criticità #2).
+10. ~~Quantizzatore percettivo migliore per il fallback lossy~~ — **fatto**
+    (median-cut, `_median_cut_quantize` in `encoder.py`): vedi criticità §4.2.
 11. **Encoder per dati strutturati non-immagine** (JSON/XML ripetitivi):
     problema diverso dalla compressione di immagini — "template + diff dei
     parametri" invece di "rettangoli di pixel". Concettualmente vicino al

@@ -9,15 +9,20 @@ The result is lossless whenever the image already has <=256 distinct
 colors (icons, screenshots, line art, CAD exports, our own renders).
 Above that — real UI screenshots included: anti-aliased text/icons and
 soft shadows routinely produce thousands of near-identical shades — it
-looks for the finest per-channel rounding step that brings the count
-back under 256 before falling back to a fixed, coarse 3-3-2 palette.
-A UI screenshot with 455 distinct colors from anti-aliasing needs only
-+-2 per channel (step 4) to fit in 256, instead of the +-16/+-32 the
-fixed fallback would force — visibly less banding for a real cost of a
-few less-precise shades nobody notices. Either way, the program is
-verified by rendering it back and diffing against the quantized source
-before being handed to the caller: what you download always reproduces
-exactly what balzar actually generates.
+falls back to a median-cut quantizer (_median_cut_quantize): split color
+space into <=256 boxes by repeatedly cutting the box with the largest
+population-weighted range along its widest channel, then represent each
+box by the population-weighted average of the colors in it. Unlike a
+fixed per-channel rounding grid (the previous approach), this spends the
+256-color budget where the image actually has detail — a screenshot with
+a lot of near-white background and a little saturated color keeps the
+saturated detail instead of averaging it away with the background. The
+actual quantization error introduced (mean per-pixel RGB distance,
+0 if lossless) is measured and disclosed, never a bare lossless/lossy
+boolean. Either way, the program is verified by rendering it back and
+diffing against the quantized source before being handed to the caller:
+what you download always reproduces exactly what balzar actually
+generates.
 
 This is precisely where the theoretical limit from README §8 becomes
 visible instead of theoretical: structured input compresses hugely,
@@ -44,16 +49,6 @@ _MIN_RECT_AREA = 1
 _MAX_DIVISOR_CANDIDATES = 24
 
 
-# per-channel rounding steps tried, finest first, until the rounded color
-# count fits in 256. Step 64 leaves only 4 possible values per channel
-# (0/64/128/192), so at most 4^3=64 distinct colors — by that pigeonhole
-# argument this loop always terminates; there is no further "emergency"
-# fallback because none is ever reachable, and pretending one exists
-# would be exactly the kind of unreachable, misleading code this project
-# avoids.
-_ROUNDING_STEPS = (2, 4, 8, 12, 16, 24, 32, 48, 64)
-
-
 @dataclass
 class EncodeResult:
     program_text: str
@@ -62,7 +57,7 @@ class EncodeResult:
     height: int
     palette_size: int
     lossless: bool
-    color_step: int  # 0 = exact; else the per-channel rounding step used
+    mean_color_error: float  # 0.0 if exact; else mean per-pixel RGB distance introduced
     instruction_count: int
     tile: tuple[int, int] | None
 
@@ -71,57 +66,141 @@ class EncodeResult:
         a bare True/False that hides how lossy 'lossy' actually is."""
         if self.lossless:
             return "esatta (lossless)"
-        if self.color_step <= 16:
-            return f"quantizzata fine (arrotondamento colore, passo {self.color_step})"
-        if self.color_step <= 32:
-            return f"quantizzata media (arrotondamento colore, passo {self.color_step})"
-        return f"quantizzata grezza (arrotondamento colore, passo {self.color_step})"
+        if self.mean_color_error <= 2:
+            return f"quantizzata fine (errore medio colore {self.mean_color_error})"
+        if self.mean_color_error <= 8:
+            return f"quantizzata media (errore medio colore {self.mean_color_error})"
+        return f"quantizzata grezza (errore medio colore {self.mean_color_error})"
 
 
-def _count_unique_rounded(colors: list[bytes], step: int) -> int:
-    seen = set()
-    for c in colors:
-        seen.add((c[0] // step * step, c[1] // step * step, c[2] // step * step))
-        if len(seen) > 256:
-            return len(seen)
-    return len(seen)
+def _median_cut_boxes(items: list[tuple[tuple[int, int, int], int]],
+                      max_boxes: int) -> list[list[tuple[tuple[int, int, int], int]]]:
+    """Split (color, pixel_count) pairs into <=max_boxes groups: repeatedly
+    cut the box with the largest population-weighted channel range, along
+    its widest channel, at the population-weighted median. Deterministic —
+    ties broken by first-appearance order, same contract as the rest of
+    the encoder."""
+    boxes = [items]
+
+    def channel_ranges(box):
+        rs = [c[0] for c, _ in box]
+        gs = [c[1] for c, _ in box]
+        bs = [c[2] for c, _ in box]
+        return (max(rs) - min(rs), max(gs) - min(gs), max(bs) - min(bs))
+
+    def weighted_volume(box):
+        return max(channel_ranges(box)) * sum(cnt for _, cnt in box)
+
+    def split(box):
+        channel = channel_ranges(box).index(max(channel_ranges(box)))
+        ordered = sorted(box, key=lambda item: item[0][channel])
+        total = sum(cnt for _, cnt in ordered)
+        half, acc, cut = total / 2, 0, len(ordered) // 2
+        for i, (_, cnt) in enumerate(ordered):
+            acc += cnt
+            if acc >= half:
+                cut = i + 1
+                break
+        cut = max(1, min(cut, len(ordered) - 1))
+        return ordered[:cut], ordered[cut:]
+
+    while len(boxes) < max_boxes:
+        splittable = [i for i, b in enumerate(boxes) if len(b) > 1]
+        if not splittable:
+            break
+        i = max(splittable, key=lambda i: weighted_volume(boxes[i]))
+        b1, b2 = split(boxes[i])
+        boxes[i:i + 1] = [b1, b2]
+
+    return boxes
 
 
-def _quantize(width: int, height: int, rgb: bytes) -> tuple[list[int], dict[int, tuple[int, int, int]], bool, int]:
+# Median-cut's repeated per-box sorting is fine for a few thousand distinct
+# colors but not for the hundreds of thousands a high-entropy image can
+# have (measured: 400x400 pure noise, ~140k uniques, took 26s uncapped).
+# Above this many uniques, colors are pre-grouped by the coarsest uniform
+# step that fits the budget (same doubling-step, pigeonhole-terminates
+# idea as the old fixed-grid fallback) before median-cut ever runs. This
+# only affects low-structure content (photos/noise) that gets no useful
+# compression either way; the realistic target case — a few hundred to a
+# couple thousand near-duplicate shades from anti-aliasing — never has
+# enough uniques to hit this path, so its quality is unaffected.
+_MEDIAN_CUT_MAX_INPUT = 4096
+
+
+def _pre_bucket(unique_counts: dict[tuple[int, int, int], int], max_items: int = _MEDIAN_CUT_MAX_INPUT):
+    """Coarsen `unique_counts` down to <=max_items groups if needed.
+    Returns (bucketed_counts, color_to_bucket) — bucketed_counts feeds
+    median-cut, color_to_bucket lets every original color find its final
+    palette index afterwards."""
+    if len(unique_counts) <= max_items:
+        return dict(unique_counts), {c: c for c in unique_counts}
+
+    step = 2
+    while True:
+        buckets: dict[tuple[int, int, int], int] = {}
+        color_to_bucket: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+        for color, cnt in unique_counts.items():
+            key = (color[0] // step * step, color[1] // step * step, color[2] // step * step)
+            buckets[key] = buckets.get(key, 0) + cnt
+            color_to_bucket[color] = key
+        if len(buckets) <= max_items:
+            return buckets, color_to_bucket
+        step *= 2
+
+
+def _median_cut_quantize(unique_counts: dict[tuple[int, int, int], int], max_colors: int = 256):
+    """(color -> pixel count) for every distinct source color -> (color ->
+    palette index, palette). Each box's representative is the
+    population-weighted average of the colors assigned to it, so the
+    result adapts to the image's actual distribution instead of a fixed
+    per-channel grid (see module docstring)."""
+    bucketed_counts, color_to_bucket = _pre_bucket(unique_counts)
+    boxes = _median_cut_boxes(list(bucketed_counts.items()), max_colors)
+
+    bucket_to_index: dict[tuple[int, int, int], int] = {}
+    palette: dict[int, tuple[int, int, int]] = {}
+    for idx, box in enumerate(boxes):
+        total = sum(cnt for _, cnt in box)
+        r = round(sum(c[0] * cnt for c, cnt in box) / total)
+        g = round(sum(c[1] * cnt for c, cnt in box) / total)
+        b = round(sum(c[2] * cnt for c, cnt in box) / total)
+        palette[idx] = (r, g, b)
+        for bucket, _ in box:
+            bucket_to_index[bucket] = idx
+    color_to_index = {color: bucket_to_index[bucket] for color, bucket in color_to_bucket.items()}
+    return color_to_index, palette
+
+
+def _quantize(width: int, height: int,
+             rgb: bytes) -> tuple[list[int], dict[int, tuple[int, int, int]], bool, float]:
     """Map RGB pixels to palette indices.
 
-    Returns (indices, palette, lossless, color_step). See module docstring
-    for why a graduated rounding search beats jumping straight to a fixed
-    coarse palette whenever the exact color count is just over 256.
+    Returns (indices, palette, lossless, mean_color_error). See module
+    docstring for the median-cut fallback used above 256 distinct colors.
     """
     n = width * height
     colors = [rgb[i * 3:i * 3 + 3] for i in range(n)]
-    unique = {}
+    unique_counts: dict[tuple[int, int, int], int] = {}
     for c in colors:
         key = (c[0], c[1], c[2])
-        if key not in unique:
-            unique[key] = len(unique)
-        if len(unique) > 256:
-            break
+        unique_counts[key] = unique_counts.get(key, 0) + 1
 
-    if len(unique) <= 256:
+    if len(unique_counts) <= 256:
         # order by first appearance: fully deterministic, no frequency sort needed
-        palette = {idx: color for color, idx in unique.items()}
-        indices = [unique[(c[0], c[1], c[2])] for c in colors]
-        return indices, palette, True, 0
+        palette = {idx: color for idx, color in enumerate(unique_counts)}
+        index_of = {color: idx for idx, color in palette.items()}
+        indices = [index_of[(c[0], c[1], c[2])] for c in colors]
+        return indices, palette, True, 0.0
 
-    for step in _ROUNDING_STEPS:
-        if _count_unique_rounded(colors, step) <= 256:
-            unique = {}
-            indices = [0] * n
-            for i, c in enumerate(colors):
-                key = (c[0] // step * step, c[1] // step * step, c[2] // step * step)
-                idx = unique.setdefault(key, len(unique))
-                indices[i] = idx
-            palette = {idx: color for color, idx in unique.items()}
-            return indices, palette, False, step
+    color_to_index, palette = _median_cut_quantize(unique_counts)
+    indices = [color_to_index[(c[0], c[1], c[2])] for c in colors]
 
-    raise AssertionError("unreachable: step=64 always yields <=64 colors")
+    total_error = 0.0
+    for color, cnt in unique_counts.items():
+        r, g, b = palette[color_to_index[color]]
+        total_error += cnt * (abs(color[0] - r) + abs(color[1] - g) + abs(color[2] - b)) / 3
+    return indices, palette, False, round(total_error / n, 2)
 
 
 def _divisors(n: int) -> list[int]:
@@ -215,7 +294,7 @@ def _emit_rect(x: int, y: int, rw: int, rh: int, color: int) -> str:
 
 
 def encode_image(width: int, height: int, rgb: bytes) -> EncodeResult:
-    idx, palette, lossless, color_step = _quantize(width, height, rgb)
+    idx, palette, lossless, mean_color_error = _quantize(width, height, rgb)
     tile = _find_tile(width, height, idx)
 
     lines = [f"CANVAS w={width} h={height} bg=0"]
@@ -254,7 +333,7 @@ def encode_image(width: int, height: int, rgb: bytes) -> EncodeResult:
         height=height,
         palette_size=len(palette),
         lossless=lossless,
-        color_step=color_step,
+        mean_color_error=mean_color_error,
         instruction_count=n_instr,
         tile=tile,
     )

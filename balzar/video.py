@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .dsl import canonical
-from .encoder import _emit_rect, _greedy_rects
+from .encoder import _emit_rect, _greedy_rects, _median_cut_quantize
 from .interpreter import render as render_program
 from .payload import encode_payload
 
@@ -38,12 +38,13 @@ class VideoEncodeResult:
     frame_count: int
     palette_size: int
     lossless: bool
+    mean_color_error: float  # 0.0 if exact; else mean per-pixel RGB distance introduced
     instruction_count: int
     delta_pixels_total: int  # how many pixels actually changed across frames
 
 
 def _quantize_frames(width: int, height: int,
-                     rgb_frames: list[bytes]) -> tuple[list[list[int]], dict, bool]:
+                     rgb_frames: list[bytes]) -> tuple[list[list[int]], dict, bool, float]:
     """Shared palette across ALL frames, first-appearance order."""
     unique: dict[tuple[int, int, int], int] = {}
     lossless = True
@@ -66,21 +67,32 @@ def _quantize_frames(width: int, height: int,
                 unique[(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2])]
                 for i in range(width * height)
             ])
-        return frames_idx, palette, True
+        return frames_idx, palette, True, 0.0
 
-    # lossy fallback: fixed 3-3-2 posterization shared by all frames
-    palette = {}
-    frames_idx = []
+    # lossy fallback: same median-cut quantizer as the single-image
+    # encoder (encoder.py), applied once across the pooled colors of
+    # every frame so all frames share one palette — replaces the old
+    # fixed 3-3-2 posterization for the same reason (adapts to the
+    # actual color distribution instead of a fixed grid).
+    n = width * height
+    unique_counts: dict[tuple[int, int, int], int] = {}
     for rgb in rgb_frames:
-        idx = []
-        for i in range(width * height):
-            r, g, b = rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]
-            v = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
-            idx.append(v)
-            if v not in palette:
-                palette[v] = (r, g, b)
-        frames_idx.append(idx)
-    return frames_idx, palette, False
+        for i in range(n):
+            c = (rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2])
+            unique_counts[c] = unique_counts.get(c, 0) + 1
+
+    color_to_index, palette = _median_cut_quantize(unique_counts)
+    frames_idx = [
+        [color_to_index[(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2])] for i in range(n)]
+        for rgb in rgb_frames
+    ]
+
+    total_error = 0.0
+    for color, cnt in unique_counts.items():
+        r, g, b = palette[color_to_index[color]]
+        total_error += cnt * (abs(color[0] - r) + abs(color[1] - g) + abs(color[2] - b)) / 3
+    mean_error = round(total_error / (n * len(rgb_frames)), 2)
+    return frames_idx, palette, False, mean_error
 
 
 def _delta_rects(width: int, height: int, prev: list[int],
@@ -150,7 +162,7 @@ def encode_video(width: int, height: int,
                  rgb_frames: list[bytes]) -> VideoEncodeResult:
     if not rgb_frames:
         raise ValueError("no frames to encode")
-    frames_idx, palette, lossless = _quantize_frames(width, height, rgb_frames)
+    frames_idx, palette, lossless, mean_color_error = _quantize_frames(width, height, rgb_frames)
 
     lines = [f"CANVAS w={width} h={height} bg=0"]
     for i, (r, g, b) in sorted(palette.items()):
@@ -196,6 +208,7 @@ def encode_video(width: int, height: int,
         frame_count=len(frames_idx),
         palette_size=len(palette),
         lossless=lossless,
+        mean_color_error=mean_color_error,
         instruction_count=n_instr,
         delta_pixels_total=delta_total,
     )
