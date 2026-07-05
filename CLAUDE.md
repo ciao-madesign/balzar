@@ -554,12 +554,12 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-134 test, tutti verdi (`python3 -m unittest discover -s tests`):
+140 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
 `test_video.py`, `test_svg.py`, `test_vectorio.py`, `test_sequence.py`,
-`test_explode.py`, `test_webapi.py`. Copertura: round-trip
+`test_explode.py`, `test_webapi.py`, `test_png.py`. Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -572,7 +572,9 @@ troncamento in base ai limiti) più il generatore QR (incluso un
 round-trip reale via ZBar in `test_webapi.py`, skippato se `pyzbar` non
 è installato), e la modalità "file indipendenti" (formati misti,
 isolamento del fallimento per singolo file, sia in `sequence.py` che nel
-suo dispatch in `webapi.py`).
+suo dispatch in `webapi.py`), più il writer PNG con filtri adattivi
+(round-trip pixel-esatto via Pillow e guardia esplicita di
+non-regressione contro il vecchio writer solo-None, `test_png.py`).
 
 ## 3. Numeri misurati (non stimati) fin qui
 
@@ -644,11 +646,33 @@ suo dispatch in `webapi.py`).
    in `video.py` (`_quantize_frames`), che aveva la stessa vecchia
    posterizzazione fissa 3-3-2 per il fallback lossy multi-frame —
    `VideoEncodeResult` guadagna lo stesso campo `mean_color_error`.
-3. **`png.py` non usa filtri di scanline adattivi** (Sub/Up/Paeth): un
-   secondo passaggio DEFLATE sui PNG generati li comprime ulteriormente del
-   ~25-30%. Non è un bug bloccante (i confronti onesti fatti nella
-   conversazione ne hanno tenuto conto), ma un PNG "vero" di libreria
-   sarebbe più piccolo di quello scritto da `balzar.png`.
+3. **`png.py` ora usa filtri di scanline adattivi (Sub/Up/Average/Paeth),
+   non solo None.** Per ogni riga si sceglie il filtro che minimizza la
+   somma dei valori assoluti con segno (l'euristica MSAD standard degli
+   encoder PNG di riferimento). **Non basta da sola**: misurato in
+   sessione che l'euristica per-riga, presa da sola, **peggiora** il
+   contenuto tipico di balzar — `examples/pattern_tile.bzr` (1024×1024,
+   righe ripetute identiche) passava da 30.501 B (solo None) a 43.035 B
+   (+41%) perché filtrare rompe l'identità di byte riga-su-riga che
+   DEFLATE stava sfruttando per trovare match lunghissimi. Fix: `png_bytes`
+   ora comprime **entrambe** le varianti (tutta None, e adattiva per riga)
+   e tiene quella più piccola — mai peggio del vecchio writer per
+   costruzione, con guadagno reale dove i filtri aiutano davvero
+   (contenuto con variazione liscia pixel-su-pixel: un gradiente
+   sintetico 256×256 passa da 186.695 B a 575 B, 325× più piccolo).
+   Numeri reali misurati sul contenuto che balzar genera per davvero:
+   `pattern_tile.bzr` 30.501→30.501 B (0%, vince None), `schema_tecnico`
+   800×600 10.062→9.951 B (−1,1%), `etichetta_bom.bzr` 640×520
+   5.496→5.496 B (0%, vince None) — **il guadagno stimato in precedenza
+   (~25-30%) non si materializza sul contenuto reale di balzar**, fatto
+   quasi tutto di rettangoli/testo a bordi netti dove il filtro None +
+   ripetizione di righe è già quasi ottimale per DEFLATE; il guadagno
+   vero è sui casi limite (gradienti, frattali, contenuto fotografico),
+   non sul caso d'uso principale. Costo: `png_bytes` ora comprime due
+   volte invece di una (~1-2,5s invece di ~0.01-0.1s sulle dimensioni
+   sopra) — accettabile, nessun timeout su CLI/GUI/desktop. Test:
+   `tests/test_png.py` (round-trip pixel-esatto via Pillow, guardia di
+   non-regressione esplicita sul caso che ha regredito).
 4. **Il flusso "capitoli QR" non genera/legge QR reali nel codice**: produce
    testo base64 da incollare in un generatore esterno, e non c'è un comando
    di lettura. L'esperimento di questa sessione (generazione con `qrcode`,
@@ -733,8 +757,9 @@ suo dispatch in `webapi.py`).
    solo lettura) per una porzione più piccola di casi.
 5. **Packaging e distribuzione reale**: build PyInstaller testate su
    Windows/macOS/Linux, eventualmente firma del codice, installer.
-6. **Filtri PNG adattivi** in `png.py` per output competitivo con encoder
-   PNG di libreria (criticità #3) — minore, ma facile.
+6. ~~Filtri PNG adattivi in `png.py`~~ — **fatto** (Sub/Up/Average/Paeth
+   con euristica MSAD + confronto contro None, mai peggio del vecchio
+   writer): vedi criticità §4.3.
 7. **Generazione diretta del QR dal payload** (già in parte coperta dal
    punto 2).
 8. **Pre-rendering di stati UI/HMI finiti** (versione ridimensionata e
@@ -924,10 +949,19 @@ distinta base, applicazione §6.1), numeri reali misurati in sessione:
 | Rappresentazione | Byte | Sta in un QR (limite 2.953 B)? |
 |---|---|---|
 | RGB grezzo (640×520, non compresso) | 998.400 | no (339× oltre) |
-| PNG dello stesso identico contenuto (encoder nostro, non ottimizzato) | 5.496 | **no** (1,9× oltre) |
-| PNG ri-compresso (stima con encoder a filtri adattivi) | 4.617 | **no** (1,6× oltre) |
+| PNG dello stesso identico contenuto (`balzar.png`, **ora** con filtri adattivi, §4.3) | 5.496 | **no** (1,9× oltre) |
 | ZIP del PNG | 4.969 | **no** (1,7× oltre — lo ZIP non trova altro da comprimere, il PNG è già DEFLATE) |
 | **Payload balzar (`.bzp`)** | **559** | **sì**, con margine (usa solo il 19% della capacità) |
+
+Riga aggiornata dopo l'implementazione reale dei filtri adattivi
+(§4.3): il vecchio confronto aveva una riga "PNG ri-compresso (stima con
+encoder a filtri adattivi) — 4.617 B", una stima mai verificata. Con
+`balzar.png` che ora prova davvero Sub/Up/Average/Paeth e sceglie il più
+piccolo, il numero reale misurato su questa immagine è **identico**
+(5.496 B): per questo contenuto specifico (rettangoli/cerchi/testo a
+bordi netti) il filtro None vince comunque, la stima era ottimistica.
+Non cambia la conclusione dell'applicazione (il PNG non entra in un QR
+in ogni caso), ma è il numero vero, non un'ipotesi.
 
 Il punto non è solo "559 è più piccolo di 5.496" (9,8× contro il PNG
 equivalente): è che **il PNG della stessa identica immagine non entra in
@@ -969,7 +1003,7 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 99 test (3 opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 140 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-vector drawing.svg -o f.bzp

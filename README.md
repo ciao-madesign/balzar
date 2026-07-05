@@ -541,8 +541,6 @@ e il formato è interpretabile come regole discrete.
   come utile ma non prioritario ora;
 - rilevamento di linee/cerchi (Hough) sul raster, per contenuto senza
   sorgente vettoriale disponibile (screenshot, scansioni);
-- filtri PNG adattivi in `png.py` per output competitivo con encoder PNG
-  di libreria;
 - scene 3D descritte con lo stesso modello (stato + trasformazioni) — il
   candidato più lontano: servirebbe sia un parser CAD reale (es. STEP) sia
   primitive 3D nel DSL, nessuna delle due esiste oggi (dettagli in
