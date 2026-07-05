@@ -557,6 +557,41 @@ handler e un test di ordine/isolamento su un batch "indipendente" da 3
 file con quello centrale corrotto (`tests/test_webapi.py`, ora 155 test
 totali).
 
+**Audit esteso a tutta la superficie (CLI/GUI/qr.py), stessa sessione,
+per "finire tutti gli audit" richiesto esplicitamente**: verificato ogni
+altro punto d'ingresso dello stesso tipo di errore (crash non gestito
+invece di messaggio onesto). Risultato onesto, non uniforme — un solo
+altro problema reale, di copertura non di codice:
+- **`balzar/cli.py` (574 righe, l'interfaccia principale del progetto)
+  non aveva `tests/test_cli.py` — zero copertura automatica**, solo
+  verifica manuale per sessione. Il codice stesso si è rivelato già
+  robusto: `main()` cattura un singolo `except (ValueError, SyntaxError,
+  OSError)` attorno a `args.func(args)`, e **tutte** le eccezioni
+  custom del progetto (`PayloadError`, `VectorIngestError`,
+  `SequenceError`, `ExplodeError`) sono già sottoclassi di `ValueError`
+  — quindi ogni comando arriva già a un `errore: ...` pulito e
+  `exit code 1`, mai un traceback grezzo, senza bisogno di alcun fix.
+  Aggiunto `tests/test_cli.py` (20 test): round-trip di ognuno degli 11
+  sottocomandi (`render`/`encode`/`encode-image`/`encode-vector`/
+  `encode-video`/`encode-sequence` nei due modi/`explode-vector`/
+  `decode`/`info`/`chunks`+`--qr`/`scan`/`assemble`), più verifica
+  esplicita che input mancante/non valido produca `errore:` e mai
+  `Traceback` nello stderr.
+- **`balzar/gui.py`**: già corretto. I due worker thread (`_worker`,
+  `_scan_worker`) catturano `Exception` in modo ampio e deliberato e
+  instradano il messaggio a `messagebox.showerror` via una coda
+  thread-safe — nessun crash silenzioso, nessun hang. Non modificato.
+- **`balzar/qr.py`**: già corretto, nessuna eccezione non gestita nei
+  suoi 95 righe; gli errori che può sollevare (`ValueError`/
+  `PayloadError`/eccezioni PIL/pyzbar) sono già intercettati a monte da
+  CLI (`main()`) o GUI (worker `except Exception`).
+
+Con questo, i quattro livelli della pila (motore -> encoder -> CLI/GUI
+-> demo web) hanno tutti una copertura di test esplicita sul
+comportamento in caso di errore, non solo sul percorso di successo —
+non solo "funziona", ma "fallisce onestamente quando deve fallire".
+Test totali: 175.
+
 Vercel impone limiti reali (~3,3MB upload utile, ~4,5MB risposta, timeout)
 gestiti esplicitamente con messaggi chiari invece di errori criptici —
 vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
@@ -590,12 +625,13 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-155 test, tutti verdi (`python3 -m unittest discover -s tests`):
+175 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
 `test_video.py`, `test_svg.py`, `test_vectorio.py`, `test_sequence.py`,
-`test_explode.py`, `test_webapi.py`, `test_png.py`. Copertura: round-trip
+`test_explode.py`, `test_webapi.py`, `test_png.py`, `test_cli.py`
+(quest'ultimo prima assente — vedi audit sotto). Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -1044,7 +1080,7 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 155 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 175 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-vector drawing.svg -o f.bzp
