@@ -521,6 +521,42 @@ in `app.js`, e resa `handle_encode_sequence` robusta anche lato server
 immagine. Nessuna delle due funzioni nuove crasha più su input scorretto,
 entrambe rispondono 400 con un messaggio chiaro.
 
+**Due bug reali trovati e corretti in una sessione di irrobustimento
+mirata a "perfezionare i flussi di compressione e ri-espansione"**:
+1. **Ogni `base64.b64decode()` in `webapi.py` era sguarnito** (7 punti,
+   su tutti e sei gli handler): un base64 malformato (padding errato,
+   caso limite ma reale — upload troncato, bug del client) faceva
+   crashare con un 500 non gestito invece del 400 onesto che il resto
+   del codice applica ovunque. Riprodotto e verificato prima del fix:
+   `handle_render({"data": "not-valid-base64!!!"}, ...)` sollevava
+   `binascii.Error: Incorrect padding` fino in cima. Fix: helper
+   condiviso `_b64decode()` che cattura l'errore e lo trasforma in un
+   400 con messaggio chiaro, usato da tutti e sette i punti di chiamata.
+   In modalità "file indipendenti" il fix è più di una semplice guardia:
+   il decode avviene ora *prima* di scrivere il file su disco e *prima*
+   di chiamare `encode_independent`, con un file dal base64 corrotto
+   registrato come proprio item fallito (stesso principio di isolamento
+   guasto già documentato sopra) invece di far fallire l'intera
+   richiesta — altrimenti un solo file corrotto in un batch avrebbe
+   vanificato esattamente la garanzia di isolamento che questa modalità
+   promette.
+2. **`handle_encode` (tab 1, "Comprimi immagine" — il flusso più
+   vecchio della demo) non catturava affatto gli errori di decodifica
+   immagine**, a differenza del suo gemello `handle_encode_video` che
+   già cattura `OSError`. Un file non-immagine caricato su quel tab
+   crashava con `PIL.UnidentifiedImageError` (sottoclasse di `OSError`)
+   non gestita. Trovato scrivendo un test di regressione per
+   `handle_encode` (che non aveva **nessuna** copertura in
+   `test_webapi.py` prima di questa sessione, né lui né `handle_render`)
+   e osservandolo fallire subito. Fix: stesso pattern `try/except
+   OSError` già usato da `handle_encode_video`.
+
+Test aggiunti: `TestHandleEncode` e `TestHandleRender` (prima assenti
+del tutto), più un test di base64 malformato per ciascuno dei sei
+handler e un test di ordine/isolamento su un batch "indipendente" da 3
+file con quello centrale corrotto (`tests/test_webapi.py`, ora 155 test
+totali).
+
 Vercel impone limiti reali (~3,3MB upload utile, ~4,5MB risposta, timeout)
 gestiti esplicitamente con messaggi chiari invece di errori criptici —
 vedi `MAX_PREVIEW_DIM`, `MAX_PROGRAM_CHARS`, `MAX_PAYLOAD_B64_BYTES` in
@@ -554,7 +590,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-140 test, tutti verdi (`python3 -m unittest discover -s tests`):
+155 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -566,15 +602,20 @@ encoder lossless su contenuto strutturato e onesto su rumore, video delta
 vs flipbook, capitoli in ordine sparso/mancanti/corrotti, sequenze
 vettoriali/raster multi-file, esploso automatico per layer, curve SPLINE
 DXF (campionamento B-spline/NURBS, entità con nodi/gradi incoerenti o
-solo fit-point scartate senza crash), i quattro flussi della demo web
-(successo, errori onesti invece di crash,
-troncamento in base ai limiti) più il generatore QR (incluso un
-round-trip reale via ZBar in `test_webapi.py`, skippato se `pyzbar` non
-è installato), e la modalità "file indipendenti" (formati misti,
-isolamento del fallimento per singolo file, sia in `sequence.py` che nel
-suo dispatch in `webapi.py`), più il writer PNG con filtri adattivi
-(round-trip pixel-esatto via Pillow e guardia esplicita di
-non-regressione contro il vecchio writer solo-None, `test_png.py`).
+solo fit-point scartate senza crash), tutti e cinque i flussi della demo
+web incluso il tab 1 "Comprimi immagine" e il tab 5 "Apri programma"
+(prima privi di copertura in `test_webapi.py` — vedi il bug reale
+trovato proprio scrivendola, sopra) — successo, errori onesti invece di
+crash (incluso base64 malformato su tutti e sei gli handler), troncamento
+in base ai limiti — più il generatore QR (incluso un round-trip reale
+via ZBar in `test_webapi.py`, skippato se `pyzbar` non è installato), e
+la modalità "file indipendenti" (formati misti, isolamento del
+fallimento per singolo file incluso un base64 corrotto, con verifica che
+l'ordine dei file superstiti nella risposta resti quello originale, sia
+in `sequence.py` che nel suo dispatch in `webapi.py`), più il writer PNG
+con filtri adattivi (round-trip pixel-esatto via Pillow e guardia
+esplicita di non-regressione contro il vecchio writer solo-None,
+`test_png.py`).
 
 ## 3. Numeri misurati (non stimati) fin qui
 
@@ -1003,7 +1044,7 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
 ## 9. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 140 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 155 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-vector drawing.svg -o f.bzp

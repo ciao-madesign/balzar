@@ -8,8 +8,9 @@ import os
 import tempfile
 import unittest
 
-from balzar.webapi import (LOCAL_LIMITS, Limits, handle_encode_sequence,
-                           handle_encode_vector, handle_encode_video, handle_qr)
+from balzar.webapi import (LOCAL_LIMITS, Limits, handle_encode,
+                           handle_encode_sequence, handle_encode_vector,
+                           handle_encode_video, handle_qr, handle_render)
 
 SVG_FLANGE = """<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
   <circle cx="100" cy="100" r="80" fill="none" stroke="#000000"/>
@@ -76,6 +77,87 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
+def _make_png(w=40, h=30):
+    from PIL import Image
+    img = Image.new("RGB", (w, h), (255, 255, 255))
+    for x in range(5, 15):
+        for y in range(5, 15):
+            img.putpixel((x, y), (200, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+class TestHandleEncode(unittest.TestCase):
+    """The 'Comprimi immagine' tab (tab 1) — first-frame-only raster
+    encoder, previously untested at the webapi layer."""
+
+    def test_success(self):
+        status, resp = handle_encode({"data": _b64(_make_png()), "max_dim": 200}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertIn("mean_color_error", resp)
+
+    def test_missing_data(self):
+        status, resp = handle_encode({}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+
+    def test_malformed_base64_gives_clean_400_not_500(self):
+        status, resp = handle_encode({"data": "not-valid-base64!!!"}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_non_image_gives_clean_400_not_500(self):
+        status, resp = handle_encode({"data": _b64(b"not an image")}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+
+class TestHandleRender(unittest.TestCase):
+    """The 'Apri programma (.bzr/.bzp)' tab (tab 5) — previously untested
+    at the webapi layer despite being one of the five demo flows."""
+
+    def _payload(self):
+        from balzar.payload import encode_payload
+        return encode_payload("CANVAS w=4 h=4 bg=0\nPALETTE i=1 rgb=#FF0000\n"
+                              "RECT x=0 y=0 w=2 h=2 color=1 fill=1\n")
+
+    def test_success_with_bzp_payload(self):
+        status, resp = handle_render({"data": _b64(self._payload())}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertEqual((resp["width"], resp["height"]), (4, 4))
+        self.assertIn("payload_base64", resp)
+
+    def test_success_with_bzr_source_text(self):
+        program = "CANVAS w=3 h=3 bg=0\n"
+        status, resp = handle_render({"data": _b64(program.encode("utf-8"))}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertEqual((resp["width"], resp["height"]), (3, 3))
+
+    def test_missing_data(self):
+        status, resp = handle_render({}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+
+    def test_malformed_base64_gives_clean_400_not_500(self):
+        status, resp = handle_render({"data": "not-valid-base64!!!"}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_corrupt_payload_magic_gives_clean_400_not_500(self):
+        garbage = _b64(b"\xff\xfe\xfd not a program and not utf-8 \x00")
+        status, resp = handle_render({"data": garbage}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_invalid_program_text_gives_clean_400_not_500(self):
+        status, resp = handle_render({"data": _b64(b"THIS IS NOT A VALID BALZAR PROGRAM")},
+                                     LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+
 class TestHandleEncodeVector(unittest.TestCase):
     def test_svg_success(self):
         status, resp = handle_encode_vector(
@@ -108,6 +190,12 @@ class TestHandleEncodeVector(unittest.TestCase):
     def test_invalid_svg_gives_clean_400_not_500(self):
         status, resp = handle_encode_vector(
             {"data": _b64(b"<svg><circle cx=oops></svg>"), "filename": "bad.svg"}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_malformed_base64_gives_clean_400_not_500(self):
+        status, resp = handle_encode_vector(
+            {"data": "not-valid-base64!!!", "filename": "flange.svg"}, LOCAL_LIMITS)
         self.assertEqual(status, 400)
         self.assertFalse(resp["ok"])
 
@@ -165,6 +253,11 @@ class TestHandleEncodeVideo(unittest.TestCase):
 
     def test_non_image_gives_clean_400_not_500(self):
         status, resp = handle_encode_video({"data": _b64(b"not an image")}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_malformed_base64_gives_clean_400_not_500(self):
+        status, resp = handle_encode_video({"data": "not-valid-base64!!!"}, LOCAL_LIMITS)
         self.assertEqual(status, 400)
         self.assertFalse(resp["ok"])
 
@@ -233,6 +326,13 @@ class TestHandleEncodeSequence(unittest.TestCase):
         status, resp = handle_encode_sequence({"files": files}, LOCAL_LIMITS)
         self.assertEqual(status, 400)
 
+    def test_malformed_base64_gives_clean_400_not_500(self):
+        files = [{"filename": "a.dxf", "data": _b64(DXF_FLANGE.encode())},
+                {"filename": "b.dxf", "data": "not-valid-base64!!!"}]
+        status, resp = handle_encode_sequence({"files": files}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
 
 class TestHandleEncodeIndependent(unittest.TestCase):
     """mode='independent' dispatch inside handle_encode_sequence: no
@@ -268,6 +368,25 @@ class TestHandleEncodeIndependent(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(resp["file_count"], 1)
 
+    def test_malformed_base64_isolated_not_500_and_order_preserved(self):
+        """A corrupt base64 blob for one file must not crash the whole
+        batch (the same fault-isolation guarantee as a parseable-but-
+        broken file), and the surviving files must keep their original
+        position in the response."""
+        files = [{"filename": "a.dxf", "data": _b64(DXF_FLANGE.encode())},
+                {"filename": "bad.svg", "data": "not-valid-base64!!!"},
+                {"filename": "c.dxf", "data": _b64(DXF_STEP2.encode())}]
+        status, resp = handle_encode_sequence(
+            {"files": files, "mode": "independent"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["file_count"], 3)
+        self.assertEqual(resp["success_count"], 2)
+        self.assertEqual([it["filename"] for it in resp["items"]], ["a.dxf", "bad.svg", "c.dxf"])
+        self.assertTrue(resp["items"][0]["ok"])
+        self.assertFalse(resp["items"][1]["ok"])
+        self.assertIn("error", resp["items"][1])
+        self.assertTrue(resp["items"][2]["ok"])
+
     def test_empty_files_rejected(self):
         status, resp = handle_encode_sequence(
             {"files": [], "mode": "independent"}, LOCAL_LIMITS)
@@ -290,6 +409,15 @@ class TestHandleQr(unittest.TestCase):
 
     def test_missing_payload(self):
         status, resp = handle_qr({}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_malformed_base64_gives_clean_400_not_500(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        status, resp = handle_qr({"payload_base64": "not-valid-base64!!!"}, LOCAL_LIMITS)
         self.assertEqual(status, 400)
         self.assertFalse(resp["ok"])
 

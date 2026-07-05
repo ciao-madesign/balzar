@@ -47,6 +47,19 @@ LOCAL_LIMITS = Limits(
 )
 
 
+def _b64decode(data) -> bytes:
+    """Decode client-supplied base64, honestly: malformed input (bad
+    padding/characters, wrong type) becomes a plain ValueError the
+    caller turns into a 400 — never an unhandled 500. base64.b64decode
+    raises binascii.Error (a ValueError subclass) on bad padding and
+    TypeError on a non-string/bytes input; both are real client-input
+    mistakes, not internal bugs."""
+    try:
+        return base64.b64decode(data, validate=False)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"base64 non valido: {exc}") from None
+
+
 def limits_info(limits: Limits) -> dict:
     """Payload for GET /api/encode: lets the frontend adapt its UI."""
     return {
@@ -65,14 +78,20 @@ def handle_encode(body: dict, limits: Limits) -> tuple[int, dict]:
     if not data_b64:
         return 400, {"ok": False, "error": "campo 'data' mancante"}
     max_dim = max(16, min(int(body.get("max_dim", 300)), limits.max_analysis_dim))
-    image_bytes = base64.b64decode(data_b64)
+    try:
+        image_bytes = _b64decode(data_b64)
+    except ValueError as exc:
+        return 400, {"ok": False, "error": str(exc)}
 
     from .encoder import encode_image
     from .imageio import load_rgb
     from .interpreter import render as render_program
     from .payload import fits_in_qr, to_base64
 
-    w, h, rgb = load_rgb(image_bytes, max_dim=max_dim)
+    try:
+        w, h, rgb = load_rgb(image_bytes, max_dim=max_dim)
+    except OSError as exc:
+        return 400, {"ok": False, "error": f"file non riconosciuto come immagine: {exc}"}
     result = encode_image(w, h, rgb)
 
     # the preview really is the program's output, re-rendered by the
@@ -166,7 +185,10 @@ def handle_encode_vector(body: dict, limits: Limits) -> tuple[int, dict]:
         return 400, {"ok": False, "error": "estensione non riconosciuta: atteso .svg o .dxf"}
 
     max_dim = max(16, min(int(body.get("max_dim", 800)), limits.max_analysis_dim))
-    raw = base64.b64decode(data_b64)
+    try:
+        raw = _b64decode(data_b64)
+    except ValueError as exc:
+        return 400, {"ok": False, "error": str(exc)}
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -251,7 +273,10 @@ def handle_encode_video(body: dict, limits: Limits) -> tuple[int, dict]:
     if not data_b64:
         return 400, {"ok": False, "error": "campo 'data' mancante"}
     max_dim = max(16, min(int(body.get("max_dim", 300)), limits.max_analysis_dim))
-    image_bytes = base64.b64decode(data_b64)
+    try:
+        image_bytes = _b64decode(data_b64)
+    except ValueError as exc:
+        return 400, {"ok": False, "error": str(exc)}
 
     from .imageio import load_frames
 
@@ -356,9 +381,13 @@ def handle_encode_sequence(body: dict, limits: Limits) -> tuple[int, dict]:
             data = f.get("data")
             if not data:
                 return 400, {"ok": False, "error": f"file #{i + 1} ('{name}') senza contenuto"}
+            try:
+                raw = _b64decode(data)
+            except ValueError as exc:
+                return 400, {"ok": False, "error": f"file #{i + 1} ('{name}'): {exc}"}
             path = os.path.join(td, f"{i:03d}_{os.path.basename(name)}")
             with open(path, "wb") as fh:
-                fh.write(base64.b64decode(data))
+                fh.write(raw)
             paths.append(path)
 
         try:
@@ -412,7 +441,10 @@ def handle_encode_independent(files: list, max_dim: int, limits: Limits) -> tupl
     canvas, no delta, no format restriction (a batch can freely mix
     .svg/.dxf/raster). A broken file is reported as its own failed entry,
     not a 400 for the whole request: that fault isolation is the point of
-    this mode versus the sequence/video paths above."""
+    this mode versus the sequence/video paths above — it must hold even
+    when the file's own upload data (base64) is corrupt, not only when
+    its content fails to parse, so a bad base64 blob never reaches
+    encode_independent at all: it becomes its own failed item directly."""
     if not files:
         return 400, {"ok": False, "error": "campo 'files' vuoto"}
 
@@ -422,23 +454,34 @@ def handle_encode_independent(files: list, max_dim: int, limits: Limits) -> tupl
     from .sequence import encode_independent
 
     with tempfile.TemporaryDirectory() as td:
-        paths = []
-        original_names = []
+        names = [f.get("filename") or f"file{i}" for i, f in enumerate(files)]
+        path_by_index: dict[int, str] = {}
+        early_errors: dict[int, str] = {}
         for i, f in enumerate(files):
-            name = f.get("filename") or f"file{i}"
             data = f.get("data")
             if not data:
-                return 400, {"ok": False, "error": f"file #{i + 1} ('{name}') senza contenuto"}
-            path = os.path.join(td, f"{i:03d}_{os.path.basename(name)}")
+                return 400, {"ok": False, "error": f"file #{i + 1} ('{names[i]}') senza contenuto"}
+            try:
+                raw = _b64decode(data)
+            except ValueError as exc:
+                early_errors[i] = str(exc)
+                continue
+            path = os.path.join(td, f"{i:03d}_{os.path.basename(names[i])}")
             with open(path, "wb") as fh:
-                fh.write(base64.b64decode(data))
-            paths.append(path)
-            original_names.append(name)
+                fh.write(raw)
+            path_by_index[i] = path
 
-        results = encode_independent(paths, max_dim=max_dim)
+        ordered_indices = sorted(path_by_index)
+        results = (encode_independent([path_by_index[i] for i in ordered_indices], max_dim=max_dim)
+                  if ordered_indices else [])
+        result_by_index = dict(zip(ordered_indices, results))
 
         items = []
-        for name, result in zip(original_names, results):
+        for i, name in enumerate(names):
+            if i in early_errors:
+                items.append({"ok": False, "filename": name, "error": early_errors[i]})
+                continue
+            result = result_by_index[i]
             if not result.ok:
                 items.append({"ok": False, "filename": name, "error": result.error})
                 continue
@@ -503,7 +546,10 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
     from .payload import fits_in_qr
     from .qr import payload_to_qr_image
 
-    payload = base64.b64decode(payload_b64)
+    try:
+        payload = _b64decode(payload_b64)
+    except ValueError as exc:
+        return 400, {"ok": False, "error": str(exc)}
     if len(base64.b64encode(payload)) > limits.max_payload_b64_bytes:
         return 400, {"ok": False, "error": "payload troppo grande per generare un QR qui"}
 
@@ -532,7 +578,10 @@ def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
 
     from .payload import MAGIC, PayloadError, decode_payload
 
-    raw = base64.b64decode(data_b64)
+    try:
+        raw = _b64decode(data_b64)
+    except ValueError as exc:
+        return 400, {"ok": False, "error": str(exc)}
     try:
         program_text = decode_payload(raw) if raw[:4] == MAGIC else raw.decode("utf-8")
     except (PayloadError, UnicodeDecodeError) as exc:
