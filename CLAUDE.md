@@ -1077,7 +1077,142 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
   aperto. È la differenza tra "un file audio compresso" e "uno spartito":
   lo spartito non contiene il suono, contiene le istruzioni per produrlo.
 
-## 9. Comandi utili per riprendere il lavoro
+## 9. 3D parametrico — scoping in corso (nessun codice scritto ancora)
+
+Estensione del progetto discussa ma non ancora implementata: codifica/
+decodifica di file 3D parametrici pesanti (assiemi CAD), con lo stesso
+principio del resto di balzar (deduplicazione strutturale + descrizione
+generativa) e lo stesso supporto fisico QR già esistente. Quanto segue è
+il risultato di un'analisi approfondita su file reali forniti dall'utente
+in sessione — non teoria, misure vere — ma **zero righe di codice
+scritte finora** per questa parte: è tutto scoping.
+
+### 9.1 Perché non STEP, non `.smg` — il formato giusto è 3DXML
+
+Analizzato un file `.smg` reale (67.000 KB di STEP originale, esportato
+come `.smg` da SOLIDWORKS Composer/Seemage): contenitore ZIP con prefisso
+"SMG", XML dell'assembly (`product.smgXml`) + geometria tassellata in un
+blob binario gzippato proprietario (`product.smgGeom`, float32 grezzi,
+comprime solo ~2,4× con deflate perché è già binario denso). Trovato
+845 posizionamenti di parti ma solo 143 geometrie uniche (`IdentGeom`
+condiviso) — conferma che l'instancing è già presente nel formato
+sorgente, ma il blob geometrico è binario proprietario da reverse-
+engineerare.
+
+Confrontato con lo stesso assembly esportato in **3DXML** (formato
+Dassault pubblicato, non proprietario-binario): nettamente superiore per
+i nostri scopi —
+- schema documentato, XML puro (anche la geometria: `<Positions>`/
+  `<Normals>`/`<Faces strips="...">` sono testo ASCII, non binario —
+  nessun reverse-engineering necessario, un parser XML + `float()` basta;
+- **geometria esternalizzata per forma unica** in file `.3DRep` separati,
+  referenziati per nome (`associatedFile="urn:3DXML:<hash>.3DRep"`) — la
+  deduplicazione è già la struttura del formato, non va rilevata a
+  posteriori;
+- albero annidato vero (`Reference3D`/`Instance3D` con
+  `IsAggregatedBy`/`IsInstanceOf` + `RelativeMatrix`, un trasformo affine
+  3×4 completo, gestisce anche gli specchiati — trovato un determinante
+  −1 reale nel file) — un sotto-assieme ripetuto moltiplica automaticamente
+  tutto ciò che contiene, esattamente come una chiamata a funzione/loop nel
+  codice, non un elenco piatto da enumerare.
+
+**Verificato dall'utente esplicitamente**: il file di test (staffe, viti,
+barre, lamiere, poche superfici curve — un rack di acciaio) è
+rappresentativo della tipologia di forme reale con cui si lavorerebbe
+(con più oggetti del normale, ma la "forma" delle geometrie è quella
+giusta), non un caso peggiore scelto per prudenza.
+
+### 9.2 Numeri reali misurati sul file di test (non stimati)
+
+Percorrendo davvero l'albero 3862 `Instance3D` fino alle foglie con
+geometria:
+
+| Metrica | Valore |
+|---|---|
+| Posizionamenti-foglia (con moltiplicità da annidamento) | 1.623 |
+| Geometrie uniche (`*.3DRep`) | 78 |
+| Rapporto di instancing | ~20,8× |
+| Colori distinti (uno per forma, non per vertice) | 3 |
+| Vertici totali (nelle 78 forme uniche) | 75.752 |
+| Voci di indice nelle strisce di triangoli | 107.041 |
+| Trasformi-foglia allineati agli assi (rotazione solo 0/±1) | 1.623/1.623 (100%) |
+
+**Guadagno di deduplicazione** (pesato per uso reale di ogni forma, non
+una media semplice): flattening ingenuo (una copia di geometria per
+posizionamento, quello che daresti per scontato con un OBJ/STL unico)
+130.711.307 B raw / 21.620.221 B compressi vs deduplicazione reale
+(78 forme uniche + trasformi) 4.905.126 B raw / 672.722 B compressi —
+**26,6× raw, 32,1× compresso**, prima di qualunque ricodifica binaria.
+
+**Ricodifica binaria** (posizioni float32 senza normali per vertice —
+si ricalcolano come flat-shading dalla faccia a rendering, scelta
+dichiarata non nascosta — indici uint16, header per forma):
+geometria 438.830 B + istanze 908 B = **439.738 B** dopo deflate.
+Con quantizzazione int16 per-forma (~0,03 mm di precisione, dentro
+tolleranza CAD tipica): geometria 389.923 B + istanze 908 B =
+**390.831 B** — guadagno reale ma modesto dalla quantizzazione (~11%,
+deflate su float32 IEEE-754 lascia poco sul tavolo).
+
+A 2.194 B/QR (capacità già usata da `balzar/qr.py`): **178-201 QR code**
+a seconda della variante.
+
+### 9.3 Benchmark reali: decodifica QR e pipeline software
+
+Generata una griglia 4×4 vera (16 QR) con `balzar/qr.py` e cronometrata
+la decodifica con la stessa libreria che balzar già usa (pyzbar/ZBar), a
+diverse risoluzioni — risultato controintuitivo: **risoluzione massima
+non è né più veloce né più affidabile**.
+
+| Larghezza immagine | QR decodificati | Tempo |
+|---|---|---|
+| 4704 px (piena, default `balzar/qr.py`) | 16/16 | 4,2 s (**più lento** del budget EPD ipotizzato) |
+| 1700–2400 px | 16/16 | 0,26–0,48 s |
+| ≤1600 px | 14/16 o 0/16 (fallisce) | — |
+
+Oltre una soglia, più pixel aggiungono solo tempo di scansione ZBar senza
+guadagno di affidabilità — la griglia va renderizzata nella fascia
+1700-2400px, non alla risoluzione più alta possibile "per sicurezza".
+
+Pipeline software misurata sul payload quantizzato reale (178 capitoli):
+`chunk_payload` 0,29 ms, `assemble_chunks` 0,46 ms, `zlib.decompress`
+3,92 ms, parsing delle 78 forme da struct binari 5,35 ms — **tutte e
+quattro insieme sotto i 10 ms**, rumore statistico rispetto alla
+scansione.
+
+**Tempo totale stimato** (scansione di 15 frame a griglia 4×4 con un
+supporto LCD economico invece di EPD — l'idea di un display che
+riproduce una sequenza di QR nel tempo, non solo nello spazio di una
+griglia singola, resta valida e discussa in sessione — + decodifica +
+assemblaggio + decompressione + parsing, **esclusa** l'acquisizione
+fisica reale — motion/focus/fotocamera non misurabili in questo
+ambiente): **~4-7 secondi**, di cui il 99%+ speso nella sola
+scansione+decodifica dei 15 frame. Il render finale (~2,94 milioni di
+triangoli-istanza da disegnare, contando ogni posizionamento non solo le
+78 forme uniche) **non è misurabile** — balzar non ha ancora un motore
+di rendering 3D — ma qualunque GPU degli ultimi 10 anni gestisce quel
+carico in tempo reale (aspettativa basata su capacità hardware tipiche,
+dichiarata esplicitamente come stima e non come misura, a differenza dei
+numeri sopra).
+
+**Obiettivo di prodotto fissato in sessione**: tempo totale tra
+scansione e visualizzazione del render **sotto i 6-7 secondi**. Se il
+numero reale (una volta costruita la pipeline vera) lo sfora, la prima
+leva di ottimizzazione è la **decodifica in pipeline invece che
+sequenziale** (decodificare il frame N mentre il display mostra già il
+frame N+1, invece di scansionare tutti i 15 frame e poi decodificarli in
+serie) — non prima ottimizzazione tentata finché non risulta necessaria.
+
+### 9.4 Stato: da decidere ancora
+
+Non ancora deciso (prossimo passo di ragionamento, non ancora scritto):
+cosa esattamente balzar riceve in input (3DXML confermato come formato
+sorgente migliore, ma va scritto il parser) e cosa produce in output
+(nuove istruzioni DSL tipo `MESH3D`/`PLACE3D`? Un formato payload
+parallelo a `BZR1`? Che tipo di self-check sostituisce il render-e-
+confronta-pixel del motore 2D, dato che non c'è un rasterizzatore 3D?).
+Nessun modulo `balzar/scene3d.py` o simile esiste ancora.
+
+## 10. Comandi utili per riprendere il lavoro
 
 ```bash
 python3 -m unittest discover -s tests        # 175 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
