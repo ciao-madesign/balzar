@@ -54,5 +54,116 @@ class TestQRCarrier(unittest.TestCase):
             scan_image_bytes(buf.getvalue())
 
 
+def _big_payload(n_lines=28000):
+    lines = ["CANVAS w=64 h=64 bg=0"]
+    for i in range(n_lines):
+        lines.append(f"SETPIX x={i % 64} y={(i * 7) % 64} color={i % 251}")
+    return encode_payload("\n".join(lines))
+
+
+@unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
+class TestQRFrameSequence(unittest.TestCase):
+    def test_small_payload_is_a_single_frame_no_label(self):
+        from balzar.qr import payload_to_qr_frames
+        payload = encode_payload("CANVAS w=32 h=32 bg=0\nFILL region=FULL color=3")
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertEqual(len(frames), 1)
+
+    def test_grid_dim_caps_codes_per_frame(self):
+        from balzar.qr import CHUNK_RAW_BYTES, payload_to_qr_frames
+        payload = _big_payload()
+        chunk_count = -(-len(payload) // CHUNK_RAW_BYTES)  # rough lower bound
+        self.assertGreater(chunk_count, 16)
+
+        frames_4 = payload_to_qr_frames(payload, grid_dim=4)
+        frames_8 = payload_to_qr_frames(payload, grid_dim=8)
+        # a tighter cap can only mean the same or more frames, never fewer
+        self.assertGreaterEqual(len(frames_4), len(frames_8))
+        self.assertGreater(len(frames_4), 1)
+
+    def test_frame_sequence_roundtrips_via_live_scanner(self):
+        from balzar.qr import LiveScanner, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertGreater(len(frames), 1)
+
+        scanner = LiveScanner()
+        done = False
+        for frame in frames:
+            buf = io.BytesIO()
+            frame.save(buf, format="PNG")
+            done, missing = scanner.add(buf.getvalue())
+        self.assertTrue(done)
+        self.assertEqual(scanner.result(), payload)
+
+    def test_live_scanner_accepts_frames_out_of_order_and_repeated(self):
+        from balzar.qr import LiveScanner, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertGreater(len(frames), 2)
+
+        order = list(reversed(frames)) + [frames[0]]  # reversed, plus a repeat
+        scanner = LiveScanner()
+        for frame in order:
+            buf = io.BytesIO()
+            frame.save(buf, format="PNG")
+            scanner.add(buf.getvalue())
+        self.assertEqual(scanner.result(), payload)
+
+    def test_live_scanner_reports_missing_chunks_before_done(self):
+        from balzar.qr import LiveScanner, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertGreater(len(frames), 1)
+
+        scanner = LiveScanner()
+        buf = io.BytesIO()
+        frames[0].save(buf, format="PNG")
+        done, missing = scanner.add(buf.getvalue())
+        self.assertFalse(done)
+        self.assertTrue(missing)
+        with self.assertRaises(ValueError):
+            scanner.result()
+
+    def test_gif_bundle_roundtrips_through_live_scanner(self):
+        from balzar.qr import (LiveScanner, frames_to_gif, gif_to_frames,
+                               payload_to_qr_frames)
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertGreater(len(frames), 1)
+
+        gif_bytes = frames_to_gif(frames, duration_ms=200)
+        replayed = gif_to_frames(gif_bytes)
+        self.assertEqual(len(replayed), len(frames))
+
+        scanner = LiveScanner()
+        for frame in replayed:
+            buf = io.BytesIO()
+            frame.save(buf, format="PNG")
+            scanner.add(buf.getvalue())
+        self.assertEqual(scanner.result(), payload)
+
+    def test_file_bundle_roundtrips_through_live_scanner(self):
+        import shutil
+        import tempfile
+
+        from balzar.qr import LiveScanner, frames_to_files, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertGreater(len(frames), 1)
+
+        out_dir = tempfile.mkdtemp()
+        try:
+            paths = frames_to_files(frames, out_dir)
+            self.assertEqual(len(paths), len(frames))
+            scanner = LiveScanner()
+            for path in paths:
+                with open(path, "rb") as fh:
+                    scanner.add(fh.read())
+            self.assertEqual(scanner.result(), payload)
+        finally:
+            shutil.rmtree(out_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

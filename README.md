@@ -158,6 +158,22 @@ il supporto fisico di un contenuto che viene
 rigenerato, non letto: il volume informativo del supporto è il volume
 dell'output generato, non dei byte stampati.
 
+**Sequenze multi-frame** (`payload_to_qr_frames`/`frames_to_gif`/
+`frames_to_files`/`LiveScanner` in `balzar/qr.py`, non ancora esposte in
+CLI/GUI): un tetto esplicito di QR per frame (`grid_dim`, default 4→16)
+invece della griglia unica illimitata sopra, per restare leggibile a
+dimensione fisica fissa — payload grandi diventano una **sequenza** di
+griglie, bundlabile come GIF animata (schermo che cicla i frame da solo,
+senza perdita per contenuto bianco/nero) o come PNG separati (stampa).
+`LiveScanner` accumula i capitoli su più foto nel tempo, in qualsiasi
+ordine, tollerando ripetizioni. Benchmark reale su una griglia 8×8 (64
+QR): affidabile solo in una finestra stretta attorno alla stessa
+risoluzione già nota come "lenta, senza guadagno" per il 4×4, con un
+tempo di decodifica per frame ~15-18× peggiore a parità di codice —
+`grid_dim=4` resta il default consigliato, un payload grande accetta
+più frame invece di frame più densi (dettagli e numeri in `CLAUDE.md`
+§2.4b).
+
 ## Il linguaggio (DSL)
 
 Un'istruzione per riga, argomenti `chiave=valore`; parentesi e virgole sono
@@ -483,7 +499,9 @@ balzar/
   encoder.py      encoder automatico immagine -> DSL (best-effort)
   video.py        encoder sequenze di frame (delta tra frame, sez. 4.3)
   imageio.py      lettura immagini/GIF animate (unico modulo con Pillow)
-  qr.py           payload <-> immagine QR (singola o griglia), lettura ZBar
+  qr.py           payload <-> immagine QR (singola, griglia, o sequenza
+                  multi-frame GIF/PNG); lettura ZBar (foto singola o
+                  accumulo live su più foto, LiveScanner)
   gui.py          applicazione desktop (Tkinter)
   sequence.py     sequenze multi-file (vettoriali dedup, raster delta)
   explode.py      esploso automatico per layer/gruppo (CAD/SVG)

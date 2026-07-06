@@ -172,6 +172,129 @@ Due dettagli tecnici emersi costruendolo, da ricordare:
   codici. **ZBar (`pyzbar`) li legge tutti**: usare quello, non il
   detector nativo di OpenCV.
 
+### 2.4b Sequenze multi-frame di QR: meccanismo, bundle, lettura live
+
+Domanda diretta di sessione: `payload_to_qr_image` mette **tutti** i
+capitoli in un'unica griglia auto-dimensionata (`cols = ceil(sqrt(n))`,
+nessun tetto) — per il payload 3D reale (178 capitoli) diventa una
+griglia 14×14 in un solo file, mai pensata per essere fotografata o
+proiettata a dimensione leggibile (l'unico caso misurato finora, §9.3,
+è 4×4=16). Quattro decisioni prese in sessione, in ordine, più un
+benchmark reale per la quinta (4×4 vs 8×8):
+
+**1) Meccanismo di spezzettamento in frame.** Il numero di frame non
+dipende dalla dimensione del payload ma da un tetto esplicito di QR per
+frame (`grid_dim`, es. 4→16 o 8→64), scelto in base al vincolo fisico
+(schermo/stampa), non calcolato a piacere di `sqrt(n)`. Nuova funzione
+`payload_to_qr_frames(payload, grid_dim=4) -> list[Image]` in
+`balzar/qr.py`: raggruppa i capitoli già prodotti da `chunk_payload` in
+blocchi da `grid_dim²` e produce **una lista di immagini griglia**
+invece di una sola. `payload_to_qr_image` resta invariata (caso
+`n_frame == 1` implicito, griglia singola non limitata) — nessuna
+modifica al comportamento esistente, verificato dagli stessi test di
+prima ancora verdi.
+
+**2) Sequenza dei frame.** Distinzione netta tra cosa già garantisce il
+formato e cosa serve solo all'utente umano: l'header `BZC1` (indice/
+totale/CRC del payload intero) è dentro ogni singolo QR, indipendente
+dal frame che lo contiene — `assemble_chunks` già accetta capitoli in
+qualsiasi ordine. **Non serve nessun nuovo campo dati per l'ordine dei
+frame**: l'unica cosa nuova è un'etichetta testuale "Frame i/N" stampata
+su ogni griglia (stesso principio della label "i+1/totale" già su ogni
+singolo QR), pura affordance per l'utente/fotocamera — sapere quante
+foto mancano, non un requisito di correttezza.
+
+**3) Bundle.** Scartato MP4/video: servirebbe un encoder nuovo (dipendenza
+pesante, contro "stdlib pura" del motore core) ed è lossy per default,
+stesso problema già noto per JPEG su bordi netti (§8) — un QR è
+contenuto ad altissimo contrasto, un codec con perdita rischia di
+sfumare i moduli. Scelti invece, dalla stessa lista di frame, **due
+esportatori leggeri**, zero dipendenze nuove (Pillow è già usato in
+`qr.py`):
+- `frames_to_gif(frames, duration_ms=1500, loop=0) -> bytes` — GIF
+  animata per il caso "schermo che mostra i frame in sequenza da solo".
+  **Senza perdita per questo contenuto specifico**: un QR è puro
+  bianco/nero, quindi il limite di palette a 256 colori della GIF (che
+  conterebbe su una foto) qui non costa nulla.
+- `frames_to_files(frames, out_dir) -> list[str]` — un PNG per frame,
+  per il caso "stampa su carta" (§6.1), dove "auto-play" non ha senso.
+
+**4) Lettura.** Le due modalità di bundle si riducono allo **stesso
+algoritmo di lettura** — cambia solo la sorgente dei fotogrammi (foto
+sequenziali di pagine stampate, o foto/frame video di uno schermo che
+riproduce la GIF), non la logica di riassemblaggio. Nuova classe
+`LiveScanner` in `balzar/qr.py`: accumula `{indice: capitolo}` su
+chiamate ripetute di `.add(foto)`, tollera **qualsiasi ordine, qualsiasi
+sottoinsieme di frame per chiamata, e la stessa foto ripetuta più volte**
+(un capitolo duplicato viene semplicemente ignorato, non è un errore) —
+stessa indipendenza dall'ordine che `scan_image_bytes` aveva già per una
+singola foto, estesa su più foto invece di richiedere completezza in
+uno scatto solo. `.add()` ritorna `(completo, mancanti)` riusando
+esattamente il calcolo `missing` già presente in `assemble_chunks`;
+`.result()` assembla il payload quando `completo` è vero. Per i test
+automatici, `gif_to_frames(data) -> list[Image]` (via
+`PIL.ImageSequence.Iterator`) splitta una GIF già scritta nei suoi
+frame senza bisogno di una fotocamera reale — stessa metodologia già
+usata altrove nel progetto (verifica by codice, fotografia reale solo
+come test manuale one-off).
+
+Verificato in `tests/test_qr.py` (6 nuovi test, `TestQRFrameSequence`):
+tetto sul numero di codici per frame rispettato, roundtrip completo
+frame-per-frame via `LiveScanner`, frame scansionati fuori ordine e con
+ripetizioni, progresso `missing` corretto prima del completamento,
+roundtrip completo attraverso bundle GIF e attraverso bundle a file
+separati.
+
+**5) 4×4 contro 8×8 — benchmark reale, non stimato.** Prima di questa
+misura esistevano dati solo su 4×4 (§9.3: sweet spot 1700–2400px, piena
+risoluzione 4704px **più lenta senza guadagno di affidabilità**).
+Generata una vera griglia 8×8 (64 QR, primo frame pieno — il caso
+peggiore, non una griglia a metà) dallo stesso payload di test (183.280
+byte, 84 capitoli) e scansionata alle stesse risoluzioni del benchmark
+4×4:
+
+| Griglia | Larghezza immagine | QR decodificati | Tempo |
+|---|---|---|---|
+| 4×4 (16 QR) | 4704px (piena) | 16/16 | 3,19 s |
+| 4×4 (16 QR) | 2400–1700px (sweet spot noto) | 16/16 | 0,23–0,45 s |
+| 4×4 (16 QR) | 1600px | 14/16 (degrada) | — |
+| 4×4 (16 QR) | 1200px | 0/16 (fallisce) | — |
+| 8×8 (64 QR) | 9336px (piena) | 64/64 | 16,35 s |
+| **8×8 (64 QR)** | **4704px** | **64/64** | **4,16 s** |
+| 8×8 (64 QR) | 3400px | 9/64 (crollo) | 1,17 s |
+| 8×8 (64 QR) | 2400px e sotto | 0–1/64 (fallisce) | — |
+
+Risultato netto, non ambiguo: l'8×8 ha **un'unica finestra di lettura
+affidabile**, esattamente alla risoluzione (4704px) che il benchmark
+4×4 aveva già misurato come "piena, lenta, senza guadagno" — sotto
+quella soglia il crollo è a picco (64/64 → 9/64 tra 4704 e 3400px), non
+graduale. E a quella risoluzione il tempo di decodifica di un singolo
+frame 8×8 (4,16 s) è **~15–18× più lento** dello sweet spot 4×4
+(0,23–0,29 s) per 4× i codici — un rapporto tempo/codice peggiore, non
+migliore: quadruplicare i codici per frame *non* dimezza il numero di
+acquisizioni a parità di tempo totale, lo aumenta. Conferma diretta,
+con dati reali, del sospetto di design: per mantenere la stessa nitidezza
+per-modulo, una griglia 8×8 nella stessa area fisica richiede circa il
+doppio della risoluzione lineare del sweet spot 4×4, e quella
+risoluzione è già il regime "lento senza guadagno" scoperto sul 4×4.
+
+**Decisione**: `grid_dim=4` resta il default e il tetto consigliato.
+Un payload grande accetta **più frame da 16 QR** (sequenza più lunga,
+tempo di decodifica per frame che resta nello sweet spot misurato),
+non frame più densi — esattamente il fallback già previsto in sessione
+se il test fosse andato male. `grid_dim=8` resta disponibile come
+parametro esplicito (nessun limite hardcoded nel codice) per chi
+controlla un supporto fisico/schermo diverso e vuole ripetere questo
+stesso benchmark sulle proprie condizioni reali — non è consigliato
+come default.
+
+**Non ancora fatto**: nessuna integrazione CLI/GUI/demo web per
+`payload_to_qr_frames`/`frames_to_gif`/`frames_to_files`/`LiveScanner`
+— oggi sono solo funzioni di libreria, verificate da test, non ancora
+esposte come comando `balzar` o pulsante. Prossimo passo naturale se
+si vuole portare questo in campo, non fatto in questa sessione per
+tenere lo scope alla sola domanda posta (meccanismo + benchmark).
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
@@ -625,7 +748,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-202 test, tutti verdi (`python3 -m unittest discover -s tests`):
+209 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -652,7 +775,12 @@ l'ordine dei file superstiti nella risposta resti quello originale, sia
 in `sequence.py` che nel suo dispatch in `webapi.py`), più il writer PNG
 con filtri adattivi (round-trip pixel-esatto via Pillow e guardia
 esplicita di non-regressione contro il vecchio writer solo-None,
-`test_png.py`).
+`test_png.py`) — più le sequenze multi-frame di QR (`TestQRFrameSequence`
+in `test_qr.py`: tetto sul numero di codici per frame, roundtrip
+completo via `LiveScanner` frame per frame, frame fuori ordine e
+ripetuti, progresso "mancanti" corretto prima del completamento,
+roundtrip attraverso bundle GIF e attraverso bundle a file separati —
+vedi §2.4b).
 
 ## 3. Numeri misurati (non stimati) fin qui
 
@@ -1054,6 +1182,73 @@ un ponte verso una libreria che lo sa già fare.
 **Stato**: valutata, non implementata. Nuova dipendenza opzionale, nuovo
 modulo, nuova superficie di test — non avviata senza una decisione
 esplicita di procedere, dato lo scope non piccolo.
+
+### 7.6 HTML/XML come sorgente — valutata, non implementata
+
+Domanda diretta di sessione: balzar può codificare HTML/XML? **Oggi
+no** — nessun modulo del progetto ingerisce markup generico. Gli
+encoder esistenti sono tutti per contenuto diverso: raster
+(`encoder.py`), grafica vettoriale SVG/DXF (`vectorio.py` — ingerisce
+solo primitive geometriche di *disegno*, `<circle>`/`<path>`/`TEXT`,
+non il DOM/markup di una pagina), video (`video.py`), CAD 3D
+(`scene3d.py`). Nessuno di questi tratta HTML/XML come testo/markup
+strutturato da comprimere.
+
+Il modello sarebbe diverso da tutti gli encoder attuali: non "copertura
+a rettangoli di pixel" ma "template + diff dei parametri" (già annotato
+come idea speculativa in §5 punto 11, qui valutata con numeri reali
+invece che solo ipotizzata) — un albero di tag che si ripete con solo
+alcuni campi che cambiano (righe di una tabella, blocchi di componente
+in un catalogo) diventa un LOOP-equivalente con i valori variabili
+estratti, invece di essere ricompresso byte per byte da un compressore
+generico. Servirebbe: un parser (stdlib pura, `xml.etree.ElementTree`
+per XML/XHTML ben formato, `html.parser` per HTML reale — zero nuove
+dipendenze, stesso principio di `vectorio.py`) **più** un algoritmo di
+estrazione di pattern strutturali che oggi non esiste in nessuna forma
+nel progetto — non un'estensione di un encoder esistente, un encoder
+nuovo da zero.
+
+**Guadagno per un manuale da 12MB — dipende interamente dalla
+composizione, misurato su due casi sintetici rappresentativi invece che
+stimato a caso**:
+
+| Contenuto sintetico | Byte grezzi | gzip -9 | Rapporto |
+|---|---|---|---|
+| Markup templato (400 blocchi "componente" con tabella specifiche ripetuta + boilerplate + prosa ripetuta) | 142.807 | 5.672 | **25,2×** |
+| Prosa che varia genuinamente (900 paragrafi, nessuna struttura ripetuta, vocabolario ridotto — quindi ottimistico rispetto a prosa reale) | 504.299 | 72.458 | **7,0×** (prosa reale tipica: ~2,5-4× con gzip, dato noto in letteratura, non rimisurato qui) |
+
+Il punto onesto: **gzip da solo prende già 25× sul caso fortemente
+templato** — un encoder balzar dedicato dovrebbe battere quel numero
+per giustificare il lavoro, non solo eguagliarlo, perché gzip è già
+gratis e non richiede nessuna estrazione di pattern (DEFLATE trova da
+solo la ripetizione byte-a-byte della stessa tabella HTML ripetuta 400
+volte). Un vero encoder "template+diff" potrebbe spingersi oltre
+(memorizzare solo i 3 campi che cambiano per blocco invece dell'intera
+struttura HTML circostante, anche compressa) — ma questo è speculativo,
+nessun prototipo scritto, nessuna misura reale di quanto in più
+otterrebbe rispetto ai 25× già gratuiti di gzip.
+
+Sul secondo caso (prosa) il limite è strutturale, non implementativo:
+il testo naturale ha una complessità di Kolmogorov vicina alla sua
+entropia — non esiste una scorciatoia "generativa" per prosa unica,
+stesso principio già applicato a rumore/foto (§4.7) e già dichiarato
+per audio campionato (§7.4). Un manuale tecnico reale da 12MB è quasi
+certamente un misto: markup/boilerplate ripetuto (il caso dove balzar
+potrebbe guadagnare, se e quando si scrivesse l'estrattore), prosa
+(nessun guadagno oltre gzip, per nessun encoder possibile), e
+probabilmente immagini/diagrammi incorporati — questi ultimi **già
+gestiti oggi**, ma da un encoder diverso e già esistente: raster via
+`encoder.py`/`imageio.py` se rasterizzate, oppure direttamente
+`vectorio.py`/`svg.py` se il manuale incorpora SVG vettoriale reale
+(caso comune per diagrammi tecnici esportati da CAD). Senza un file
+reale da 12MB da analizzare, qualunque numero complessivo per "il
+manuale" sarebbe inventato — la tabella sopra è la misura vera dei due
+estremi che lo compongono, non una stima del tutto.
+
+**Stato**: valutata, non implementata. Nessun lavoro iniziato oltre
+questa valutazione: nuovo modulo, nuovo algoritmo di estrazione
+pattern, nuova superficie di test — scope paragonabile a un encoder
+esistente da zero, non una piccola estensione.
 
 ## 8. Confronto quantitativo con lo stato dell'arte (regola del progetto)
 
@@ -1499,7 +1694,7 @@ il limite di risposta) — 202 test totali.
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 202 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 209 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop
