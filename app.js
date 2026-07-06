@@ -802,9 +802,68 @@ const threedBomTable = document.getElementById("threed-bom-table");
 const threedDlPayload = document.getElementById("threed-dl-payload");
 const threedDlGlb = document.getElementById("threed-dl-glb");
 const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
+const threedResetBtn = document.getElementById("threed-reset-btn");
 
 let lastThreedResult = null;
 let lastThreedGlbUrl = null;
+let threedOriginalColors = null; // Map<Material, [r,g,b,a]>, cached on model load
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+const THREED_HIGHLIGHT = [1.0, 0.55, 0.05, 1.0];
+const THREED_DIM_ALPHA = 0.12;
+
+function threedCacheColors() {
+  threedOriginalColors = new Map();
+  threedViewer.model.materials.forEach(m => {
+    threedOriginalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
+  });
+}
+
+function threedResetSelection() {
+  if (!threedOriginalColors) return;
+  threedViewer.model.materials.forEach(m => {
+    m.pbrMetallicRoughness.setBaseColorFactor(threedOriginalColors.get(m));
+  });
+  threedSetBomSelection(null);
+}
+
+function threedSelectMaterial(material) {
+  if (!threedOriginalColors) return;
+  threedViewer.model.materials.forEach(m => {
+    const orig = threedOriginalColors.get(m);
+    if (m === material) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
+    else m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], THREED_DIM_ALPHA]);
+  });
+  threedSetBomSelection(material.name);
+}
+
+function threedSelectByName(name) {
+  if (!threedOriginalColors) return;
+  threedViewer.model.materials.forEach(m => {
+    const orig = threedOriginalColors.get(m);
+    if (m.name === name) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
+    else m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], THREED_DIM_ALPHA]);
+  });
+  threedSetBomSelection(name);
+}
+
+function threedSetBomSelection(name) {
+  threedBomTable.querySelectorAll("tr.part").forEach(row => {
+    row.classList.toggle("selected", name !== null && row.dataset.partName === name);
+  });
+}
+
+threedViewer.addEventListener("load", threedCacheColors);
+threedViewer.addEventListener("click", (ev) => {
+  const material = threedViewer.materialFromPoint(ev.clientX, ev.clientY);
+  if (material) threedSelectMaterial(material); else threedResetSelection();
+});
+threedResetBtn.addEventListener("click", threedResetSelection);
 
 threedBrowseBtn.addEventListener("click", () => threedFileInput.click());
 threedFileInput.addEventListener("change", () => {
@@ -883,9 +942,16 @@ function renderThreedResult(r) {
   threedStatsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
 
   threedBomTable.innerHTML = r.bom.length
-    ? r.bom.map(e => `<tr><td>${e.name}</td><td>x${e.count}</td></tr>`).join("")
+    ? r.bom.map(e =>
+        `<tr class="part" data-part-name="${escapeHtml(e.name)}">` +
+        `<td>${escapeHtml(e.name)}</td><td>x${e.count}</td></tr>`
+      ).join("")
     : "<tr><td>(nessuna parte)</td></tr>";
+  threedBomTable.querySelectorAll("tr.part").forEach(row => {
+    row.addEventListener("click", () => threedSelectByName(row.dataset.partName));
+  });
 
+  threedOriginalColors = null; // new model: cached again on its own 'load' event
   threedResultEl.hidden = false;
 }
 

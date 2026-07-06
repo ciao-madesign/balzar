@@ -296,12 +296,54 @@ class TestGltfExport(unittest.TestCase):
         json_len, json_type = struct.unpack_from("<II", glb, 12)
         self.assertEqual(json_type, 0x4E4F534A)
         gltf = json.loads(glb[20:20 + json_len].decode("utf-8"))
-        self.assertEqual(len(gltf["meshes"]), 2)
+        # one mesh (and one material) per LEAF INSTANCE, not per unique
+        # shape: 3 placements (2x PartA, 1x PartB) even though there are
+        # only 2 unique shapes underneath -- this is what lets a click on
+        # one specific PartA instance be told apart from its sibling via
+        # model-viewer's materialFromPoint (see gltf.py's module docstring)
+        self.assertEqual(len(gltf["meshes"]), 3)
         self.assertEqual(gltf["asset"]["version"], "2.0")
-        # 3 leaf instances (2x PartA, 1x PartB) must appear as mesh-bearing
-        # nodes somewhere in the (duplicated, tree-shaped) node list
         mesh_nodes = [n for n in gltf["nodes"] if "mesh" in n]
         self.assertEqual(len(mesh_nodes), 3)
+
+    def test_each_instance_gets_its_own_named_material_with_alpha_blend(self):
+        import json
+        scene = parse_3dxml(self.path)
+        glb = scene3d_to_glb(scene)
+        json_len, _ = struct.unpack_from("<II", glb, 12)
+        gltf = json.loads(glb[20:20 + json_len].decode("utf-8"))
+
+        self.assertEqual(len(gltf["materials"]), 3)
+        names = sorted(m["name"] for m in gltf["materials"])
+        # 2x "inst_A_1"/"inst_A_2"-style PartA placements share the same
+        # BOM display name (the underlying Reference3D is named "PartA"
+        # for both), the PartB placement has its own -- three materials,
+        # two distinct names, matching bom_display_name's own grouping
+        self.assertEqual(len(names), 3)
+        for m in gltf["materials"]:
+            self.assertEqual(m["alphaMode"], "BLEND")
+            self.assertIn("name", m)
+
+    def test_instance_meshes_share_the_same_geometry_accessors(self):
+        import json
+        scene = parse_3dxml(self.path)
+        glb = scene3d_to_glb(scene)
+        json_len, _ = struct.unpack_from("<II", glb, 12)
+        gltf = json.loads(glb[20:20 + json_len].decode("utf-8"))
+
+        # the two PartA instances must reuse the SAME position/index
+        # accessors (geometry dedup preserved) even though each has its
+        # own mesh+material entry
+        partA_meshes = [m for m in gltf["meshes"] if m["name"] == "PartA"]
+        self.assertEqual(len(partA_meshes), 2)
+        accessor_pairs = {
+            (m["primitives"][0]["attributes"]["POSITION"], m["primitives"][0]["indices"])
+            for m in partA_meshes
+        }
+        self.assertEqual(len(accessor_pairs), 1)
+        # but distinct materials, so a click can select just one
+        material_indices = {m["primitives"][0]["material"] for m in partA_meshes}
+        self.assertEqual(len(material_indices), 2)
 
 
 if __name__ == "__main__":

@@ -800,7 +800,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-212 test, tutti verdi (`python3 -m unittest discover -s tests`):
+214 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1834,10 +1834,91 @@ invece di fidarsi di un microbenchmark isolato). Ri-misurato su questa
 stessa pipeline reale dopo il fix: lettura totale **44,62s → 28,65s**
 (~1,56×), bit-identico in entrambi i casi.
 
+### 9.11 Clicca una parte per evidenziarla/isolarla: model-viewer scene-graph API
+
+Domanda diretta di sessione, risposta al punto lasciato aperto in §9.9
+(nessuna esplorazione per sotto-parte, solo orbita dell'intero
+assieme). Verificato prima di scrivere codice quale parte dell'API
+scene-graph di `model-viewer` è davvero **pubblica** nel build
+vendorizzato (4.3.1 UMD) invece di fidarsi della memoria: `grep` sul
+file minificato mostra che `nodeFromPoint` è un `Symbol` interno (non
+richiamabile dall'esterno), mentre `materialFromPoint(x, y)` e
+`positionAndNormalFromPoint(x, y)` sono metodi pubblici veri, e ogni
+`Material` espone sia `get name()` sia
+`pbrMetallicRoughness.setBaseColorFactor(...)` — inclusa una vera
+`get baseColorFactor()` per leggere il colore attuale, e `setAlphaMode`
+per il blending. Solo API pubblica e documentata usata, nessun hack su
+proprietà interne.
+
+**Il vincolo architetturale reale**: `gltf.py` deduplicava i materiali
+per colore (§9.5), quindi in un file reale con un solo colore condiviso
+da tutte le 88 forme (§9.10) `materialFromPoint` avrebbe restituito
+**lo stesso oggetto Material per qualunque parte cliccata** — impossibile
+distinguere un posizionamento dall'altro. Fix: ogni **istanza-foglia**
+(non più ogni forma unica) riceve ora il proprio mesh+materiale nel GLB
+esportato — stesso principio di deduplicazione geometrica di sempre
+(gli accessor POSITION/indices restano condivisi per forma, il costo
+aggiuntivo è solo JSON), ma materiali/mesh non più deduplicati per
+colore. Ogni materiale porta `alphaMode: "BLEND"` fin dall'export, così
+un click può attenuare via alpha (isolamento vero) non solo ricolorare.
+
+**Costo reale misurato** sull'assieme del secondo file 3DXML (§9.10):
+GLB **1.107.300 B → 1.154.652 B (+47.352 B, +4,3%)**, tempo di export
+invariato (0,055s). `meshes`/`materials` passano da 88 (una per forma
+unica) a 245 (una per posizionamento-foglia reale) — la geometria nel
+buffer binario resta però identica: gli accessor sono ancora condivisi,
+solo l'involucro JSON per-istanza si moltiplica.
+
+**Interazione**: click sul modello (`materialFromPoint`) seleziona
+**l'esatto oggetto Material cliccato** (un singolo posizionamento,
+distinto anche da un fratello dello stesso tipo di parte) — colore
+acceso su quello, alpha abbassato (0,12) su tutti gli altri. Click su
+una riga della distinta base seleziona invece **tutti** i materiali con
+quel nome (una riga BOM è un tipo di parte, non un singolo
+posizionamento) — nome condiviso via nuovo helper `bom_display_name()`
+in `scene3d.py`, usato sia da `generate_bom` sia da `gltf.py` per
+garantire che il nome del materiale e il nome della riga BOM coincidano
+esattamente. Pulsante "Mostra tutto" e click su sfondo vuoto
+(`materialFromPoint` restituisce `null`) ripristinano i colori
+originali (cache-ati una volta sola all'evento `load` del
+model-viewer).
+
+Implementato in entrambe le interfacce che già mostravano il 3D
+(`balzar/viewer3d.py` per la GUI desktop, `index.html`/`app.js` per la
+demo web) con la stessa logica JS duplicata (non condivisibile come
+file: una è incorporata in un f-string Python, l'altra è uno script
+statico) — nessuna terza implementazione, nessuna nuova dipendenza.
+
+**Verificato con Playwright, non solo scritto**: sul GLB reale del
+secondo assieme 3DXML — click su una parte visibile → 1 materiale
+acceso, 244 attenuati, riga BOM corretta evidenziata (`Object 15`/
+`Object 235` a seconda del punto cliccato), pulsante "Mostra tutto"
+ripristina tutti e 245 i materiali originali. Ripetuto **due volte**:
+una sulla pagina che apre la GUI desktop (`viewer3d.py`, HTML+GLB
+serviti in locale) e una **end-to-end reale sulla demo web** (upload
+vero del file attraverso un devserver locale che instrada
+`/api/encode_3d` a `handle_encode_3d`, non un mock — stessa metodologia
+già nota, non contro Vercel). Un problema emerso e risolto durante
+questa seconda verifica, non nel codice ma nel test stesso: il primo
+tentativo calcolava il punto di click con `getBoundingClientRect()`
+**prima** di scorrere l'elemento nella viewport, ottenendo coordinate
+sotto il fold — `materialFromPoint` le accetta comunque (non controlla
+la visibilità reale), ma un click fisico lì non intercetta nulla;
+corretto scorrendo l'elemento in vista prima di calcolare il punto.
+
+Test automatici: `tests/test_scene3d.py` aggiunge
+`test_each_instance_gets_its_own_named_material_with_alpha_blend` e
+`test_instance_meshes_share_the_same_geometry_accessors` (le due
+istanze dello stesso pezzo condividono gli stessi accessor di geometria
+ma hanno materiali distinti) — 214 test totali. Nessun test Python per
+il click stesso (comportamento client-side, stesso principio già
+seguito per il resto della UI 3D: verifica Playwright manuale in
+sessione, non nella suite automatica).
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 212 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 214 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

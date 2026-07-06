@@ -15,10 +15,22 @@ supported for http/https"), even though the GLB sits right next to the
 HTML in the same directory. Verified in session while producing the
 diagnostic screenshots in CLAUDE.md SS9.7. The fix is the same one used
 there: serve the temp directory over plain HTTP on localhost instead.
+
+Click-to-select/isolate: gltf.py now gives every leaf INSTANCE its own
+Material (not deduped by colour -- see its module docstring), so
+model-viewer's public materialFromPoint(x, y) API identifies exactly
+which placement was clicked, even two instances of the same part.
+Selecting one instance brightens it and fades every other material to
+low alpha (alphaMode="BLEND" is set at export time for this) -- a real
+isolate effect, not just a recolour, using only documented Material API
+(pbrMetallicRoughness.setBaseColorFactor). Clicking a BOM row selects
+ALL instances sharing that part name instead of a single object
+identity, since a BOM line is a part TYPE, not one specific placement.
 """
 
 from __future__ import annotations
 
+import html
 import http.server
 import os
 import shutil
@@ -44,22 +56,100 @@ model-viewer{{width:100%;height:100%}}
 #bom table{{border-collapse:collapse}}
 #bom td{{padding:1px 6px}}
 #bom td.qty{{text-align:right;color:#9cf}}
+#bom tr.part{{cursor:pointer}}
+#bom tr.part:hover td{{background:#333}}
+#bom tr.part.selected td{{background:#c77a2e;color:#fff}}
+#reset-btn{{position:absolute;top:12px;left:12px;padding:6px 12px;border-radius:6px;
+           border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
+           font:inherit;cursor:pointer}}
+#reset-btn:hover{{border-color:#c77a2e}}
 </style>
 </head>
 <body>
-<model-viewer src="model.glb" camera-controls auto-rotate
+<model-viewer id="mv" src="model.glb" camera-controls auto-rotate
              shadow-intensity="0.6" exposure="1.1" field-of-view="30deg"></model-viewer>
+<button id="reset-btn" type="button">Mostra tutto</button>
 {bom_html}
+<script>{select_js}</script>
 </body>
 </html>
+"""
+
+# Shared with the web demo's app.js -- same materialFromPoint-based
+# selection logic, only the DOM ids differ (kept a separate literal
+# here rather than a shared file since one is embedded in a Python
+# f-string template and the other loads as a plain <script src>).
+_SELECT_JS = """
+(function(){
+  var mv = document.getElementById('mv');
+  var HIGHLIGHT = [1.0, 0.55, 0.05, 1.0];
+  var DIM_ALPHA = 0.12;
+  var originalColors = null;
+
+  function cacheColors(){
+    originalColors = new Map();
+    mv.model.materials.forEach(function(m){
+      originalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
+    });
+  }
+  function resetAll(){
+    if (!originalColors) return;
+    mv.model.materials.forEach(function(m){
+      m.pbrMetallicRoughness.setBaseColorFactor(originalColors.get(m));
+    });
+    setBomSelection(null);
+  }
+  function selectMaterial(material){
+    if (!originalColors) return;
+    mv.model.materials.forEach(function(m){
+      var orig = originalColors.get(m);
+      if (m === material){
+        m.pbrMetallicRoughness.setBaseColorFactor(HIGHLIGHT);
+      } else {
+        m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], DIM_ALPHA]);
+      }
+    });
+    setBomSelection(material.name);
+  }
+  function selectByName(name){
+    if (!originalColors) return;
+    mv.model.materials.forEach(function(m){
+      var orig = originalColors.get(m);
+      if (m.name === name){
+        m.pbrMetallicRoughness.setBaseColorFactor(HIGHLIGHT);
+      } else {
+        m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], DIM_ALPHA]);
+      }
+    });
+    setBomSelection(name);
+  }
+  function setBomSelection(name){
+    document.querySelectorAll('#bom tr.part').forEach(function(row){
+      row.classList.toggle('selected', name !== null && row.dataset.partName === name);
+    });
+  }
+
+  mv.addEventListener('load', cacheColors);
+  mv.addEventListener('click', function(ev){
+    var material = mv.materialFromPoint(ev.clientX, ev.clientY);
+    if (material) selectMaterial(material); else resetAll();
+  });
+  document.getElementById('reset-btn').addEventListener('click', resetAll);
+  document.querySelectorAll('#bom tr.part').forEach(function(row){
+    row.addEventListener('click', function(){ selectByName(row.dataset.partName); });
+  });
+})();
 """
 
 
 def _bom_html(bom_lines: list[tuple[str, int]] | None) -> str:
     if not bom_lines:
         return ""
-    rows = "".join(f"<tr><td>{name}</td><td class=\"qty\">x{count}</td></tr>"
-                   for name, count in bom_lines)
+    rows = "".join(
+        f'<tr class="part" data-part-name="{html.escape(name)}">'
+        f'<td>{html.escape(name)}</td><td class="qty">x{count}</td></tr>'
+        for name, count in bom_lines
+    )
     return f'<div id="bom"><h3>Distinta base</h3><table>{rows}</table></div>'
 
 
@@ -79,7 +169,7 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
     with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
         fh.write(glb)
     with open(os.path.join(work_dir, "viewer.html"), "w", encoding="utf-8") as fh:
-        fh.write(_PAGE_TEMPLATE.format(bom_html=_bom_html(bom_lines)))
+        fh.write(_PAGE_TEMPLATE.format(bom_html=_bom_html(bom_lines), select_js=_SELECT_JS))
     if os.path.exists(_MODEL_VIEWER_JS):
         shutil.copy(_MODEL_VIEWER_JS, os.path.join(work_dir, "model-viewer.min.js"))
 

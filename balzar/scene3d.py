@@ -479,6 +479,13 @@ def decode_payload(data: bytes) -> Scene3D:
 
 # ------------------------------------------------------------- top level
 
+def bom_display_name(ref: Reference) -> str:
+    """The label a leaf reference shows up under in the BOM -- also
+    reused by gltf.py as the glTF material/mesh name, so a part clicked
+    in the 3D view and its BOM row can be matched by this same string."""
+    return ref.name or f"(senza nome, forma {ref.shape_index})"
+
+
 def generate_bom(scene: Scene3D) -> list[BomEntry]:
     """Flat bill of materials: every named leaf part and how many times
     it's actually placed, walking the full DAG with multiplicity (the
@@ -501,7 +508,7 @@ def generate_bom(scene: Scene3D) -> list[BomEntry]:
     def walk(ref_index: int) -> None:
         ref = scene.references[ref_index]
         if ref.shape_index is not None:
-            key = (ref.name or f"(senza nome, forma {ref.shape_index})", ref.shape_index)
+            key = (bom_display_name(ref), ref.shape_index)
             if key not in counts:
                 counts[key] = 0
                 order.append(key)

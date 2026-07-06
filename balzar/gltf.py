@@ -21,6 +21,19 @@ payload: compactness lives in BZM1, not here.
 Triangle strips are flattened to plain triangle lists (glTF mode 4) for
 maximum viewer compatibility, rather than relying on every consumer
 supporting mode 5 (TRIANGLE_STRIP) correctly.
+
+Materials are one PER LEAF INSTANCE, not deduped by colour: this is
+what lets a click-to-select UI (model-viewer's public materialFromPoint
+API) tell two placements of the same part apart, since each gets its
+own Material object even though they render identically by default.
+The (tiny) cost is JSON only -- every per-instance mesh still points at
+the SAME shared POSITION/indices accessors for its shape, so the
+geometry buffer stays exactly as deduplicated as before; only the
+meshes[]/materials[] JSON arrays grow from shape_count to instance
+count. Every material is exported with alphaMode="BLEND" so a viewer
+can dim/hide non-selected instances via alpha, not just recolour them
+-- a real isolate, not just a highlight, using only documented
+model-viewer Material API (pbrMetallicRoughness.setBaseColorFactor).
 """
 
 from __future__ import annotations
@@ -28,7 +41,7 @@ from __future__ import annotations
 import json
 import struct
 
-from .scene3d import Reference, Scene3D
+from .scene3d import Reference, Scene3D, bom_display_name
 
 _IDENTITY_16 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
@@ -66,22 +79,47 @@ def _strip_to_triangles(strip: list[int]) -> list[int]:
     return tris
 
 
-def _build_reference_node(scene: Scene3D, ref_index: int, mesh_of_shape: list[int],
+def _build_reference_node(scene: Scene3D, ref_index: int,
+                          shape_accessors: list[tuple[int, int]],
+                          meshes: list[dict], materials: list[dict],
                           nodes: list[dict]) -> int:
     """Recursively emit the node for `Reference[ref_index]`'s own content
     (mesh if it's a leaf, children if it's a group), wrapping every child
     instance in its own node carrying that instance's transform+name.
-    Returns the index of the appended content node."""
+    Returns the index of the appended content node.
+
+    A leaf gets its own mesh+material every time this is called (once
+    per placement, since this function is deliberately not memoized by
+    ref_index -- see the module docstring on the DAG-vs-tree asymmetry)
+    -- so two instances of the same repeated part end up as two
+    distinct Material objects a click can tell apart, even though both
+    reference the SAME position/index accessors underneath."""
     ref: Reference = scene.references[ref_index]
     node: dict = {}
     if ref.name:
         node["name"] = ref.name
     if ref.shape_index is not None:
-        node["mesh"] = mesh_of_shape[ref.shape_index]
+        shape = scene.shapes[ref.shape_index]
+        pos_accessor, idx_accessor = shape_accessors[ref.shape_index]
+        display_name = bom_display_name(ref)
+        r, g, b = shape.color
+        materials.append({
+            "name": display_name,
+            "pbrMetallicRoughness": {"baseColorFactor": [r / 255.0, g / 255.0, b / 255.0, 1.0]},
+            "alphaMode": "BLEND",
+        })
+        mesh = {"name": display_name,
+               "primitives": [{"attributes": {"POSITION": pos_accessor},
+                              "indices": idx_accessor,
+                              "material": len(materials) - 1,
+                              "mode": 4}]}
+        meshes.append(mesh)
+        node["mesh"] = len(meshes) - 1
     if ref.children:
         child_indices = []
         for target, inst_name, matrix in ref.children:
-            content_idx = _build_reference_node(scene, target, mesh_of_shape, nodes)
+            content_idx = _build_reference_node(scene, target, shape_accessors,
+                                                 meshes, materials, nodes)
             instance_node: dict = {"children": [content_idx]}
             gm = _matrix_to_gltf(matrix)
             if gm != _IDENTITY_16:
@@ -101,7 +139,6 @@ def scene3d_to_glb(scene: Scene3D) -> bytes:
     buffer_views: list[dict] = []
     meshes: list[dict] = []
     materials: list[dict] = []
-    material_index: dict[tuple[int, int, int], int] = {}
 
     def add_buffer_view(data: bytes, target: int) -> int:
         while len(buffer) % 4 != 0:
@@ -112,15 +149,9 @@ def scene3d_to_glb(scene: Scene3D) -> bytes:
                              "byteLength": len(data), "target": target})
         return len(buffer_views) - 1
 
-    def material_for(color: tuple[int, int, int]) -> int:
-        if color not in material_index:
-            r, g, b = color
-            materials.append({"pbrMetallicRoughness": {
-                "baseColorFactor": [r / 255.0, g / 255.0, b / 255.0, 1.0]}})
-            material_index[color] = len(materials) - 1
-        return material_index[color]
-
-    mesh_of_shape: list[int] = []
+    # geometry only, one accessor pair per unique SHAPE -- meshes and
+    # materials are built per-instance below (see _build_reference_node)
+    shape_accessors: list[tuple[int, int]] = []
     for shape in scene.shapes:
         pos_bytes = b"".join(struct.pack("<fff", *v) for v in shape.vertices)
         pos_view = add_buffer_view(pos_bytes, _GLTF_ARRAY_BUFFER)
@@ -145,17 +176,11 @@ def scene3d_to_glb(scene: Scene3D) -> bytes:
                           "count": len(tri_indices), "type": "SCALAR"})
         idx_accessor = len(accessors) - 1
 
-        mesh = {"primitives": [{"attributes": {"POSITION": pos_accessor},
-                               "indices": idx_accessor,
-                               "material": material_for(shape.color),
-                               "mode": 4}]}
-        if shape.name:
-            mesh["name"] = shape.name
-        meshes.append(mesh)
-        mesh_of_shape.append(len(meshes) - 1)
+        shape_accessors.append((pos_accessor, idx_accessor))
 
     nodes: list[dict] = []
-    root_node_idx = _build_reference_node(scene, scene.root, mesh_of_shape, nodes)
+    root_node_idx = _build_reference_node(scene, scene.root, shape_accessors,
+                                          meshes, materials, nodes)
 
     gltf_json = {
         "asset": {"version": "2.0", "generator": "balzar scene3d"},

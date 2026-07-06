@@ -455,7 +455,16 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   mostrato dal web component `<model-viewer>` (vendorizzato in
   `model-viewer.min.js`, nessuna dipendenza da CDN), più la distinta
   base estratta dalla struttura dell'assieme. Scarichi il payload
-  binario (`.b3d`, formato `BZM1`) o il `.glb` stesso.
+  binario (`.b3d`, formato `BZM1`) o il `.glb` stesso. **Clicca una
+  parte per evidenziarla/isolarla** (usa l'API scene-graph pubblica di
+  model-viewer, `materialFromPoint` — ogni posizionamento ha un proprio
+  materiale, non condiviso per colore come prima, così un click sa
+  distinguere due istanze della stessa parte): l'attenuazione delle
+  altre parti usa alpha (`alphaMode: BLEND` impostato all'export), non
+  un semplice ricolorare. Click su una riga della BOM evidenzia invece
+  tutte le istanze di quel tipo di parte. Costo reale misurato: +4,3%
+  sul GLB (dettagli in CLAUDE.md §9.11), stessa geometria deduplicata
+  di sempre.
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
@@ -506,8 +515,12 @@ balzar/
   sequence.py     sequenze multi-file (vettoriali dedup, raster delta)
   explode.py      esploso automatico per layer/gruppo (CAD/SVG)
   scene3d.py      ingestione 3DXML -> payload binario BZM1 (assiemi CAD, dettagli in CLAUDE.md §9)
-  gltf.py         export payload BZM1 -> glTF/GLB per la visualizzazione (model-viewer)
-  viewer3d.py     GLB + BOM -> pagina locale (model-viewer) aperta nel browser di sistema (solo GUI desktop)
+  gltf.py         export payload BZM1 -> glTF/GLB (materiali/mesh per-istanza,
+                  non deduplicati per colore, per rendere ogni posizionamento
+                  cliccabile/distinguibile via materialFromPoint)
+  viewer3d.py     GLB + BOM -> pagina locale (model-viewer) aperta nel browser di
+                  sistema (solo GUI desktop); clicca una parte per evidenziarla/
+                  isolarla, click sulla BOM per selezionare tutte le istanze di un tipo
   webapi.py       logica dell'API web con profili di limiti
   cli.py          render / encode / encode-image / encode-vector / encode-3d /
                   encode-video / encode-sequence / explode-vector / render-3d /
