@@ -166,6 +166,61 @@ class TestPayloadRoundtrip(unittest.TestCase):
         with self.assertRaises(Scene3DError):
             decode_payload(b"BZM1\x00\x00")
 
+    def test_bom_counts_leaf_placements_by_name(self):
+        result = encode_3dxml_file(self.path)
+        by_name = {e.name: e.count for e in result.bom}
+        # PartA is placed twice (inst_A_1, inst_A_2), PartB once (inst_B_1,
+        # nested inside SubGroup) -- SubGroup itself is a group, not a leaf,
+        # and must not appear in the BOM
+        self.assertEqual(by_name, {"PartA": 2, "PartB": 1})
+        self.assertNotIn("SubGroup", by_name)
+        self.assertNotIn("Root", by_name)
+
+
+class TestBom(unittest.TestCase):
+    """generate_bom on hand-built scenes, isolated from 3DXML parsing —
+    in particular the case parse_3dxml's own fixture doesn't exercise:
+    a repeated sub-assembly multiplying the count of the parts nested
+    inside it (CLAUDE.md SS9.2's real example: one geometry placed 360
+    times through nested reuse, backed by a single Reference3D)."""
+
+    def test_repeated_subassembly_multiplies_nested_part_count(self):
+        from balzar.scene3d import Reference, Scene3D, Shape, generate_bom
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        screw = Shape(name="Screw", color=(200, 200, 200),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        # SubAssembly (ref 1) places the screw (leaf ref 0) twice
+        leaf_screw = Reference(name="ScrewLeaf", shape_index=0, children=[])
+        sub_assembly = Reference(name="SubAssembly", shape_index=None, children=[
+            (2, "screw_1", identity), (2, "screw_2", identity),
+        ])
+        # Root places SubAssembly three times -> 2 screws x 3 = 6 total
+        root = Reference(name="Root", shape_index=None, children=[
+            (1, "sub_1", identity), (1, "sub_2", identity), (1, "sub_3", identity),
+        ])
+        scene = Scene3D(shapes=[screw], references=[root, sub_assembly, leaf_screw], root=0)
+
+        bom = generate_bom(scene)
+        self.assertEqual(len(bom), 1)
+        self.assertEqual(bom[0].name, "ScrewLeaf")
+        self.assertEqual(bom[0].count, 6)
+
+    def test_unnamed_leaf_gets_explicit_placeholder_label(self):
+        from balzar.scene3d import Reference, Scene3D, Shape, generate_bom
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        shape = Shape(name=None, color=(1, 2, 3),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        leaf = Reference(name=None, shape_index=0, children=[])
+        root = Reference(name="Root", shape_index=None, children=[(1, None, identity)])
+        scene = Scene3D(shapes=[shape], references=[root, leaf], root=0)
+
+        bom = generate_bom(scene)
+        self.assertEqual(len(bom), 1)
+        self.assertIn("senza nome", bom[0].name)
+        self.assertEqual(bom[0].count, 1)
+
 
 class TestQuantizationAndCompactTransforms(unittest.TestCase):
     """The three size optimizations applied on top of the first working

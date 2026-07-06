@@ -34,6 +34,12 @@ CLAUDE.md SS9.2/SS9.7 for the numbers, not re-derived from scratch):
     axis permutation with entries only in {-1,0,1} -- measured as 100%
     of leaf-level placements on the real test assembly), falling back
     to 9 raw floats only when the rotation is a genuine arbitrary angle.
+
+`generate_bom` produces the other half of the "scan a code, see the
+exploded view AND the parts list" vision (the 2D precedent is
+examples/etichetta_bom.bzr): a flat name -> quantity table, counting
+every leaf placement with full multiplicity through nested sub-assembly
+repetition, not the number of Reference3D leaf definitions.
 """
 
 from __future__ import annotations
@@ -80,6 +86,15 @@ class Scene3D:
 
 
 @dataclass
+class BomEntry:
+    """One line of the bill of materials: a named leaf part and how many
+    times it's actually placed in the assembled scene."""
+    name: str
+    shape_index: int
+    count: int
+
+
+@dataclass
 class Scene3DEncodeResult:
     payload: bytes
     shape_count: int
@@ -90,6 +105,7 @@ class Scene3DEncodeResult:
     mean_vertex_error: float  # avg per-axis abs distance introduced by int16
                               # quantization -- 0.0 only for a degenerate
                               # (single-point or perfectly flat) shape
+    bom: list[BomEntry]
 
 
 def _f32(v: float) -> float:
@@ -463,6 +479,41 @@ def decode_payload(data: bytes) -> Scene3D:
 
 # ------------------------------------------------------------- top level
 
+def generate_bom(scene: Scene3D) -> list[BomEntry]:
+    """Flat bill of materials: every named leaf part and how many times
+    it's actually placed, walking the full DAG with multiplicity (the
+    same reachability walk already used for instance_count/mean_vertex_error
+    elsewhere in this module) -- NOT the number of Reference3D leaf
+    definitions, which would undercount a part reused by a repeated
+    sub-assembly (see CLAUDE.md SS9.2: one real geometry was placed 360
+    times through nested reuse, but is only ONE Reference3D definition).
+
+    Entries are keyed by (name, shape_index): two differently-named
+    references to the same geometry are different BOM lines (a screw and
+    a rivet can share a shape and still be different parts); two
+    identically-unnamed references to the same geometry collapse into
+    one line, since there's nothing else to tell them apart as distinct
+    part types. A reference with no name is labelled explicitly rather
+    than silently merged into an unrelated bucket."""
+    counts: dict[tuple[str, int], int] = {}
+    order: list[tuple[str, int]] = []
+
+    def walk(ref_index: int) -> None:
+        ref = scene.references[ref_index]
+        if ref.shape_index is not None:
+            key = (ref.name or f"(senza nome, forma {ref.shape_index})", ref.shape_index)
+            if key not in counts:
+                counts[key] = 0
+                order.append(key)
+            counts[key] += 1
+        for target, _inst_name, _matrix in ref.children:
+            walk(target)
+
+    walk(scene.root)
+    return [BomEntry(name=name, shape_index=shape_idx, count=counts[(name, shape_idx)])
+           for name, shape_idx in order]
+
+
 def _quantized_copy(scene: Scene3D) -> tuple[Scene3D, float]:
     """The scene as it will actually come back out of decode_payload:
     every shape's vertices already rounded through the same int16
@@ -512,4 +563,5 @@ def encode_3dxml_file(path: str) -> Scene3DEncodeResult:
         vertex_count=vertex_count,
         triangle_index_count=triangle_index_count,
         mean_vertex_error=mean_vertex_error,
+        bom=generate_bom(scene),
     )

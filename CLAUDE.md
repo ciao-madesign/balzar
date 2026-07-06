@@ -625,7 +625,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-194 test, tutti verdi (`python3 -m unittest discover -s tests`):
+197 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1300,8 +1300,8 @@ suo interno, le ottimizzazioni riguardano solo il payload `BZM1`.
 
 Comandi CLI: `balzar encode-3d assembly.3dxml -o out.b3d`,
 `balzar render-3d out.b3d -o out.glb`. Test: `tests/test_scene3d.py`
-(16 test, fixture 3DXML sintetica costruita in memoria — nessun file
-CAD reale nel repository) + 4 test in `tests/test_cli.py` — 194 test
+(19 test, fixture 3DXML sintetica costruita in memoria — nessun file
+CAD reale nel repository) + 4 test in `tests/test_cli.py` — 197 test
 totali.
 
 ### 9.6 Cosa manca ancora (esplicitamente non fatto in questa sessione)
@@ -1311,12 +1311,7 @@ totali.
 - **Integrazione GUI/demo web**: nessun tab "Assemblee 3D" nella demo
   web, nessun pulsante nella GUI desktop. La pagina che ospiterebbe
   `<model-viewer>` non è stata scritta.
-- **Nessuna distinta base (BOM) generata**: `Scene3D` porta già tutti i
-  nomi (forme, riferimenti, istanze), ma non esiste ancora una funzione
-  che li aggreghi in una tabella "nome parte → quantità" — l'informazione
-  c'è, l'estrazione no. Segnalato esplicitamente durante la discussione
-  di visione generale (l'obiettivo finale è "scansiona un codice, vedi
-  esploso 3D **e** distinta base", non solo la geometria).
+- ~~Nessuna distinta base (BOM) generata~~ — **fatto**, vedi §9.8.
 - **Nessun test con un file 3DXML reale nel repository** (per gli
   stessi motivi di copyright già visti per il logo Harley-Davidson in
   §2.6): la fixture di test è sintetica, verificata a mano contro il
@@ -1359,10 +1354,42 @@ model-viewer come dipendenze di test, non solo di sviluppo) — verifica
 manuale one-off, come già fatto altrove nel progetto per la GUI
 desktop sotto Xvfb.
 
+### 9.8 Distinta base (BOM): `generate_bom`
+
+Risposta diretta alla domanda di visione generale ("scansiona un
+codice, vedi l'esploso 3D **e** la distinta base") — `Scene3D` portava
+già tutti i nomi ma non c'era una funzione che li aggregasse. `Scene3D
+scene3d.generate_bom(scene)` percorre l'albero con la stessa logica di
+raggiungibilità già usata per `instance_count`/`mean_vertex_error`
+(non conta le definizioni `Reference3D` foglia, conta i posizionamenti
+reali con la moltiplicità dei sotto-assiemi ripetuti — lo stesso motivo
+per cui una geometria nell'assembly reale risulta usata 360 volte pur
+essendo una sola definizione). Le voci sono raggruppate per
+`(nome, indice_forma)`: due riferimenti con nomi diversi che condividono
+la stessa geometria restano due righe di BOM distinte (una vite e un
+rivetto possono avere la stessa forma ed essere pezzi diversi); un
+riferimento senza nome riceve un'etichetta placeholder esplicita invece
+di essere confuso con un'altra forma.
+
+`Scene3DEncodeResult` guadagna il campo `bom: list[BomEntry]`, calcolato
+automaticamente da `encode_3dxml_file`. CLI: `balzar encode-3d ... --bom`
+stampa la tabella completa (senza il flag, solo il riepilogo "N parti
+uniche, M posizionamenti totali"). Verificato sull'assembly reale: 78
+parti uniche, 1.623 posizionamenti totali, il pezzo più riusato compare
+360 volte — numeri identici a quelli già misurati a mano nello scoping
+(§9.2), stavolta calcolati dal codice invece che da uno script usa e
+getta.
+
+Non ancora fatto: nessuna vista/esportazione della BOM in un formato
+diverso dalla stampa a schermo (es. CSV, o testo sovrapposto al GLB
+come già avviene in 2D con `TEXT` in `etichetta_bom.bzr`) — la funzione
+produce dati strutturati, la presentazione resta da decidere insieme
+all'integrazione GUI/web (§9.6).
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 194 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 197 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

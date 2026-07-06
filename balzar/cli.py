@@ -204,6 +204,11 @@ def cmd_encode_3d(args: argparse.Namespace) -> int:
     print(f"istanze:      {_fmt(result.instance_count)}")
     print(f"errore medio vertici (quantizzazione int16): {result.mean_vertex_error}")
     print(f"vertici:      {_fmt(result.vertex_count)}")
+    print(f"distinta base: {_fmt(len(result.bom))} parti uniche "
+          f"({_fmt(sum(e.count for e in result.bom))} posizionamenti totali)")
+    if args.bom:
+        for entry in sorted(result.bom, key=lambda e: -e.count):
+            print(f"  {entry.count:>6d}x  {entry.name}")
     print(f"payload:      {out}: {_fmt(len(result.payload))} byte "
           f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'})")
     return 0
@@ -545,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="3DXML -> payload binario BZM1 (assiemi CAD parametrici)")
     p.add_argument("input", help="file .3dxml")
     p.add_argument("-o", "--output", default=None)
+    p.add_argument("--bom", action="store_true",
+                   help="stampa la distinta base completa (nome parte x quantita')")
     p.set_defaults(func=cmd_encode_3d)
 
     p = sub.add_parser("render-3d",
