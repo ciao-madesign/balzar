@@ -480,9 +480,11 @@ balzar/
   gui.py          applicazione desktop (Tkinter)
   sequence.py     sequenze multi-file (vettoriali dedup, raster delta)
   explode.py      esploso automatico per layer/gruppo (CAD/SVG)
+  scene3d.py      ingestione 3DXML -> payload binario BZM1 (assiemi CAD, dettagli in CLAUDE.md §9)
+  gltf.py         export payload BZM1 -> glTF/GLB per la visualizzazione (model-viewer)
   webapi.py       logica dell'API web con profili di limiti
-  cli.py          render / encode / encode-image / encode-vector /
-                  encode-video / encode-sequence / explode-vector /
+  cli.py          render / encode / encode-image / encode-vector / encode-3d /
+                  encode-video / encode-sequence / explode-vector / render-3d /
                   decode / info / chunks / scan / assemble / gui
 balzar-app.py     entry point per PyInstaller
 examples/         programmi dimostrativi (.bzr) + sorgenti vettoriali (.svg/.dxf)
@@ -541,10 +543,13 @@ e il formato è interpretabile come regole discrete.
   come utile ma non prioritario ora;
 - rilevamento di linee/cerchi (Hough) sul raster, per contenuto senza
   sorgente vettoriale disponibile (screenshot, scansioni);
-- scene 3D descritte con lo stesso modello (stato + trasformazioni) — il
-  candidato più lontano: servirebbe sia un parser CAD reale (es. STEP) sia
-  primitive 3D nel DSL, nessuna delle due esiste oggi (dettagli in
-  `CLAUDE.md` §7.3).
+- assiemi 3D parametrici (`balzar/scene3d.py`, ingestione 3DXML —
+  **prima versione funzionante**, non più solo teoria: dettagli, numeri
+  reali e cosa manca ancora in `CLAUDE.md` §9). Diverso dall'idea
+  originale "parser STEP + primitive 3D nel DSL" (§7.3, ancora valida
+  come analisi di perché STEP specificamente resta fuori scope): qui si
+  parte da 3DXML (già tassellato, schema pubblicato) invece che da un
+  parser EXPRESS/B-rep da scrivere da zero.
 
 Per un registro di idee esterne valutate (comprese quelle scartate o
 ridimensionate, con il perché) vedi `CLAUDE.md` §7.

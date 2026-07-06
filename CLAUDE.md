@@ -625,13 +625,14 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-175 test, tutti verdi (`python3 -m unittest discover -s tests`):
+190 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
 `test_video.py`, `test_svg.py`, `test_vectorio.py`, `test_sequence.py`,
-`test_explode.py`, `test_webapi.py`, `test_png.py`, `test_cli.py`
-(quest'ultimo prima assente — vedi audit sotto). Copertura: round-trip
+`test_explode.py`, `test_webapi.py`, `test_png.py`, `test_cli.py`,
+`test_scene3d.py` (parser 3DXML, formato binario `BZM1`, export glTF —
+vedi §9.5). Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -1077,15 +1078,19 @@ sopra, che sono tutte misurate su file reali prodotti in questa sessione.
   aperto. È la differenza tra "un file audio compresso" e "uno spartito":
   lo spartito non contiene il suono, contiene le istruzioni per produrlo.
 
-## 9. 3D parametrico — scoping in corso (nessun codice scritto ancora)
+## 9. 3D parametrico — prima versione funzionante
 
-Estensione del progetto discussa ma non ancora implementata: codifica/
-decodifica di file 3D parametrici pesanti (assiemi CAD), con lo stesso
-principio del resto di balzar (deduplicazione strutturale + descrizione
-generativa) e lo stesso supporto fisico QR già esistente. Quanto segue è
-il risultato di un'analisi approfondita su file reali forniti dall'utente
-in sessione — non teoria, misure vere — ma **zero righe di codice
-scritte finora** per questa parte: è tutto scoping.
+Estensione del progetto per la codifica/decodifica di file 3D
+parametrici pesanti (assiemi CAD), con lo stesso principio del resto di
+balzar (deduplicazione strutturale + descrizione generativa) e lo stesso
+supporto fisico QR già esistente. §9.1-9.3 sono il risultato di
+un'analisi approfondita su file reali forniti dall'utente in sessione —
+non teoria, misure vere. §9.4-9.6 documentano la prima versione
+implementata, costruita esattamente sulle decisioni prese in quello
+scoping: gerarchia/nomi dei sotto-assiemi preservati (non appiattiti),
+formato payload binario dedicato (non un'estensione del DSL testuale
+2D), visualizzazione delegata a `model-viewer`/glTF invece di un
+motore di rendering 3D scritto da zero.
 
 ### 9.1 Perché non STEP, non `.smg` — il formato giusto è 3DXML
 
@@ -1202,20 +1207,112 @@ sequenziale** (decodificare il frame N mentre il display mostra già il
 frame N+1, invece di scansionare tutti i 15 frame e poi decodificarli in
 serie) — non prima ottimizzazione tentata finché non risulta necessaria.
 
-### 9.4 Stato: da decidere ancora
+### 9.4 Decisioni prese: input 3DXML, output binario dedicato, vista via glTF
 
-Non ancora deciso (prossimo passo di ragionamento, non ancora scritto):
-cosa esattamente balzar riceve in input (3DXML confermato come formato
-sorgente migliore, ma va scritto il parser) e cosa produce in output
-(nuove istruzioni DSL tipo `MESH3D`/`PLACE3D`? Un formato payload
-parallelo a `BZR1`? Che tipo di self-check sostituisce il render-e-
-confronta-pixel del motore 2D, dato che non c'è un rasterizzatore 3D?).
-Nessun modulo `balzar/scene3d.py` o simile esiste ancora.
+Tre decisioni esplicite prese in sessione, prima di scrivere codice:
+
+1. **Gerarchia preservata**: `parse_3dxml` mantiene l'albero
+   `Reference3D`/`Instance3D` con nomi e raggruppamenti (non appiattisce
+   a una lista di posizionamenti-foglia in coordinate mondo). È anche
+   un DAG, non un albero — un `Reference3D` (es. un sotto-assieme
+   ripetuto) viene interpretato **una sola volta** indipendentemente da
+   quanti `Instance3D` lo bersagliano, perché è lì che vive il grosso
+   della compressione (~20,8× misurato in §9.2): appiattirlo a monte
+   avrebbe buttato via esattamente quel guadagno.
+2. **Formato payload binario dedicato** (`BZM1`, non un'estensione del
+   DSL testuale 2D): confrontato empiricamente contro l'alternativa
+   testuale prima di scegliere — su dati reali, DSL-ASCII + deflate dà
+   465.474 B contro 438.830 B (float32 diretto) / 389.923 B (quantizzato
+   int16): **differenza 6-19%, non un ordine di grandezza** come nel 2D.
+   La scelta è stata quindi guidata dall'architettura (nessun rischio
+   per il parser/interprete 2D esistente, self-check numerico invece di
+   render-e-confronta-pixel) non dalla dimensione, che è quasi un
+   pareggio. Costo esplicito accettato: un payload `BZM1` non è testo
+   ispezionabile a mano come un `.bzr` — coerente con la filosofia del
+   progetto solo in parte, dichiarato apertamente come compromesso.
+3. **Visualizzazione delegata, non un rasterizzatore 3D nostro**: stessa
+   filosofia di `svg.py` per il 2D. Confrontati tre progetti reali:
+   `alonrubintec/3DViewer` scartato subito (nessuna licenza dichiarata,
+   8 commit totali, abbandonato dal 2023); `Online3DViewer` (MIT, molto
+   maturo, supporta STEP/IFC/decine di formati) tenuto da parte per un
+   uso futuro laterale (mostrare il file *sorgente* non convertito,
+   come già fa il tab "Vettoriale" con l'SVG originale); **`model-viewer`
+   di Google** (Apache 2.0, web component, client-side puro, attivamente
+   mantenuto) scelto come target — prende solo glTF/GLB, che però ha
+   già nativamente lo stesso modello dati di 3DXML (nodi con nome, mesh
+   riferite per istanza, gerarchia) — un piccolo esportatore basta,
+   nessun motore di rendering da scrivere.
+
+### 9.5 Cosa esiste ora: `balzar/scene3d.py` + `balzar/gltf.py`
+
+**`balzar/scene3d.py`** — `parse_3dxml` (percorre `Manifest.xml` →
+documento radice → albero `Reference3D`/`Instance3D`/`ReferenceRep` →
+un `Scene3D` con `Shape` uniche + `Reference` con nomi/figli/trasformi),
+formato binario `BZM1` (`encode_payload`/`decode_payload`, stesso schema
+di `BZR1`: magic+versione+lunghezza+CRC32+deflate del corpo binario),
+self-check obbligatorio (`encode_3dxml_file` decodifica il payload appena
+prodotto e lo confronta per uguaglianza esatta contro la scena
+parsata — stesso principio del render-e-confronta-pixel 2D, metrica
+diversa perché non c'è un rasterizzatore). **Prima versione,
+volutamente senza le ottimizzazioni già misurate in §9.2** (quantizzazione
+int16 per-forma, codifica compatta delle rotazioni allineate agli assi):
+corretto prima, piccolo dopo — stesso schema già seguito per i filtri
+PNG e il quantizzatore median-cut in questa sessione.
+
+**`balzar/gltf.py`** — `scene3d_to_glb` esporta una `Scene3D` in un
+file `.glb` valido (verificato non solo con controlli propri ma
+**caricato con successo da `pygltflib`**, una libreria glTF indipendente,
+sull'assembly reale usato per lo scoping). Asimmetria dichiarata, non un
+bug: il grafo di nodi di glTF è un **albero**, non un DAG — supporta il
+riuso di **mesh** tra più nodi (usato: le 78 forme uniche restano
+uniche nel buffer binario) ma non il riuso di **sotto-alberi interi**
+(non esiste un equivalente glTF del "sotto-assieme ripetuto" di 3DXML).
+L'esportatore quindi duplica i nodi per ogni istanza (necessario, non
+un errore), ma i dati di geometria restano deduplicati. Le strisce di
+triangoli vengono appiattite a liste di triangoli semplici (mode 4) per
+compatibilità massima con i viewer, invece di contare sul supporto del
+mode 5 (TRIANGLE_STRIP).
+
+Verificato sul file reale usato per lo scoping (78 forme, 3.862 istanze,
+75.752 vertici): `encode_3dxml_file` — payload 455.369 B in 0,53s
+(nessuna ottimizzazione di dimensione ancora applicata, atteso più
+vicino a 390-440 KB dopo — vedi sopra); `scene3d_to_glb` — 2,13 MB in
+0,08s, 78 mesh / 7.725 nodi / 3 materiali / 1.623 nodi con mesh (i
+posizionamenti-foglia reali).
+
+Comandi CLI: `balzar encode-3d assembly.3dxml -o out.b3d`,
+`balzar render-3d out.b3d -o out.glb`. Test: `tests/test_scene3d.py`
+(12 test, fixture 3DXML sintetica costruita in memoria — nessun file
+CAD reale nel repository) + 4 test in `tests/test_cli.py` — 190 test
+totali.
+
+### 9.6 Cosa manca ancora (esplicitamente non fatto in questa sessione)
+
+- **Integrazione GUI/demo web**: nessun tab "Assemblee 3D" nella demo
+  web, nessun pulsante nella GUI desktop. La pagina che ospiterebbe
+  `<model-viewer>` non è stata scritta.
+- **Ottimizzazioni di dimensione già misurate ma non applicate**:
+  quantizzazione int16 per-forma (~11% in meno, misurato in §9.2),
+  codifica compatta delle rotazioni allineate agli assi (indici uint16
+  invece di uint32 per i triangoli, dato che nessuna forma reale vista
+  finora supera i 65.535 vertici).
+- **Nessun test con un file 3DXML reale nel repository** (per gli
+  stessi motivi di copyright già visti per il logo Harley-Davidson in
+  §2.6): la fixture di test è sintetica, verificata a mano contro il
+  file reale dell'utente in sessione ma non committata.
+- **Nessuna verifica visiva**: il GLB è stato validato strutturalmente
+  (header, chunk, parsing con `pygltflib`) ma mai aperto in un browser
+  con `<model-viewer>` — non è stato controllato che l'orientamento
+  reale dei pezzi sia corretto (la conversione riga-maggiore→colonna-
+  maggiore della matrice in `gltf.py` è un'assunzione dichiarata, non
+  verificata visivamente).
 
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 175 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 190 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m balzar encode-3d assembly.3dxml -o out.b3d
+python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop
 python3 -m balzar encode-image foto.png -o f.bzp
 python3 -m balzar encode-vector drawing.svg -o f.bzp

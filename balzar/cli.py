@@ -182,6 +182,55 @@ def cmd_encode_vector(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_encode_3d(args: argparse.Namespace) -> int:
+    """3DXML -> payload binario BZM1 (balzar/scene3d.py). Prima versione:
+    corretta e auto-verificata, ottimizzazioni di dimensione (quantizzazione
+    vertici, codifica compatta delle rotazioni allineate agli assi -- gia'
+    prototipate e misurate, vedi CLAUDE.md SS9) non ancora applicate."""
+    from .scene3d import Scene3DError, encode_3dxml_file
+
+    try:
+        result = encode_3dxml_file(args.input)
+    except Scene3DError as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    out = args.output or (os.path.splitext(args.input)[0] + ".b3d")
+    with open(out, "wb") as fh:
+        fh.write(result.payload)
+
+    print(f"sorgente:     {args.input}")
+    print(f"forme uniche: {result.shape_count}")
+    print(f"riferimenti:  {_fmt(result.reference_count)}")
+    print(f"istanze:      {_fmt(result.instance_count)}")
+    print(f"vertici:      {_fmt(result.vertex_count)}")
+    print(f"payload:      {out}: {_fmt(len(result.payload))} byte "
+          f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'})")
+    return 0
+
+
+def cmd_render_3d(args: argparse.Namespace) -> int:
+    """Payload BZM1 -> file .glb (balzar/gltf.py), visualizzabile con
+    qualunque viewer glTF (es. <model-viewer> nel browser)."""
+    from .gltf import scene3d_to_glb
+    from .scene3d import Scene3DError, decode_payload
+
+    with open(args.input, "rb") as fh:
+        data = fh.read()
+    try:
+        scene = decode_payload(data)
+    except Scene3DError as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    glb = scene3d_to_glb(scene)
+    out = args.output or (os.path.splitext(args.input)[0] + ".glb")
+    with open(out, "wb") as fh:
+        fh.write(glb)
+    print(f"glb:          {out} ({_fmt(len(glb))} byte)")
+    return 0
+
+
 def cmd_encode_video(args: argparse.Namespace) -> int:
     try:
         from .imageio import load_frames
@@ -491,6 +540,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-dim", type=int, default=800,
                    help="lato massimo del canvas generato (default 800)")
     p.set_defaults(func=cmd_encode_vector)
+
+    p = sub.add_parser("encode-3d",
+                       help="3DXML -> payload binario BZM1 (assiemi CAD parametrici)")
+    p.add_argument("input", help="file .3dxml")
+    p.add_argument("-o", "--output", default=None)
+    p.set_defaults(func=cmd_encode_3d)
+
+    p = sub.add_parser("render-3d",
+                       help="payload BZM1 -> file .glb visualizzabile (balzar/gltf.py)")
+    p.add_argument("input", help="file .b3d (payload BZM1)")
+    p.add_argument("-o", "--output", default=None)
+    p.set_defaults(func=cmd_render_3d)
 
     p = sub.add_parser("encode-video",
                        help="GIF animata/sequenza -> payload (delta tra frame)")

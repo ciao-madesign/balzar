@@ -231,6 +231,76 @@ class TestCli(unittest.TestCase):
         self.assertIn("errore:", err)
         self.assertNotIn("Traceback", err)
 
+    # --------------------------------------------------------- encode-3d
+
+    def _write_minimal_3dxml(self, name):
+        import zipfile
+        manifest = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Manifest xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+                   'xsi:noNamespaceSchemaLocation="Manifest.xsd">'
+                   '<Root>main.3dxml</Root></Manifest>')
+        main_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Model_3dxml xmlns="http://www.3ds.com/xsd/3DXML" '
+                   'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+                   '<ProductStructure root="1">'
+                   '<Reference3D id="1" name="Root"/>'
+                   '<Instance3D id="2" name="inst_A">'
+                   '<IsAggregatedBy>1</IsAggregatedBy><IsInstanceOf>3</IsInstanceOf>'
+                   '<RelativeMatrix>1 0 0 0 1 0 0 0 1 0 0 0</RelativeMatrix></Instance3D>'
+                   '<Reference3D id="3" name="PartA"/>'
+                   '<ReferenceRep id="4" name="PartA_Rep" associatedFile="urn:3DXML:shapeA.3DRep"/>'
+                   '<InstanceRep id="5" name="PartA_InstRep">'
+                   '<IsAggregatedBy>3</IsAggregatedBy><IsInstanceOf>4</IsInstanceOf></InstanceRep>'
+                   '</ProductStructure></Model_3dxml>')
+        shape_rep = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                    '<XMLRepresentation xmlns="http://www.3ds.com/xsd/3DXML" '
+                    'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+                    '<Root xsi:type="BagRepType" id="1"><Rep xsi:type="PolygonalRepType" id="2">'
+                    '<Faces><Face strips="0 1 2"><SurfaceAttributes>'
+                    '<Color xsi:type="RGBAColorType" red="1" green="0" blue="0" alpha="1"/>'
+                    '</SurfaceAttributes></Face></Faces>'
+                    '<VertexBuffer><Positions>0 0 0 1 0 0 0 1 0</Positions>'
+                    '<Normals>0 0 1 0 0 1 0 0 1</Normals></VertexBuffer></Rep></Root>'
+                    '</XMLRepresentation>')
+        path = self._path(name)
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("Manifest.xml", manifest)
+            zf.writestr("main.3dxml", main_xml)
+            zf.writestr("shapeA.3DRep", shape_rep)
+        return path
+
+    def test_encode_3d_then_render_3d_roundtrip(self):
+        path = self._write_minimal_3dxml("assembly.3dxml")
+        code, out, err = _run(["encode-3d", path])
+        self.assertEqual(code, 0)
+        self.assertIn("forme uniche: 1", out)
+        payload_path = os.path.splitext(path)[0] + ".b3d"
+        self.assertTrue(os.path.exists(payload_path))
+
+        glb_path = self._path("out.glb")
+        code, out, err = _run(["render-3d", payload_path, "-o", glb_path])
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(glb_path))
+        with open(glb_path, "rb") as fh:
+            self.assertEqual(fh.read(4), b"glTF")
+
+    def test_encode_3d_missing_manifest_gives_clean_error(self):
+        import zipfile
+        bad_path = self._path("bad.3dxml")
+        with zipfile.ZipFile(bad_path, "w") as zf:
+            zf.writestr("not_a_manifest.txt", "hello")
+        code, out, err = _run(["encode-3d", bad_path])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_render_3d_corrupt_payload_gives_clean_error(self):
+        bad_path = self._write("bad.b3d", "not a real BZM1 payload")
+        code, out, err = _run(["render-3d", bad_path])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+        self.assertNotIn("Traceback", err)
+
     # ------------------------------------------------------ encode-video
 
     def test_encode_video_gif(self):
