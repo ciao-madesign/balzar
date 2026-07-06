@@ -2054,6 +2054,78 @@ codice oggi") — nessun prototipo Kivy/BeeWare, nessuna build APK
 tentata. Qualunque cifra data ora sarebbe inventata, non misurata:
 dichiarato onestamente come "non esiste ancora", non stimato a caso.
 
+### 9.14 "Esporta scheda ricambio": isolare una parte, stamparne una vista + codice
+
+Domanda diretta di sessione, seguito naturale del click-to-select di
+§9.11: una volta isolato un componente difettoso, il tecnico può
+"stampare" (scaricare) una vista di quel componente più il suo
+identificativo, per richiedere il ricambio? Verificato prima il punto
+sui metadati: il file 3DXML reale non porta altri campi utili oltre al
+nome (`V_discipline`/`V_usage`/`V_nature` sono boilerplate costante
+identico sulle 88 parti, `Author`/`Created`/`Title` sono solo a livello
+documento, non per-parte) — quindi la scheda esportabile è
+deliberatamente minima: un'immagine e un codice, non un generatore di
+report con campi che il formato sorgente non fornisce.
+
+Implementazione, nel modo più semplice possibile come richiesto: con
+una parte selezionata (isolata via `materialFromPoint`, §9.11), un
+bottone "Esporta scheda ricambio" cattura la vista corrente del
+`<model-viewer>` (già isolata/attenuata così com'è mostrata), la
+disegna su un `<canvas>` con un header bianco che riporta il nome
+della parte e "Quantità nell'assieme: N" (letto dallo stesso
+`data-part-count` già presente sulle righe della BOM), e scarica il
+risultato come PNG (`scheda_<nome>.png`) — stessa idea di
+`exportPartSheet`/`threedExportPartSheet` in entrambe le interfacce
+(`balzar/viewer3d.py` per la GUI desktop, `app.js` per la demo web),
+duplicata invece che condivisa per lo stesso motivo già documentato in
+§9.11 (una è incorporata in un f-string Python, l'altra è uno script
+statico).
+
+**Bug reale trovato durante la verifica, non nella logica del bottone
+ma nell'API di cattura scelta.** Il primo tentativo ha usato
+`model-viewer.toBlob({idealAspect:true})` (asincrona, con ritaglio
+all'aspect ratio ideale) — sembrava la scelta giusta perché è l'API
+pensata apposta per l'export ("idealAspect" è un'opzione documentata).
+Misurato invece: **cattura sempre completamente trasparente/vuota**,
+esattamente **1.699 byte ogni singola volta**, indipendentemente da
+attese fino a 5+ secondi, retry, ordine di scroll-into-view prima/dopo
+il caricamento del modello, o CSS (`border-radius` rimosso per
+escludere un clipping). La consistenza esatta del numero di byte è
+stata la prova che non fosse una race condition di timing (che avrebbe
+dato risultati variabili) ma un problema strutturale della
+funzione stessa. Ispezionato il sorgente minificato di
+`model-viewer.min.js` per capire perché: `toBlob()` internamente
+disegna su un **canvas offscreen separato** con un calcolo di ritaglio
+e poi un blocco `finally` che richiama un resize interno — uno di
+questi passaggi produce un buffer vuoto in questo layout specifico.
+`toDataURL('image/png')` (sincrona, va dritta a
+`displayCanvas().toDataURL()`, nessun canvas offscreen, nessun
+ritaglio) sullo **stesso elemento, nello stesso momento**, ha prodotto
+contenuto reale in modo affidabile: 36.671–73.165 byte a seconda della
+scena, verificato ripetutamente. Fix: sostituita `toBlob` con
+`toDataURL` in entrambe le implementazioni — si perde il ritaglio
+automatico all'aspect ratio ideale (costo estetico, l'immagine include
+lo sfondo scuro intero del viewer invece di un ritaglio stretto attorno
+al modello), guadagno di correttezza netto: una cattura che contiene
+davvero il modello invece di un rettangolo vuoto scaricato con successo
+ma inutile.
+
+Verificato end-to-end con Playwright, non solo scritto: click su una
+parte reale (fixture 3DXML sintetica, stessa usata da
+`tests/test_scene3d.py`) → bottone abilitato solo dopo una selezione →
+download → PNG riaperto e ricontrollato per contenuto non-vuoto (conteggio
+di colori distinti campionati sull'immagine, non solo la dimensione in
+byte). Ripetuto due volte, stessa metodologia già consolidata nel
+progetto: una sulla GUI desktop (`viewer3d.py`, servito in locale via
+`http.server`) — cattura **27.677 B**, 9 colori distinti campionati; e
+una **end-to-end reale sulla demo web**, upload vero attraverso un
+devserver locale che instrada `/api/encode_3d` al vero `handle_encode_3d`
+(non un mock) — cattura **17.011 B**, 14 colori distinti campionati.
+Nessun test Python automatico aggiunto (comportamento client-side puro,
+stesso principio già seguito per il resto della UI 3D in §9.11: verifica
+Playwright manuale in sessione, non nella suite automatica). Suite
+Python invariata a 216 test, tutti verdi.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash

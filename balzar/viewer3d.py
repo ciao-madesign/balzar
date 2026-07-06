@@ -26,6 +26,14 @@ isolate effect, not just a recolour, using only documented Material API
 (pbrMetallicRoughness.setBaseColorFactor). Clicking a BOM row selects
 ALL instances sharing that part name instead of a single object
 identity, since a BOM line is a part TYPE, not one specific placement.
+
+Part sheet export ("Esporta scheda ricambio"): once a part is selected,
+model-viewer's public toBlob() captures the isolated view exactly as
+shown (dimmed rest included), which gets stamped with the part's name
+and BOM count on a plain <canvas> and downloaded as one PNG -- for a
+technician who's found a defective part and wants a one-image reference
+to request the replacement, the simplest version of that: a picture and
+a code, not a full report generator.
 """
 
 from __future__ import annotations
@@ -59,16 +67,20 @@ model-viewer{{width:100%;height:100%}}
 #bom tr.part{{cursor:pointer}}
 #bom tr.part:hover td{{background:#333}}
 #bom tr.part.selected td{{background:#c77a2e;color:#fff}}
-#reset-btn{{position:absolute;top:12px;left:12px;padding:6px 12px;border-radius:6px;
+#reset-btn,#export-btn{{position:absolute;top:12px;padding:6px 12px;border-radius:6px;
            border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
            font:inherit;cursor:pointer}}
-#reset-btn:hover{{border-color:#c77a2e}}
+#reset-btn{{left:12px}}
+#export-btn{{left:120px}}
+#reset-btn:hover,#export-btn:hover{{border-color:#c77a2e}}
+#export-btn:disabled{{opacity:0.4;cursor:not-allowed}}
 </style>
 </head>
 <body>
 <model-viewer id="mv" src="model.glb" camera-controls auto-rotate
              shadow-intensity="0.6" exposure="1.1" field-of-view="30deg"></model-viewer>
 <button id="reset-btn" type="button">Mostra tutto</button>
+<button id="export-btn" type="button" disabled>Esporta scheda ricambio</button>
 {bom_html}
 <script>{select_js}</script>
 </body>
@@ -82,9 +94,12 @@ model-viewer{{width:100%;height:100%}}
 _SELECT_JS = """
 (function(){
   var mv = document.getElementById('mv');
+  var exportBtn = document.getElementById('export-btn');
   var HIGHLIGHT = [1.0, 0.55, 0.05, 1.0];
   var DIM_ALPHA = 0.12;
   var originalColors = null;
+  var selectedName = null;
+  var selectedCount = null;
 
   function cacheColors(){
     originalColors = new Map();
@@ -127,6 +142,50 @@ _SELECT_JS = """
     document.querySelectorAll('#bom tr.part').forEach(function(row){
       row.classList.toggle('selected', name !== null && row.dataset.partName === name);
     });
+    selectedName = name;
+    if (name !== null){
+      var row = document.querySelector('#bom tr.part[data-part-name="' + CSS.escape(name) + '"]');
+      selectedCount = row ? row.dataset.partCount : null;
+    } else {
+      selectedCount = null;
+    }
+    exportBtn.disabled = (selectedName === null);
+  }
+
+  async function exportPartSheet(){
+    // mv.toDataURL() (no options, straight to displayCanvas().toDataURL())
+    // instead of mv.toBlob({idealAspect:true}): the latter routes through
+    // an internal offscreen-canvas resize+crop step that was measured to
+    // return a fully transparent capture in some layouts (reproduced on
+    // the web demo's model-viewer instance -- consistent, same byte size
+    // every time, so not a timing race: no amount of waiting or retrying
+    // fixed it). Losing the idealAspect crop is a cosmetic trade for a
+    // capture that actually contains the model.
+    if (!selectedName) return;
+    var dataUrl = mv.toDataURL('image/png');
+    var img = new Image();
+    await new Promise(function(resolve){ img.onload = resolve; img.src = dataUrl; });
+
+    var headerH = 64;
+    var canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height + headerH;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, headerH);
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText(selectedName, 12, 28);
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Quantita\\' nell\\'assieme: ' + (selectedCount || '?'), 12, 50);
+
+    canvas.toBlob(function(sheetBlob){
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(sheetBlob);
+      a.download = 'scheda_' + selectedName.replace(/[^a-z0-9]+/gi, '_') + '.png';
+      a.click();
+    }, 'image/png');
   }
 
   mv.addEventListener('load', cacheColors);
@@ -135,6 +194,7 @@ _SELECT_JS = """
     if (material) selectMaterial(material); else resetAll();
   });
   document.getElementById('reset-btn').addEventListener('click', resetAll);
+  exportBtn.addEventListener('click', exportPartSheet);
   document.querySelectorAll('#bom tr.part').forEach(function(row){
     row.addEventListener('click', function(){ selectByName(row.dataset.partName); });
   });
@@ -146,7 +206,7 @@ def _bom_html(bom_lines: list[tuple[str, int]] | None) -> str:
     if not bom_lines:
         return ""
     rows = "".join(
-        f'<tr class="part" data-part-name="{html.escape(name)}">'
+        f'<tr class="part" data-part-name="{html.escape(name)}" data-part-count="{count}">'
         f'<td>{html.escape(name)}</td><td class="qty">x{count}</td></tr>'
         for name, count in bom_lines
     )

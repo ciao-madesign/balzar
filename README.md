@@ -464,7 +464,12 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   un semplice ricolorare. Click su una riga della BOM evidenzia invece
   tutte le istanze di quel tipo di parte. Costo reale misurato: +4,3%
   sul GLB (dettagli in CLAUDE.md §9.11), stessa geometria deduplicata
-  di sempre.
+  di sempre. Con una parte selezionata, **"Esporta scheda ricambio"**
+  scarica un PNG con la vista isolata più il nome della parte e la
+  quantità nell'assieme — un'immagine e un codice, pensata per un
+  tecnico che ha trovato un pezzo difettoso e deve richiedere il
+  ricambio (vedi CLAUDE.md §9.14 per la scelta API dietro la cattura).
+  Stessa funzione nella GUI desktop (`balzar/viewer3d.py`).
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il

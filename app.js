@@ -803,10 +803,13 @@ const threedDlPayload = document.getElementById("threed-dl-payload");
 const threedDlGlb = document.getElementById("threed-dl-glb");
 const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
 const threedResetBtn = document.getElementById("threed-reset-btn");
+const threedExportBtn = document.getElementById("threed-export-btn");
 
 let lastThreedResult = null;
 let lastThreedGlbUrl = null;
 let threedOriginalColors = null; // Map<Material, [r,g,b,a]>, cached on model load
+let threedSelectedName = null;
+let threedSelectedCount = null;
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -856,6 +859,47 @@ function threedSetBomSelection(name) {
   threedBomTable.querySelectorAll("tr.part").forEach(row => {
     row.classList.toggle("selected", name !== null && row.dataset.partName === name);
   });
+  threedSelectedName = name;
+  if (name !== null) {
+    const row = threedBomTable.querySelector(`tr.part[data-part-name="${CSS.escape(name)}"]`);
+    threedSelectedCount = row ? row.dataset.partCount : null;
+  } else {
+    threedSelectedCount = null;
+  }
+  threedExportBtn.disabled = (threedSelectedName === null);
+}
+
+async function threedExportPartSheet() {
+  // threedViewer.toDataURL() (no options, straight to
+  // displayCanvas().toDataURL()) instead of toBlob({idealAspect:true}):
+  // the latter routes through an internal offscreen-canvas resize+crop
+  // step that was measured to return a fully transparent capture in this
+  // exact layout -- consistent, same byte size every time, so not a
+  // timing race (no amount of waiting or retrying fixed it). Losing the
+  // idealAspect crop is a cosmetic trade for a capture that actually
+  // contains the model.
+  if (!threedSelectedName) return;
+  const dataUrl = threedViewer.toDataURL("image/png");
+  const img = new Image();
+  await new Promise(resolve => { img.onload = resolve; img.src = dataUrl; });
+
+  const headerH = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = img.width;
+  canvas.height = img.height + headerH;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, headerH);
+  ctx.fillStyle = "#000000";
+  ctx.font = "bold 22px sans-serif";
+  ctx.fillText(threedSelectedName, 12, 28);
+  ctx.font = "16px sans-serif";
+  ctx.fillText(`Quantita' nell'assieme: ${threedSelectedCount ?? "?"}`, 12, 50);
+
+  canvas.toBlob(sheetBlob => {
+    downloadBlob(sheetBlob, `scheda_${threedSelectedName.replace(/[^a-z0-9]+/gi, "_")}.png`, "image/png");
+  }, "image/png");
 }
 
 threedViewer.addEventListener("load", threedCacheColors);
@@ -864,6 +908,7 @@ threedViewer.addEventListener("click", (ev) => {
   if (material) threedSelectMaterial(material); else threedResetSelection();
 });
 threedResetBtn.addEventListener("click", threedResetSelection);
+threedExportBtn.addEventListener("click", threedExportPartSheet);
 
 threedBrowseBtn.addEventListener("click", () => threedFileInput.click());
 threedFileInput.addEventListener("change", () => {
@@ -916,6 +961,16 @@ async function handleThreedFile(file) {
 }
 
 function renderThreedResult(r) {
+  // Un-hide the container BEFORE setting .src: model-viewer measures its
+  // parent's size when it starts loading, and doing this the other way
+  // around (as a first version did) meant it could initialize against a
+  // still-hidden (display:none, zero-size) container -- toBlob() then
+  // produced a real-looking-dimensions-but-blank capture (a small,
+  // consistent byte size every time) even though the on-screen render
+  // itself looked completely correct, since normal rendering re-measures
+  // on becoming visible but toBlob()'s internal snapshot canvas did not.
+  threedResultEl.hidden = false;
+
   if (lastThreedGlbUrl) URL.revokeObjectURL(lastThreedGlbUrl);
   threedGlbOmittedEl.hidden = !r.glb_omitted;
   if (!r.glb_omitted) {
@@ -943,7 +998,7 @@ function renderThreedResult(r) {
 
   threedBomTable.innerHTML = r.bom.length
     ? r.bom.map(e =>
-        `<tr class="part" data-part-name="${escapeHtml(e.name)}">` +
+        `<tr class="part" data-part-name="${escapeHtml(e.name)}" data-part-count="${e.count}">` +
         `<td>${escapeHtml(e.name)}</td><td>x${e.count}</td></tr>`
       ).join("")
     : "<tr><td>(nessuna parte)</td></tr>";
@@ -952,7 +1007,9 @@ function renderThreedResult(r) {
   });
 
   threedOriginalColors = null; // new model: cached again on its own 'load' event
-  threedResultEl.hidden = false;
+  threedSelectedName = null;
+  threedSelectedCount = null;
+  threedExportBtn.disabled = true;
 }
 
 threedDlPayload.addEventListener("click", () => {
