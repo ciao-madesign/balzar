@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import struct
 
-from .scene3d import Reference, Scene3D, bom_display_name
+from .scene3d import Reference, Scene3D, effective_display_name
 
 _IDENTITY_16 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
@@ -82,7 +82,7 @@ def _strip_to_triangles(strip: list[int]) -> list[int]:
 def _build_reference_node(scene: Scene3D, ref_index: int,
                           shape_accessors: list[tuple[int, int]],
                           meshes: list[dict], materials: list[dict],
-                          nodes: list[dict]) -> int:
+                          nodes: list[dict], parent: Reference | None = None) -> int:
     """Recursively emit the node for `Reference[ref_index]`'s own content
     (mesh if it's a leaf, children if it's a group), wrapping every child
     instance in its own node carrying that instance's transform+name.
@@ -101,7 +101,7 @@ def _build_reference_node(scene: Scene3D, ref_index: int,
     if ref.shape_index is not None:
         shape = scene.shapes[ref.shape_index]
         pos_accessor, idx_accessor = shape_accessors[ref.shape_index]
-        display_name = bom_display_name(ref)
+        display_name = effective_display_name(parent, ref)
         r, g, b = shape.color
         materials.append({
             "name": display_name,
@@ -119,7 +119,7 @@ def _build_reference_node(scene: Scene3D, ref_index: int,
         child_indices = []
         for target, inst_name, matrix in ref.children:
             content_idx = _build_reference_node(scene, target, shape_accessors,
-                                                 meshes, materials, nodes)
+                                                 meshes, materials, nodes, parent=ref)
             instance_node: dict = {"children": [content_idx]}
             gm = _matrix_to_gltf(matrix)
             if gm != _IDENTITY_16:

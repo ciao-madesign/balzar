@@ -221,6 +221,46 @@ class TestBom(unittest.TestCase):
         self.assertIn("senza nome", bom[0].name)
         self.assertEqual(bom[0].count, 1)
 
+    def test_auto_generated_object_n_name_prefers_wrapper_name(self):
+        # the exact real-world shape confirmed in CLAUDE.md SS9.12: a
+        # "product" reference with a real name (e.g. a CAD export's
+        # "VASCA_ACCUMULO_SUB009") wraps -- via a single otherwise-
+        # unnamed Instance3D -- the reference that actually carries the
+        # geometry, auto-labelled "Object 13" by the export tool
+        from balzar.scene3d import Reference, Scene3D, Shape, generate_bom
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        shape = Shape(name=None, color=(1, 2, 3),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        leaf = Reference(name="Object 13", shape_index=0, children=[])
+        wrapper = Reference(name="VASCA_ACCUMULO_SUB009", shape_index=None,
+                            children=[(2, None, identity)])
+        root = Reference(name="Root", shape_index=None, children=[(1, None, identity)])
+        scene = Scene3D(shapes=[shape], references=[root, wrapper, leaf], root=0)
+
+        bom = generate_bom(scene)
+        self.assertEqual(len(bom), 1)
+        self.assertEqual(bom[0].name, "VASCA_ACCUMULO_SUB009")
+
+    def test_already_meaningful_leaf_name_is_not_overridden_by_wrapper(self):
+        # the same single-child-wrapper shape as above, but the leaf's
+        # own name is NOT the auto-generated "Object N" pattern -- an
+        # earlier version of this heuristic fired on ANY single-child
+        # wrapper and incorrectly replaced an already-good name
+        from balzar.scene3d import Reference, Scene3D, Shape, generate_bom
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        shape = Shape(name=None, color=(1, 2, 3),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        leaf = Reference(name="PartB", shape_index=0, children=[])
+        wrapper = Reference(name="SubGroup", shape_index=None, children=[(2, None, identity)])
+        root = Reference(name="Root", shape_index=None, children=[(1, None, identity)])
+        scene = Scene3D(shapes=[shape], references=[root, wrapper, leaf], root=0)
+
+        bom = generate_bom(scene)
+        self.assertEqual(len(bom), 1)
+        self.assertEqual(bom[0].name, "PartB")
+
 
 class TestQuantizationAndCompactTransforms(unittest.TestCase):
     """The three size optimizations applied on top of the first working

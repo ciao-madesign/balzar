@@ -44,6 +44,7 @@ repetition, not the number of Reference3D leaf definitions.
 
 from __future__ import annotations
 
+import re
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
@@ -486,6 +487,42 @@ def bom_display_name(ref: Reference) -> str:
     return ref.name or f"(senza nome, forma {ref.shape_index})"
 
 
+_AUTO_GENERATED_LEAF_NAME = re.compile(r"Object \d+")
+
+
+def effective_display_name(parent: Reference | None, ref: Reference) -> str:
+    """bom_display_name, but preferring a wrapping reference's name over
+    the leaf's own specifically when the leaf's own name looks like the
+    export tool's auto-generated placeholder ("Object N", assigned by
+    the software, not the engineer) rather than a real part name.
+
+    Confirmed on a real file (CLAUDE.md SS9.12): every one of the 245
+    real leaf placements had exactly this shape -- a "product" reference
+    with a real, meaningful part/sub-assembly name (e.g.
+    "VASCA_ACCUMULO_SUB009") wrapping, via a single otherwise-unnamed
+    Instance3D, the reference that actually holds the geometry, which
+    the CAD export labelled "Object 13". None of the 88 underlying leaf
+    references was ever reached through two differently-named wrappers,
+    so preferring the wrapper's name is unambiguous here, not a guess.
+
+    The regex match matters, not just "does a 1-child wrapper exist":
+    an early version of this function fired for ANY single-child
+    wrapper regardless of the leaf's own name, and broke on synthetic
+    test fixtures where the leaf already had a perfectly good name of
+    its own (e.g. "PartB" wrapped by a "SubGroup") -- overriding an
+    already-meaningful name with a less specific one, and even
+    overriding the explicit "(senza nome, ...)" placeholder for a truly
+    unnamed leaf with an unrelated ancestor's name. Restricting the
+    trigger to the exact observed auto-generated pattern fixes both:
+    it only ever replaces a name the CAD tool invented, never one a
+    human (or bom_display_name's own placeholder) already gave it."""
+    if (ref.name and _AUTO_GENERATED_LEAF_NAME.fullmatch(ref.name)
+            and parent is not None and parent.name and parent.shape_index is None
+            and len(parent.children) == 1):
+        return parent.name
+    return bom_display_name(ref)
+
+
 def generate_bom(scene: Scene3D) -> list[BomEntry]:
     """Flat bill of materials: every named leaf part and how many times
     it's actually placed, walking the full DAG with multiplicity (the
@@ -505,18 +542,18 @@ def generate_bom(scene: Scene3D) -> list[BomEntry]:
     counts: dict[tuple[str, int], int] = {}
     order: list[tuple[str, int]] = []
 
-    def walk(ref_index: int) -> None:
+    def walk(ref_index: int, parent: Reference | None) -> None:
         ref = scene.references[ref_index]
         if ref.shape_index is not None:
-            key = (bom_display_name(ref), ref.shape_index)
+            key = (effective_display_name(parent, ref), ref.shape_index)
             if key not in counts:
                 counts[key] = 0
                 order.append(key)
             counts[key] += 1
         for target, _inst_name, _matrix in ref.children:
-            walk(target)
+            walk(target, ref)
 
-    walk(scene.root)
+    walk(scene.root, None)
     return [BomEntry(name=name, shape_index=shape_idx, count=counts[(name, shape_idx)])
            for name, shape_idx in order]
 

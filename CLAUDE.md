@@ -605,9 +605,9 @@ statistiche oneste → salva `.bzp`/`.bzr`, esporta PNG/GIF, esporta QR come
 pulsante "Scansiona foto QR" per il percorso inverso. Impacchettabile in
 un eseguibile singolo con PyInstaller
 (`pyinstaller --onefile --windowed --name balzar balzar-app.py`) —
-**il packaging PyInstaller non è stato ancora eseguito/testato in questa
-sessione**, solo documentato; da verificare che includa anche la libreria
-nativa `libzbar` richiesta da `pyzbar`, non solo codice Python.
+**eseguito e verificato per la prima volta in una sessione successiva**
+(vedi §9.13 per il numero reale e la conferma che `libzbar` nativo
+viene incluso automaticamente, non solo il codice Python di `pyzbar`).
 
 Verificato con screenshot reale sotto Xvfb: apertura GIF, encoding video
 delta, anteprima animata, pannello statistiche, bottoni attivi, ciclo
@@ -800,7 +800,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-214 test, tutti verdi (`python3 -m unittest discover -s tests`):
+216 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -940,9 +940,12 @@ scansione whole-image su una griglia completa) — vedi §2.4b).
    lettura multi-QR con `pyzbar`/ZBar) ha provato che il concetto regge, ma
    va portato dentro il progetto (nuova dipendenza opzionale, nuovo comando
    CLI/GUI) — vedi Sviluppi §5.
-5. **PyInstaller non testato**: il packaging in eseguibile singolo è
-   documentato ma non verificato in questa sessione (nessun ambiente
-   Windows/macOS disponibile qui). Da testare prima di distribuire.
+5. ~~PyInstaller non testato~~ — **fatto in una sessione successiva**
+   (§9.13): build Linux reale, 23.325.664 B, GUI lanciata sotto Xvfb con
+   screenshot reale, `libzbar` nativo incluso automaticamente. Resta da
+   ripetere la build su Windows/macOS reali (non disponibili in questo
+   sandbox) per confermare le stesse dimensioni/comportamento — quella
+   parte resta non verificata.
 6. **Vercel: `vercel.json` non testato con un deploy reale** in questa
    sessione (nessun deploy effettuato, solo simulato con un server locale
    equivalente). Verificare `maxDuration`/`memory` reggono sul piano
@@ -1915,10 +1918,146 @@ il click stesso (comportamento client-side, stesso principio già
 seguito per il resto della UI 3D: verifica Playwright manuale in
 sessione, non nella suite automatica).
 
+### 9.12 Nomi generici "Object N" nella BOM: confermato, corretto
+
+Domanda diretta di sessione: l'utente ha notato che la BOM del test
+mostra "Object 1, Object 2, Object 3..." mentre il file originale (nel
+suo CAD) mostra un involucro con un codice reale e "Object X" solo
+all'interno. Verificato sul file XML grezzo, non a memoria: sì,
+confermato esattamente. Estratto un esempio concreto dal documento
+principale del `.3dxml`:
+
+```
+Reference3D id="4" name="VASCA_ACCUMULO_SUB009"   (nessuna forma propria)
+  -> Instance3D id="11" (senza nome)
+    -> IsInstanceOf -> Reference3D id="6" name="Object 13"  (qui la geometria)
+```
+
+Un `Reference3D` "prodotto" con un nome reale e leggibile
+(`VASCA_ACCUMULO_SUB009`) avvolge — tramite un singolo `Instance3D`
+senza nome proprio — il `Reference3D` che porta davvero la geometria,
+etichettato genericamente dall'esportatore CAD ("Object 13", assegnato
+dal software, non dall'ingegnere). `generate_bom`/`gltf.py` prendevano
+il nome della foglia (quello con la geometria), non quello
+dell'involucro — da cui "Object N" invece del codice reale.
+
+**Verificato sistematicamente su tutto il file**, non solo
+sull'esempio: **tutti i 245 posizionamenti-foglia reali** seguono
+esattamente questo schema (un involucro con un solo figlio che è esso
+stesso una foglia), e **nessuna delle 88 forme uniche sottostanti** è
+mai raggiunta da due involucri con nomi diversi — quindi preferire il
+nome dell'involucro qui è una correzione univoca, non un'euristica
+rischiosa.
+
+**Fix**: nuova funzione `effective_display_name(parent, ref)` in
+`scene3d.py`, condivisa da `generate_bom` e da `gltf.py` (stessa fonte
+di verità già usata per la sincronizzazione BOM↔click di §9.11) — **non**
+"preferisci sempre l'involucro quando esiste un solo figlio": la prima
+versione faceva così ed è stata trovata rotta dagli stessi test
+automatici già esistenti, prima ancora di toccare un file reale.
+Un involucro a singolo figlio è un pattern comune anche per parti già
+correttamente nominate (es. `SubGroup` che avvolge `PartB`, dal fixture
+sintetico di `tests/test_scene3d.py`) — sovrascrivere sempre avrebbe
+perso un nome già buono in favore di uno meno specifico, e avrebbe
+persino sovrascritto il placeholder esplicito "(senza nome, ...)" di
+una foglia genuinamente senza nome con il nome di un antenato non
+correlato. Corretto restringendo il trigger al pattern esatto osservato
+(`re.fullmatch(r"Object \d+", ref.name)`): scatta solo quando il nome
+della foglia è **esattamente** quello che lo strumento CAD genera in
+automatico, mai quando la foglia ha già un nome vero (assegnato da un
+umano) o nessun nome affatto.
+
+Verificato: rieseguendo `generate_bom` sul file reale, le prime righe
+della BOM sono ora `VASCA_ACCUMULO_SUB009`, `VASCA_ACCUMULO_SUB004`,
+`VASCA_ACCUMULO_SUB008`, ... — codici reali, non più "Object N". Due
+nuovi test in `tests/test_scene3d.py`
+(`test_auto_generated_object_n_name_prefers_wrapper_name`,
+`test_already_meaningful_leaf_name_is_not_overridden_by_wrapper`) — 216
+test totali.
+
+### 9.13 Licenze, commercializzazione, dimensione reale dell'eseguibile desktop
+
+Tre domande dirette di sessione, verificate con dati reali invece che a
+memoria.
+
+**Licenza di `model-viewer` e rischio legale**: il file vendorizzato
+(`model-viewer.min.js`, build UMD 4.3.1) contiene commenti `@license`
+con `SPDX-License-Identifier: BSD-3-Clause`/`MIT` per alcuni file
+interni (probabilmente utility matematiche prese da three.js con la
+loro attribuzione originale preservata) — a prima vista in contraddizione
+con quanto già scritto in §9.4 ("Apache 2.0"). Verificato alla fonte per
+non fidarsi della sola grep sul minificato: il pacchetto npm
+`@google/model-viewer` cache-ato in questa sessione da un test
+precedente ha `package.json` con `"license": "Apache-2.0"` e un vero
+file `LICENSE` con il testo della Apache License 2.0. Conclusione
+corretta: la licenza del **pacchetto nel suo complesso** (quella che
+conta per l'uso/redistribuzione) è Apache-2.0; i commenti BSD/MIT
+interni sono attribuzioni preservate per singoli file presi in prestito,
+non licenze in conflitto. **Apache-2.0 è permissiva**: uso commerciale
+libero, nessun copyleft, richiede solo di mantenere l'avviso di
+copyright/licenza — nessun rischio legale noto a includerlo in un
+prodotto commerciale.
+
+**Le altre dipendenze**, verificate via metadata pip reali (non a
+memoria):
+
+| Dipendenza | Licenza | Nota |
+|---|---|---|
+| Pillow | MIT-CMU (verificato nel file LICENSE installato) | permissiva |
+| qrcode | BSD | permissiva |
+| pyzbar (wrapper Python) | MIT | permissiva |
+| **libzbar (libreria C nativa)** | **LGPL 2.1** | vedi sotto |
+
+`libzbar` è l'unica dipendenza non permissiva-pura del progetto, e solo
+per la funzionalità QR opzionale (non nel motore core). LGPL 2.1
+**permette l'uso commerciale/proprietario**: l'obbligo riguarda solo la
+libreria LGPL stessa (renderla sostituibile/rilinkabile, fornirne
+licenza e sorgente), non il codice proprio che la usa. `pyzbar` la
+carica dinamicamente via `ctypes` (mai linkata staticamente) — la via
+più semplice per restare in regola con LGPL, verificato che è
+esattamente questo il meccanismo che l'eseguibile PyInstaller reale usa
+(vedi sotto: `libzbar.so.0` bundlata come file binario separato, non
+fusa nel codice).
+
+**`balzar` stesso non ha un file LICENSE** nel repository: nessun
+vincolo esterno sulla commercializzazione del codice scritto in questo
+progetto — è dell'utente, la scelta di licenza/termini è sua. La
+domanda "posso commercializzare il prodotto" ha quindi risposta onesta
+in due parti: il codice proprio, sì, nessun vincolo trovato; le
+dipendenze vendorizzate/usate, sì, tutte permissive o LGPL-con-linking-
+dinamico-già-rispettato.
+
+**Dimensione reale dell'eseguibile desktop — build vera eseguita in
+sessione, non stimata** (mai fatto prima in questo progetto, criticità
+§4.5): `pyinstaller --onefile --windowed --name balzar balzar-app.py`
+su Linux (nessun ambiente Windows/macOS disponibile in questo sandbox,
+quindi non lo stesso binario che si otterrebbe lì, ma un proxy reale
+dello stesso ordine di grandezza) —
+
+| Metrica | Valore |
+|---|---|
+| Dimensione eseguibile | **23.325.664 B (~22,2 MiB)** |
+| `libzbar.so.0` nativa inclusa? | **sì**, confermato in `PKG-00.toc`: `('libzbar.so.0', '/lib/x86_64-linux-gnu/libzbar.so.0', 'BINARY')` — bundlata come file binario separato (coerente con l'uso LGPL sopra), non solo il wrapper Python |
+| Lancio reale sotto Xvfb | riuscito, screenshot reale con GUI completa (tutti i pulsanti visibili: Apri file, Scansiona foto QR, Salva payload, Esporta QR, Visualizza in 3D) |
+
+Risponde a un dubbio esplicito lasciato aperto da mesi in questo
+documento (§4.5, prima di questa verifica: "da verificare che includa
+anche la libreria nativa libzbar"). **Non ancora fatto**: build reali
+su Windows/macOS (richiedono quegli ambienti, non disponibili qui) —
+il numero sopra è un proxy Linux, non una garanzia di dimensione
+identica sugli altri sistemi operativi.
+
+**App Android: nessun numero reale possibile**, e onestamente
+nessuno stimabile. A differenza del desktop, il packaging mobile non è
+mai stato iniziato (§5 punto 3: "nessun lavoro di packaging mobile nel
+codice oggi") — nessun prototipo Kivy/BeeWare, nessuna build APK
+tentata. Qualunque cifra data ora sarebbe inventata, non misurata:
+dichiarato onestamente come "non esiste ancora", non stimato a caso.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 214 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 216 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop
