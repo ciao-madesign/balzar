@@ -407,7 +407,7 @@ vale più di un match esatto del glifo.
 La demo su Vercel serve unicamente a far provare l'encoder dal browser;
 il prodotto è l'app desktop qui sopra, che non ha i limiti di upload,
 risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
-`app.js` + `style.css`) con cinque tab, cinque funzioni serverless Python:
+`app.js` + `style.css`) con sei tab, sei funzioni serverless Python:
 
 - **"Comprimi immagine"** (`api/encode.py`): carica una foto, la analizza
   lato server con l'encoder reale (stesso codice della CLI), mostra
@@ -433,6 +433,13 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   trattati come un mucchio scorrelato — ogni file diventa una card a sé
   (anteprima, statistiche, download, QR propri), nessun vincolo di
   formato, un file rotto non blocca gli altri.
+- **"Assemblee 3D"** (`api/encode_3d.py`): carica un file `.3dxml`
+  (`balzar/scene3d.py`, non STEP — vedi CLAUDE.md §9.1 per il perché).
+  Niente anteprima raster qui: il "risultato" è un vero file `.glb`
+  mostrato dal web component `<model-viewer>` (vendorizzato in
+  `model-viewer.min.js`, nessuna dipendenza da CDN), più la distinta
+  base estratta dalla struttura dell'assieme. Scarichi il payload
+  binario (`.b3d`, formato `BZM1`) o il `.glb` stesso.
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
@@ -482,6 +489,7 @@ balzar/
   explode.py      esploso automatico per layer/gruppo (CAD/SVG)
   scene3d.py      ingestione 3DXML -> payload binario BZM1 (assiemi CAD, dettagli in CLAUDE.md §9)
   gltf.py         export payload BZM1 -> glTF/GLB per la visualizzazione (model-viewer)
+  viewer3d.py     GLB + BOM -> pagina locale (model-viewer) aperta nel browser di sistema (solo GUI desktop)
   webapi.py       logica dell'API web con profili di limiti
   cli.py          render / encode / encode-image / encode-vector / encode-3d /
                   encode-video / encode-sequence / explode-vector / render-3d /
@@ -489,14 +497,16 @@ balzar/
 balzar-app.py     entry point per PyInstaller
 examples/         programmi dimostrativi (.bzr) + sorgenti vettoriali (.svg/.dxf)
 tests/            determinismo, round-trip, op, espansione, encoder, video,
-                  qr, svg, vectorio, sequence, explode, webapi
+                  qr, svg, vectorio, sequence, explode, webapi, cli, png, scene3d
 api/encode.py           funzione serverless Vercel: comprimi immagine -> payload
 api/encode_vector.py    funzione serverless Vercel: SVG/DXF -> payload
 api/encode_video.py     funzione serverless Vercel: GIF animata -> payload (delta)
 api/encode_sequence.py  funzione serverless Vercel: 2+ file -> payload multi-frame
+api/encode_3d.py        funzione serverless Vercel: 3DXML -> payload BZM1 + GLB + BOM
 api/qr.py               funzione serverless Vercel: payload -> immagine QR (genera, non legge)
 api/render.py           funzione serverless Vercel: apri .bzr/.bzp -> PNG/GIF/SVG
-index.html, app.js, style.css   frontend statico della demo (5 tab)
+index.html, app.js, style.css   frontend statico della demo (6 tab)
+model-viewer.min.js     web component vendorizzato (Apache-2.0), nessuna dipendenza da CDN
 ```
 
 Per aggiungere un'operazione basta registrarla in `ops.py` con la sua firma

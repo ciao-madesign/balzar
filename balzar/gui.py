@@ -9,8 +9,12 @@ whole thing packages into a single executable with PyInstaller:
     pyinstaller --onefile --windowed --name balzar balzar-app.py
 
 Accepts images (PNG/JPEG/BMP/...), animated GIFs (encoded as a delta
-video, README §4.3) and .bzp payloads (decoded and re-rendered). Encoding
-runs in a worker thread so the window never freezes.
+video, README §4.3), .bzp payloads (decoded and re-rendered), 3DXML CAD
+assemblies (encoded to the BZM1 payload, balzar/scene3d.py — no 2D
+preview exists for these, see Job.is_3d; "Visualizza in 3D" opens the
+regenerated assembly + bill of materials in the system browser via
+balzar/viewer3d.py) and .b3d payloads. Encoding runs in a worker thread
+so the window never freezes.
 """
 
 from __future__ import annotations
@@ -48,6 +52,12 @@ class Job:
         self.program_text = ""
         self.stats: list[tuple[str, str]] = []
         self.error: str | None = None
+        # 3D assemblies (scene3d.py) have no 2D preview at all -- Tkinter
+        # can't show a GLB, so the canvases show a text hint instead and
+        # "Visualizza in 3D" opens the system browser (balzar/viewer3d.py)
+        self.is_3d = False
+        self.glb = b""
+        self.bom_lines: list[tuple[str, int]] = []
 
 
 class BalzarApp:
@@ -141,14 +151,17 @@ class BalzarApp:
         self.btn_chunks = ttk.Button(btns, text="Esporta QR (immagine)",
                                      command=self.export_chunks, state="disabled")
         self.btn_chunks.pack(fill="x", pady=2)
+        self.btn_view3d = ttk.Button(btns, text="Visualizza in 3D (browser)",
+                                     command=self.view_3d, state="disabled")
+        self.btn_view3d.pack(fill="x", pady=2)
 
     # ------------------------------------------------------------- actions
 
     def open_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Apri immagine, GIF animata o payload balzar",
-            filetypes=[("Immagini e payload",
-                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.bzp *.bzr"),
+            title="Apri immagine, GIF animata, assieme 3D (.3dxml) o payload balzar",
+            filetypes=[("Immagini, 3D e payload",
+                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.3dxml *.bzp *.b3d *.bzr"),
                        ("Tutti i file", "*.*")])
         if not path:
             return
@@ -185,12 +198,18 @@ class BalzarApp:
         job = Job()
         job.source_name = os.path.basename(path)
         try:
-            with open(path, "rb") as fh:
-                data = fh.read()
-            if data[:4] == MAGIC or path.endswith(".bzr"):
-                self._job_from_payload(job, path, data)
+            if path.endswith(".3dxml"):
+                self._job_from_3dxml(job, path)
             else:
-                self._job_from_image(job, data, len(data))
+                with open(path, "rb") as fh:
+                    data = fh.read()
+                from .scene3d import MAGIC as BZM1_MAGIC
+                if data[:4] == BZM1_MAGIC or path.endswith(".b3d"):
+                    self._job_from_3d_payload(job, data)
+                elif data[:4] == MAGIC or path.endswith(".bzr"):
+                    self._job_from_payload(job, path, data)
+                else:
+                    self._job_from_image(job, data, len(data))
         except Exception as exc:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)
@@ -218,6 +237,53 @@ class BalzarApp:
             ("espansione", f"{_fmt(raw / len(job.payload))}x"),
             ("QR singolo", "sì" if fits_in_qr(job.payload) else
              f"no ({_fmt(len(chunk_payload(job.payload)))} capitoli)"),
+        ]
+
+    def _job_from_3dxml(self, job: Job, path: str) -> None:
+        """3DXML -> BZM1 payload (balzar/scene3d.py): the 3D 'zip'. No 2D
+        preview exists for this at all (see Job.is_3d) -- stats + BOM are
+        the whole picture until 'Visualizza in 3D' opens a real one."""
+        from .scene3d import encode_3dxml_file
+
+        result = encode_3dxml_file(path)
+        job.payload = result.payload
+        self._finish_3d_job(job, result.payload, result.bom, extra_stats=[
+            ("forme uniche", _fmt(result.shape_count)),
+            ("riferimenti", _fmt(result.reference_count)),
+            ("istanze", _fmt(result.instance_count)),
+            ("vertici", _fmt(result.vertex_count)),
+            ("errore medio vertici (quantizzazione int16)", str(result.mean_vertex_error)),
+        ])
+
+    def _job_from_3d_payload(self, job: Job, data: bytes) -> None:
+        """Re-open an already-encoded .b3d payload: decode + rebuild the
+        GLB/BOM for viewing, same 'unzip' role as _job_from_payload but
+        for the 3D format."""
+        from .scene3d import decode_payload, generate_bom
+
+        scene = decode_payload(data)
+        job.payload = data
+        self._finish_3d_job(job, data, generate_bom(scene), extra_stats=[
+            ("forme uniche", _fmt(len(scene.shapes))),
+            ("riferimenti", _fmt(len(scene.references))),
+        ])
+
+    def _finish_3d_job(self, job: Job, payload: bytes, bom, extra_stats) -> None:
+        from .gltf import scene3d_to_glb
+        from .scene3d import decode_payload
+
+        scene = decode_payload(payload)
+        job.is_3d = True
+        job.glb = scene3d_to_glb(scene)
+        job.bom_lines = [(e.name, e.count) for e in sorted(bom, key=lambda e: -e.count)]
+        job.stats = [
+            ("sorgente", job.source_name),
+            *extra_stats,
+            ("distinta base", f"{_fmt(len(bom))} parti uniche, "
+             f"{_fmt(sum(e.count for e in bom))} posizionamenti totali"),
+            ("payload", f"{_fmt(len(payload))} B"),
+            ("QR singolo", "sì" if fits_in_qr(payload) else
+             f"no ({_fmt(len(chunk_payload(payload)))} capitoli)"),
         ]
 
     def _job_from_image(self, job: Job, data: bytes, upload_size: int) -> None:
@@ -272,13 +338,32 @@ class BalzarApp:
     def save_payload(self) -> None:
         if not self.job:
             return
-        path = self._ask_save(self._stem() + ".bzp", ".bzp",
-                              [("payload balzar", "*.bzp")])
+        # a 3D job's payload is BZM1, a genuinely different format from
+        # the 2D BZR1 payload -- different extension so it's never
+        # confused with (or opened as) a 2D program
+        ext = ".b3d" if self.job.is_3d else ".bzp"
+        label = "payload 3D balzar" if self.job.is_3d else "payload balzar"
+        path = self._ask_save(self._stem() + ext, ext, [(label, f"*{ext}")])
         if path:
             with open(path, "wb") as fh:
                 fh.write(self.job.payload)
             self.status.set(f"Salvato {os.path.basename(path)} "
                             f"({_fmt(len(self.job.payload))} B)")
+
+    def view_3d(self) -> None:
+        """Open the regenerated assembly (+ BOM overlay) in the system's
+        default browser via balzar/viewer3d.py -- Tkinter itself cannot
+        show a GLB, so this delegates to model-viewer the same way
+        gltf.py delegates rendering instead of writing a 3D engine here."""
+        job = self.job
+        if not job or not job.is_3d:
+            return
+        import tempfile
+
+        from .viewer3d import open_glb_in_browser
+        work_dir = tempfile.mkdtemp(prefix="balzar_view3d_")
+        open_glb_in_browser(job.glb, job.bom_lines, work_dir)
+        self.status.set("Aperto nel browser predefinito")
 
     def save_program(self) -> None:
         if not self.job:
@@ -378,8 +463,25 @@ class BalzarApp:
     def _set_buttons(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
         for b in (self.btn_payload, self.btn_program,
-                  self.btn_export, self.btn_svg, self.btn_chunks):
+                  self.btn_export, self.btn_svg, self.btn_chunks, self.btn_view3d):
             b.configure(state=state)
+
+    def _set_buttons_for_job(self, job: Job) -> None:
+        """A 3D job has no program text, no 2D render to export as PNG/GIF/
+        SVG -- those buttons stay disabled instead of doing something
+        meaningless; only the payload/QR (format-agnostic) and the new
+        3D viewer button apply."""
+        if job.is_3d:
+            self.btn_payload.configure(state="normal", text="Salva payload (.b3d)")
+            self.btn_program.configure(state="disabled")
+            self.btn_export.configure(state="disabled")
+            self.btn_svg.configure(state="disabled")
+            self.btn_chunks.configure(state="normal")
+            self.btn_view3d.configure(state="normal")
+        else:
+            self._set_buttons(True)
+            self.btn_payload.configure(text="Salva payload (.bzp)")
+            self.btn_view3d.configure(state="disabled")
 
     def _photo_from_rgb(self, w: int, h: int, rgb: bytes) -> tk.PhotoImage:
         """RGB bytes -> Tk PhotoImage via in-memory PNG (Tk 8.6 reads PNG)."""
@@ -399,21 +501,36 @@ class BalzarApp:
             self._anim_after = None
         self._photo_refs = []
 
-        self._orig_photos = [self._photo_from_rgb(job.width, job.height, f)
-                             for f in job.original_frames_rgb[:60]]
-        self._regen_photos = [self._photo_from_rgb(job.width, job.height, f)
-                              for f in job.frames_rgb[:60]]
-        self._photo_refs = self._orig_photos + self._regen_photos
-        self._anim_index = 0
-        self._playing = True
-        self._frame_count = max(len(self._orig_photos), len(self._regen_photos), 1)
-        multi = self._frame_count > 1
-        for b in (self.btn_prev, self.btn_play, self.btn_next):
-            b.configure(state="normal" if multi else "disabled")
-        self.btn_play.configure(text="⏸ Pausa")
-        self._draw_frame()
-        if multi:
-            self._animate()
+        if job.is_3d:
+            # no 2D render exists for a 3D assembly -- show a text hint
+            # instead of pretending there's an image to preview
+            self._orig_photos = []
+            self._regen_photos = []
+            for canvas, label in ((self.canvas_orig, "assieme 3D"),
+                                  (self.canvas_regen, "usa 'Visualizza in 3D'")):
+                canvas.delete("all")
+                canvas.create_text(PREVIEW_MAX // 2, PREVIEW_MAX // 2, text=label,
+                                   fill="#888", font=("TkDefaultFont", 11))
+            self._frame_count = 1
+            for b in (self.btn_prev, self.btn_play, self.btn_next):
+                b.configure(state="disabled")
+            self.frame_label.configure(text="")
+        else:
+            self._orig_photos = [self._photo_from_rgb(job.width, job.height, f)
+                                 for f in job.original_frames_rgb[:60]]
+            self._regen_photos = [self._photo_from_rgb(job.width, job.height, f)
+                                  for f in job.frames_rgb[:60]]
+            self._photo_refs = self._orig_photos + self._regen_photos
+            self._anim_index = 0
+            self._playing = True
+            self._frame_count = max(len(self._orig_photos), len(self._regen_photos), 1)
+            multi = self._frame_count > 1
+            for b in (self.btn_prev, self.btn_play, self.btn_next):
+                b.configure(state="normal" if multi else "disabled")
+            self.btn_play.configure(text="⏸ Pausa")
+            self._draw_frame()
+            if multi:
+                self._animate()
 
         self.stats_text.configure(state="normal")
         self.stats_text.delete("1.0", "end")
@@ -422,7 +539,7 @@ class BalzarApp:
             self.stats_text.insert("end", f"{k.ljust(width)}  {v}\n")
         self.stats_text.configure(state="disabled")
 
-        self._set_buttons(True)
+        self._set_buttons_for_job(job)
         self.status.set(f"Fatto: {job.source_name}")
 
     def _draw_frame(self) -> None:

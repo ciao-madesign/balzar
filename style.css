@@ -206,6 +206,15 @@ table.stats td:last-child { text-align: right; font-variant-numeric: tabular-num
   align-items: flex-start;
   gap: 0.6rem;
 }
+/* [hidden] and .qr-block{display:flex} have equal specificity, and the
+   class rule comes later in the cascade -- without this, the QR block
+   (which starts `hidden` in every tab's markup, shown only after
+   "genera QR" is clicked) renders anyway the moment its ancestor
+   .result section becomes visible. Found by screenshotting the new
+   3D tab, but pre-existing on all five tabs, not introduced here. */
+.qr-block[hidden] {
+  display: none;
+}
 .qr-image {
   width: 100%;
   max-width: 220px;

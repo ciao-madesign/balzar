@@ -8,7 +8,7 @@ import os
 import tempfile
 import unittest
 
-from balzar.webapi import (LOCAL_LIMITS, Limits, handle_encode,
+from balzar.webapi import (LOCAL_LIMITS, Limits, handle_encode, handle_encode_3d,
                            handle_encode_sequence, handle_encode_vector,
                            handle_encode_video, handle_qr, handle_render)
 
@@ -210,6 +210,91 @@ class TestHandleEncodeVector(unittest.TestCase):
             {"data": _b64(SVG_FLANGE.encode()), "filename": "flange.svg"}, tiny_limits)
         self.assertEqual(status, 200)
         self.assertTrue(resp["program_truncated"])
+
+
+def _make_3dxml_bytes():
+    """Minimal in-memory 3DXML: one shape ('Bullone-M6') placed twice —
+    mirrors the fixture already used in tests/test_scene3d.py."""
+    import zipfile
+    from io import BytesIO
+
+    manifest = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<Manifest xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+               'xsi:noNamespaceSchemaLocation="Manifest.xsd">'
+               '<Root>main.3dxml</Root></Manifest>')
+    main_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<Model_3dxml xmlns="http://www.3ds.com/xsd/3DXML" '
+               'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+               '<ProductStructure root="1">'
+               '<Reference3D id="1" name="Root"/>'
+               '<Instance3D id="2" name="inst_A"><IsAggregatedBy>1</IsAggregatedBy>'
+               '<IsInstanceOf>3</IsInstanceOf>'
+               '<RelativeMatrix>1 0 0 0 1 0 0 0 1 0 0 0</RelativeMatrix></Instance3D>'
+               '<Reference3D id="3" name="Bullone-M6"/>'
+               '<ReferenceRep id="4" name="R" associatedFile="urn:3DXML:s.3DRep"/>'
+               '<InstanceRep id="5" name="IR"><IsAggregatedBy>3</IsAggregatedBy>'
+               '<IsInstanceOf>4</IsInstanceOf></InstanceRep>'
+               '<Instance3D id="6" name="inst_B"><IsAggregatedBy>1</IsAggregatedBy>'
+               '<IsInstanceOf>3</IsInstanceOf>'
+               '<RelativeMatrix>1 0 0 0 1 0 0 0 1 5 0 0</RelativeMatrix></Instance3D>'
+               '</ProductStructure></Model_3dxml>')
+    shape = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<XMLRepresentation xmlns="http://www.3ds.com/xsd/3DXML" '
+            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+            '<Root xsi:type="BagRepType" id="1"><Rep xsi:type="PolygonalRepType" id="2">'
+            '<Faces><Face strips="0 1 2"><SurfaceAttributes>'
+            '<Color xsi:type="RGBAColorType" red="1" green="0" blue="0" alpha="1"/>'
+            '</SurfaceAttributes></Face></Faces>'
+            '<VertexBuffer><Positions>0 0 0 1 0 0 0 1 0</Positions>'
+            '<Normals>0 0 1 0 0 1 0 0 1</Normals></VertexBuffer></Rep></Root>'
+            '</XMLRepresentation>')
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("Manifest.xml", manifest)
+        zf.writestr("main.3dxml", main_xml)
+        zf.writestr("s.3DRep", shape)
+    return buf.getvalue()
+
+
+class TestHandleEncode3D(unittest.TestCase):
+    def test_success(self):
+        status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["shape_count"], 1)
+        self.assertEqual(resp["instance_count"], 2)
+        self.assertEqual(resp["bom"], [{"name": "Bullone-M6", "count": 2}])
+        self.assertFalse(resp["glb_omitted"])
+        self.assertGreater(len(resp["glb_base64"]), 0)
+        self.assertIn("payload_base64", resp)
+
+    def test_missing_data(self):
+        status, resp = handle_encode_3d({}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_malformed_base64_gives_clean_400_not_500(self):
+        status, resp = handle_encode_3d({"data": "not-valid-base64!!!"}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_invalid_3dxml_gives_clean_400_not_500(self):
+        status, resp = handle_encode_3d({"data": _b64(b"not a zip file")}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_glb_omitted_when_over_limit(self):
+        tiny_limits = Limits(max_upload_bytes=LOCAL_LIMITS.max_upload_bytes,
+                             max_analysis_dim=LOCAL_LIMITS.max_analysis_dim,
+                             max_preview_dim=LOCAL_LIMITS.max_preview_dim,
+                             max_program_chars=LOCAL_LIMITS.max_program_chars,
+                             max_payload_b64_bytes=10,
+                             max_video_frames=LOCAL_LIMITS.max_video_frames)
+        status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, tiny_limits)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["glb_omitted"])
+        self.assertEqual(resp["glb_base64"], "")
+        self.assertTrue(resp["payload_omitted"])
 
 
 class TestHandleEncodeVideo(unittest.TestCase):

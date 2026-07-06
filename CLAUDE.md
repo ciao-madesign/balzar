@@ -625,7 +625,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-197 test, tutti verdi (`python3 -m unittest discover -s tests`):
+202 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1017,6 +1017,44 @@ Distinzione netta, stesso principio di PNG-tecnico-vs-fotografico:
   immagini/video — da trattare come ipotesi da testare, non da vendere
   con un moltiplicatore inventato.
 
+### 7.5 Convertitore STEP → 3DXML (o altro) per allargare l'input di scene3d.py
+
+Proposta: dato che STEP è il vero formato di interscambio standard
+(3DXML è nativo solo dell'ecosistema Dassault/SolidWorks), integrare un
+convertitore STEP→3DXML a monte di `scene3d.py`, così l'ingestione 3D
+accetta il formato che un utente ha davvero, non quello che il nostro
+parser preferisce. L'idea in sé è coerente con la filosofia già usata
+nel progetto (delegare un problema difficile a uno strumento maturo
+invece di scriverlo da zero — Pillow per JPEG/PNG, `model-viewer` per il
+rendering) e **non equivale a scrivere un parser STEP nostro** (§7.3
+resta valida per quello scenario specifico).
+
+**Scartato l'esempio concreto proposto** (`3dencoder.com`, un servizio
+web di conversione): è un servizio di terzi, e usarlo — anche solo come
+passaggio manuale prima di dare il file a balzar — richiederebbe
+caricare l'assieme CAD su un server esterno. Va contro il requisito
+guida del caso d'uso §6.1 (manutenzione sul campo, spesso senza rete) e
+contro la privacy di un disegno CAD proprietario, che un contesto
+industriale reale normalmente non accetta di caricare altrove. (Il
+fetch automatico del link è stato bloccato con un 403, quindi non è
+stato verificato nemmeno se il servizio esponga un'API scriptabile —
+scartato comunque a prescindere per il problema di principio sopra.)
+
+**Alternativa realistica identificata, non ancora implementata**:
+FreeCAD o `pythonocc` (binding Python di OpenCASCADE, il kernel CAD
+open-source che FreeCAD stesso usa) — entrambi open-source, scriptabili,
+**offline**, con lettura STEP nativa. Non è garantito che sappiano
+scrivere 3DXML in uscita, ma non è necessario: un adattatore potrebbe
+leggere l'albero documento di FreeCAD/OCCT (parti/nomi/trasformi, stessa
+idea concettuale di `Reference3D`/`Instance3D`) e costruire direttamente
+un `Scene3D`, saltando 3DXML come formato intermedio — stesso principio
+di `vectorio.py` per SVG/DXF: nessun parser B-rep scritto da noi, solo
+un ponte verso una libreria che lo sa già fare.
+
+**Stato**: valutata, non implementata. Nuova dipendenza opzionale, nuovo
+modulo, nuova superficie di test — non avviata senza una decisione
+esplicita di procedere, dato lo scope non piccolo.
+
 ## 8. Confronto quantitativo con lo stato dell'arte (regola del progetto)
 
 Ogni volta che si decide una direzione, va misurato il guadagno concreto
@@ -1301,16 +1339,14 @@ suo interno, le ottimizzazioni riguardano solo il payload `BZM1`.
 Comandi CLI: `balzar encode-3d assembly.3dxml -o out.b3d`,
 `balzar render-3d out.b3d -o out.glb`. Test: `tests/test_scene3d.py`
 (19 test, fixture 3DXML sintetica costruita in memoria — nessun file
-CAD reale nel repository) + 4 test in `tests/test_cli.py` — 197 test
+CAD reale nel repository) + 4 test in `tests/test_cli.py` — 202 test
 totali.
 
 ### 9.6 Cosa manca ancora (esplicitamente non fatto in questa sessione)
 
 - ~~Ottimizzazioni di dimensione (quantizzazione int16, indici a 16
   bit, rotazioni compatte)~~ — **fatto**, vedi §9.5.
-- **Integrazione GUI/demo web**: nessun tab "Assemblee 3D" nella demo
-  web, nessun pulsante nella GUI desktop. La pagina che ospiterebbe
-  `<model-viewer>` non è stata scritta.
+- ~~Integrazione GUI/demo web~~ — **fatto**, vedi §9.9.
 - ~~Nessuna distinta base (BOM) generata~~ — **fatto**, vedi §9.8.
 - **Nessun test con un file 3DXML reale nel repository** (per gli
   stessi motivi di copyright già visti per il logo Harley-Davidson in
@@ -1380,16 +1416,90 @@ parti uniche, 1.623 posizionamenti totali, il pezzo più riusato compare
 (§9.2), stavolta calcolati dal codice invece che da uno script usa e
 getta.
 
-Non ancora fatto: nessuna vista/esportazione della BOM in un formato
-diverso dalla stampa a schermo (es. CSV, o testo sovrapposto al GLB
-come già avviene in 2D con `TEXT` in `etichetta_bom.bzr`) — la funzione
-produce dati strutturati, la presentazione resta da decidere insieme
-all'integrazione GUI/web (§9.6).
+Non ancora fatto al momento della scrittura di questa sezione: nessuna
+vista/esportazione della BOM in un formato diverso dalla stampa a
+schermo — risolto subito dopo, vedi §9.9 (sovrapposta al viewer nella
+GUI desktop e nella demo web, entrambe come tabella HTML/Tk, non ancora
+come CSV o testo inciso nel GLB stesso).
+
+### 9.9 Integrazione GUI desktop e demo web
+
+**Vendorizzato `model-viewer.min.js`** (build UMD di `@google/model-viewer`
+4.3.1, Apache-2.0, ~1 MB) alla radice del repository — non da CDN, stesso
+principio offline-first del resto del progetto: la build UMD è stata
+scelta apposta invece della build a modulo ES (`model-viewer.min.js`
+upstream), che usa `export`/specifier bare come `"three"` e non si carica
+con un semplice `<script>` in una pagina senza bundler.
+
+**`balzar/viewer3d.py`** (nuovo, solo per la GUI desktop): scrive
+`model.glb` + una paginetta HTML (`<model-viewer>` + una tabella BOM
+sovrapposta in overlay) + una copia di `model-viewer.min.js` in una
+directory temporanea, avvia un `http.server` locale su una porta
+effimera e apre il browser di sistema. **`file://` non basta**: Chrome
+blocca il fetch/XHR che `<model-viewer>` usa per caricare il GLB quando
+l'origine è `file://` ("CORS policy: cross origin requests only
+supported for http/https"), anche se il GLB sta nella stessa cartella
+dell'HTML — scoperto producendo gli screenshot diagnostici di §9.7,
+stessa soluzione riusata qui (servire su `localhost` invece).
+
+**GUI desktop (`balzar/gui.py`)**: `Job` guadagna `is_3d`/`glb`/`bom_lines`.
+Un file `.3dxml` (encoding nuovo) o `.b3d` (riapertura di un payload già
+codificato, magic `BZM1` controllato prima del vecchio magic `BZR1`)
+vengono riconosciuti in `_worker` e instradati a `_job_from_3dxml`/
+`_job_from_3d_payload`. Nessuna anteprima 2D esiste per un assieme 3D —
+i due canvas mostrano un testo placeholder ("assieme 3D" / "usa
+'Visualizza in 3D'") invece di fingere un'immagine — e i pulsanti
+inapplicabili (Salva programma, Esporta PNG/GIF, Esporta SVG) restano
+disabilitati, mentre Salva payload cambia effettivamente estensione
+(`.b3d`, non `.bzp` — è un formato binario genuinamente diverso da
+`BZR1`) e un nuovo pulsante "Visualizza in 3D (browser)" chiama
+`viewer3d.open_glb_in_browser`. Verificato sotto Xvfb con un vero
+`root.mainloop()` (non polling manuale — il primo tentativo di test con
+polling manuale ha prodotto `RuntimeError: main thread is not in main
+loop`, un artefatto del metodo di test, non un bug in `gui.py`: con un
+mainloop reale sia il flusso 2D esistente sia i due flussi 3D nuovi
+funzionano senza errori).
+
+**Demo web**: sesto tab "Assemblee 3D" (`api/encode_3d.py` +
+`handle_encode_3d` in `webapi.py`). Diversamente dagli altri tab non
+c'è un PNG da mostrare: la risposta include il GLB in base64, il
+frontend lo trasforma in un Blob URL e lo assegna a `<model-viewer
+src="...">` lato client — lo stesso principio "il payload compatto e
+il formato di visualizzazione sono cose diverse" di `gltf.py`, solo
+applicato al browser invece che al filesystem. La distinta base arriva
+come JSON e diventa una tabella HTML.
+
+**Bug reale trovato testando il nuovo tab, preesistente su tutti e
+cinque i tab originali**: `style.css` aveva `.qr-block { display: flex;
+... }` senza guardia — specificità CSS pari a `[hidden] { display:
+none }` della regola nativa del browser, e la regola d'autore vince
+perché arriva dopo nel cascade. Risultato: il blocco QR (che parte
+`hidden` in ogni tab, pensato per apparire solo dopo aver cliccato
+"genera QR") **si mostrava comunque** appena la sezione risultato
+principale del tab diventava visibile — mai notato prima perché mascherato:
+finché la sezione risultato è `hidden`, anche il blocco QR al suo interno
+resta invisibile "per procura", quindi il problema si vede solo dopo un
+encode riuscito, controllando lo stato del singolo elemento (non solo
+guardando lo screenshot a occhio). Trovato con un controllo Playwright
+mirato (`element.hidden === true` ma `is_visible() === true`, la
+contraddizione che ha rivelato il problema), corretto con una singola
+regola `.qr-block[hidden] { display: none; }` (specificità più alta,
+vince per costruzione) che risolve tutti e sei i tab in un colpo solo.
+
+Verificato end-to-end con Playwright contro un server locale
+(`http.server` + le funzioni `handle_*` dirette, stessa metodologia già
+nota — non contro il deploy Vercel reale, non raggiungibile da questo
+sandbox): upload `.3dxml` → stats/BOM popolate correttamente → modello
+caricato in `<model-viewer>` (`loaded === true`) → download payload/GLB
+→ generazione QR reale (screenshot con QR code vero). Test aggiunti:
+`TestHandleEncode3D` in `tests/test_webapi.py` (5 test: successo,
+dati mancanti, base64 malformato, 3DXML non valido, GLB omesso oltre
+il limite di risposta) — 202 test totali.
 
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 197 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 202 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

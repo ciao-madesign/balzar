@@ -266,6 +266,56 @@ def _vector_result_response(result, limits: Limits) -> dict:
     return response
 
 
+def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
+    """3DXML CAD assembly -> BZM1 payload (balzar/scene3d.py) + a GLB for
+    <model-viewer> + the bill of materials. Unlike the 2D tabs there is no
+    PNG/pixel preview to render — the "preview" here IS the GLB, built by
+    balzar/gltf.py and shown client-side by the same model-viewer web
+    component the desktop app opens in a browser (balzar/viewer3d.py)."""
+    data_b64 = body.get("data")
+    if not data_b64:
+        return 400, {"ok": False, "error": "campo 'data' mancante"}
+    try:
+        raw = _b64decode(data_b64)
+    except ValueError as exc:
+        return 400, {"ok": False, "error": str(exc)}
+
+    from .scene3d import Scene3DError, encode_3dxml_file
+
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "assembly.3dxml")
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        try:
+            result = encode_3dxml_file(path)
+        except Scene3DError as exc:
+            return 400, {"ok": False, "error": str(exc)}
+
+    from .gltf import scene3d_to_glb
+    from .scene3d import decode_payload
+    scene = decode_payload(result.payload)
+    glb = scene3d_to_glb(scene)
+    glb_b64 = base64.b64encode(glb).decode("ascii")
+    glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
+
+    response = {
+        "ok": True,
+        "shape_count": result.shape_count,
+        "reference_count": result.reference_count,
+        "instance_count": result.instance_count,
+        "vertex_count": result.vertex_count,
+        "mean_vertex_error": result.mean_vertex_error,
+        "bom": [{"name": e.name, "count": e.count}
+               for e in sorted(result.bom, key=lambda e: -e.count)],
+        "glb_omitted": glb_omitted,
+        "glb_base64": "" if glb_omitted else glb_b64,
+    }
+    response.update(_payload_response_fields(result.payload, limits))
+    return 200, response
+
+
 def handle_encode_video(body: dict, limits: Limits) -> tuple[int, dict]:
     """Animated GIF -> true multi-frame delta encoding (balzar/video.py),
     unlike handle_encode which only ever looks at the first frame."""

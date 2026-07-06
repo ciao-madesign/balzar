@@ -229,7 +229,7 @@ setupQrButton("encode", () => (lastResult && !lastResult.payload_omitted) ? last
 
 // ---------------------------------------------------------- tabs
 
-const TAB_NAMES = ["encode", "vector", "video", "sequence", "open"];
+const TAB_NAMES = ["encode", "vector", "video", "sequence", "3d", "open"];
 const tabButtons = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`tab-${n}`)]));
 const tabPanels = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`panel-${n}`)]));
 
@@ -781,6 +781,125 @@ sequenceDlProgram.addEventListener("click", () => {
 });
 
 setupQrButton("sequence", () => (lastSequenceResult && !lastSequenceResult.payload_omitted) ? lastSequenceResult.payload_base64 : null);
+
+// -------------------------------------------------------- assiemi 3D (3DXML)
+//
+// Niente immagine da renderizzare qui: la "preview" è un vero .glb
+// (balzar/gltf.py) mostrato dal web component <model-viewer> (vendorizzato
+// in model-viewer.min.js, nessuna dipendenza da CDN — stesso principio
+// offline-first del resto del progetto). Il payload BZM1 resta il formato
+// di trasporto compatto; il GLB è solo per questa vista, esattamente come
+// PNG non è mai il formato che viaggia nel QR.
+
+const threedDrop = document.getElementById("threed-drop");
+const threedFileInput = document.getElementById("threed-file-input");
+const threedBrowseBtn = document.getElementById("threed-browse-btn");
+const threedStatusEl = document.getElementById("threed-status");
+const threedResultEl = document.getElementById("threed-result");
+const threedViewer = document.getElementById("threed-viewer");
+const threedStatsTable = document.getElementById("threed-stats-table");
+const threedBomTable = document.getElementById("threed-bom-table");
+const threedDlPayload = document.getElementById("threed-dl-payload");
+const threedDlGlb = document.getElementById("threed-dl-glb");
+const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
+
+let lastThreedResult = null;
+let lastThreedGlbUrl = null;
+
+threedBrowseBtn.addEventListener("click", () => threedFileInput.click());
+threedFileInput.addEventListener("change", () => {
+  if (threedFileInput.files[0]) handleThreedFile(threedFileInput.files[0]);
+});
+["dragenter", "dragover"].forEach(evt =>
+  threedDrop.addEventListener(evt, e => { e.preventDefault(); threedDrop.classList.add("dragover"); })
+);
+["dragleave", "drop"].forEach(evt =>
+  threedDrop.addEventListener(evt, e => { e.preventDefault(); threedDrop.classList.remove("dragover"); })
+);
+threedDrop.addEventListener("drop", e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleThreedFile(file);
+});
+
+function setThreedStatus(msg, isError) {
+  threedStatusEl.hidden = false;
+  threedStatusEl.textContent = msg;
+  threedStatusEl.classList.toggle("error", !!isError);
+}
+
+async function handleThreedFile(file) {
+  threedResultEl.hidden = true;
+  if (file.size > MAX_FILE_BYTES) {
+    setThreedStatus(
+      `File troppo grande (${(file.size / 1048576).toFixed(1)} MB): il limite di upload è ~3.3 MB. ` +
+      `Usa la CLI in locale ('balzar encode-3d') per assiemi più pesanti.`,
+      true
+    );
+    return;
+  }
+  setThreedStatus(`Analisi di "${file.name}" in corso…`);
+  try {
+    const data = await fileToBase64(file);
+    const res = await fetch("/api/encode_3d", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data }),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+
+    lastThreedResult = json;
+    renderThreedResult(json);
+    setThreedStatus(`Fatto: ${file.name}`);
+  } catch (err) {
+    setThreedStatus("Errore: " + err.message, true);
+  }
+}
+
+function renderThreedResult(r) {
+  if (lastThreedGlbUrl) URL.revokeObjectURL(lastThreedGlbUrl);
+  threedGlbOmittedEl.hidden = !r.glb_omitted;
+  if (!r.glb_omitted) {
+    const blob = new Blob([base64ToBytes(r.glb_base64)], { type: "model/gltf-binary" });
+    lastThreedGlbUrl = URL.createObjectURL(blob);
+    threedViewer.src = lastThreedGlbUrl;
+  }
+
+  threedDlPayload.disabled = !!r.payload_omitted;
+  threedDlPayload.title = r.payload_omitted
+    ? "payload più grande del limite di risposta del server: usa la CLI in locale"
+    : "";
+  threedDlGlb.disabled = !!r.glb_omitted;
+
+  const rows = [
+    ["forme uniche", r.shape_count],
+    ["riferimenti", r.reference_count],
+    ["istanze (posizionamenti)", r.instance_count],
+    ["vertici", r.vertex_count.toLocaleString("it-IT")],
+    ["errore medio vertici (quantizzazione int16)", r.mean_vertex_error],
+    ["payload (BZM1)", fmtBytes(r.payload_bytes)],
+    ["entra in un QR code", r.fits_qr ? "sì" : "no"],
+  ];
+  threedStatsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+  threedBomTable.innerHTML = r.bom.length
+    ? r.bom.map(e => `<tr><td>${e.name}</td><td>x${e.count}</td></tr>`).join("")
+    : "<tr><td>(nessuna parte)</td></tr>";
+
+  threedResultEl.hidden = false;
+}
+
+threedDlPayload.addEventListener("click", () => {
+  if (!lastThreedResult) return;
+  downloadBlob(base64ToBytes(lastThreedResult.payload_base64), "output.b3d", "application/octet-stream");
+});
+
+threedDlGlb.addEventListener("click", () => {
+  if (!lastThreedResult || lastThreedResult.glb_omitted) return;
+  downloadBlob(base64ToBytes(lastThreedResult.glb_base64), "output.glb", "model/gltf-binary");
+});
+
+setupQrButton("threed", () => (lastThreedResult && !lastThreedResult.payload_omitted) ? lastThreedResult.payload_base64 : null);
 
 // ------------------------------------------------- apri programma (.bzr/.bzp)
 
