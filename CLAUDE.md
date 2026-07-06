@@ -625,7 +625,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-190 test, tutti verdi (`python3 -m unittest discover -s tests`):
+194 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1251,13 +1251,29 @@ un `Scene3D` con `Shape` uniche + `Reference` con nomi/figli/trasformi),
 formato binario `BZM1` (`encode_payload`/`decode_payload`, stesso schema
 di `BZR1`: magic+versione+lunghezza+CRC32+deflate del corpo binario),
 self-check obbligatorio (`encode_3dxml_file` decodifica il payload appena
-prodotto e lo confronta per uguaglianza esatta contro la scena
-parsata — stesso principio del render-e-confronta-pixel 2D, metrica
-diversa perché non c'è un rasterizzatore). **Prima versione,
-volutamente senza le ottimizzazioni già misurate in §9.2** (quantizzazione
-int16 per-forma, codifica compatta delle rotazioni allineate agli assi):
-corretto prima, piccolo dopo — stesso schema già seguito per i filtri
-PNG e il quantizzatore median-cut in questa sessione.
+prodotto e lo confronta per uguaglianza esatta contro la scena — vedi
+sotto per quale scena esattamente, dopo le ottimizzazioni).
+
+**Ottimizzazioni di dimensione applicate** (le stesse già misurate nello
+scoping §9.2, ora nel codice invece che solo prototipate): vertici
+quantizzati int16 per-forma (bounding box propria di ogni forma come
+scala/offset — più precisione dei 16 bit su una parte piccola che una
+scala unica condivisa su tutto l'assieme), indici delle strisce a 16 bit
+invece di 32 (`_serialize` solleva `Scene3DError` se una forma supera
+65.535 vertici invece di troncare in silenzio — non ancora visto nella
+realtà, ma dichiarato esplicitamente), e una codifica compatta a 2 byte
+per le rotazioni allineate agli assi (permutazioni pure con valori
+-1/0/1, il caso comune misurato al 100% sull'istanza reale — fallback a
+9 float per una rotazione ad angolo arbitrario genuino).
+
+La quantizzazione è **realmente lossy** (a differenza del solo
+arrotondamento float32 di prima), quindi il self-check è stato
+ridisegnato con lo stesso principio già usato per `mean_color_error` nel
+2D: confronta il payload decodificato contro la scena **già quantizzata**
+(non contro l'originale a piena precisione), e `Scene3DEncodeResult`
+guadagna il campo `mean_vertex_error` — la distanza media introdotta,
+dichiarata onestamente invece di nascosta. Misurato sull'assembly reale:
+**0,000776 mm** di errore medio, ben dentro qualunque tolleranza CAD.
 
 **`balzar/gltf.py`** — `scene3d_to_glb` esporta una `Scene3D` in un
 file `.glb` valido (verificato non solo con controlli propri ma
@@ -1274,28 +1290,33 @@ compatibilità massima con i viewer, invece di contare sul supporto del
 mode 5 (TRIANGLE_STRIP).
 
 Verificato sul file reale usato per lo scoping (78 forme, 3.862 istanze,
-75.752 vertici): `encode_3dxml_file` — payload 455.369 B in 0,53s
-(nessuna ottimizzazione di dimensione ancora applicata, atteso più
-vicino a 390-440 KB dopo — vedi sopra); `scene3d_to_glb` — 2,13 MB in
-0,08s, 78 mesh / 7.725 nodi / 3 materiali / 1.623 nodi con mesh (i
-posizionamenti-foglia reali).
+75.752 vertici): `encode_3dxml_file` — payload **394.021 B** in 0,85s
+(era 455.369 B prima delle ottimizzazioni — **13,5% in meno**, coerente
+con la stima 390-440 KB fatta nello scoping), **180 QR** a 2.194 B/QR
+(era 208); `scene3d_to_glb` — 2,13 MB in 0,08s, 78 mesh / 7.725 nodi /
+3 materiali / 1.623 nodi con mesh (i posizionamenti-foglia reali) —
+dimensione del GLB invariata rispetto a prima: usa comunque float32 al
+suo interno, le ottimizzazioni riguardano solo il payload `BZM1`.
 
 Comandi CLI: `balzar encode-3d assembly.3dxml -o out.b3d`,
 `balzar render-3d out.b3d -o out.glb`. Test: `tests/test_scene3d.py`
-(12 test, fixture 3DXML sintetica costruita in memoria — nessun file
-CAD reale nel repository) + 4 test in `tests/test_cli.py` — 190 test
+(16 test, fixture 3DXML sintetica costruita in memoria — nessun file
+CAD reale nel repository) + 4 test in `tests/test_cli.py` — 194 test
 totali.
 
 ### 9.6 Cosa manca ancora (esplicitamente non fatto in questa sessione)
 
+- ~~Ottimizzazioni di dimensione (quantizzazione int16, indici a 16
+  bit, rotazioni compatte)~~ — **fatto**, vedi §9.5.
 - **Integrazione GUI/demo web**: nessun tab "Assemblee 3D" nella demo
   web, nessun pulsante nella GUI desktop. La pagina che ospiterebbe
   `<model-viewer>` non è stata scritta.
-- **Ottimizzazioni di dimensione già misurate ma non applicate**:
-  quantizzazione int16 per-forma (~11% in meno, misurato in §9.2),
-  codifica compatta delle rotazioni allineate agli assi (indici uint16
-  invece di uint32 per i triangoli, dato che nessuna forma reale vista
-  finora supera i 65.535 vertici).
+- **Nessuna distinta base (BOM) generata**: `Scene3D` porta già tutti i
+  nomi (forme, riferimenti, istanze), ma non esiste ancora una funzione
+  che li aggreghi in una tabella "nome parte → quantità" — l'informazione
+  c'è, l'estrazione no. Segnalato esplicitamente durante la discussione
+  di visione generale (l'obiettivo finale è "scansiona un codice, vedi
+  esploso 3D **e** distinta base", non solo la geometria).
 - **Nessun test con un file 3DXML reale nel repository** (per gli
   stessi motivi di copyright già visti per il logo Harley-Davidson in
   §2.6): la fixture di test è sintetica, verificata a mano contro il
@@ -1310,7 +1331,7 @@ totali.
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 190 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 194 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

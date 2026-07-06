@@ -16,7 +16,8 @@ import unittest
 import zipfile
 
 from balzar.gltf import scene3d_to_glb
-from balzar.scene3d import (Scene3DError, decode_payload, encode_3dxml_file,
+from balzar.scene3d import (Scene3DError, _decode_matrix, _encode_matrix,
+                            _quantized_copy, decode_payload, encode_3dxml_file,
                             encode_payload, parse_3dxml)
 
 _MANIFEST = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -147,6 +148,9 @@ class TestPayloadRoundtrip(unittest.TestCase):
         self.assertEqual(result.reference_count, 4)
         self.assertEqual(result.instance_count, 4)  # inst_A_1, inst_A_2, inst_group, inst_B_1
         self.assertGreater(len(result.payload), 0)
+        # this fixture's vertices all sit exactly at their shape's bbox
+        # corners, so int16 quantization happens to be lossless here
+        self.assertEqual(result.mean_vertex_error, 0.0)
 
     def test_corrupt_payload_detected(self):
         result = encode_3dxml_file(self.path)
@@ -161,6 +165,58 @@ class TestPayloadRoundtrip(unittest.TestCase):
     def test_truncated_payload_rejected(self):
         with self.assertRaises(Scene3DError):
             decode_payload(b"BZM1\x00\x00")
+
+
+class TestQuantizationAndCompactTransforms(unittest.TestCase):
+    """The three size optimizations applied on top of the first working
+    version (CLAUDE.md SS9.2/SS9.7): int16 vertex quantization, uint16
+    strip indices, and the compact axis-aligned rotation code."""
+
+    def test_interior_vertex_gets_a_small_disclosed_error(self):
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        # an interior point (not at the shape's bbox corners) so
+        # quantization is genuinely lossy here, unlike the corner-only
+        # fixture used elsewhere in this file
+        shape = Shape(name="Tri", color=(10, 20, 30),
+                     vertices=[(0.0, 0.0, 0.0), (100.0, 0.0, 0.0),
+                              (0.0, 100.0, 0.0), (33.333333, 66.666667, 0.0)],
+                     strips=[[0, 1, 2, 3]])
+        ref = Reference(name="Leaf", shape_index=0, children=[])
+        scene = Scene3D(shapes=[shape], references=[ref], root=0)
+
+        quantized, mean_error = _quantized_copy(scene)
+        self.assertGreater(mean_error, 0.0)
+        self.assertLess(mean_error, 0.01)  # int16 over a 100-unit range: tiny
+        self.assertNotEqual(quantized.shapes[0].vertices, shape.vertices)
+
+    def test_axis_aligned_rotation_survives_compact_roundtrip(self):
+        identity_ish = (0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 5.0, -5.0, 12.0)
+        encoded = _encode_matrix(identity_ish)
+        self.assertEqual(encoded[0], 0)  # kind=0: compact trit code path
+        decoded, _ = _decode_matrix(encoded, 0)
+        self.assertEqual(decoded, identity_ish)
+
+    def test_arbitrary_rotation_falls_back_to_full_floats(self):
+        import math
+        c, s = math.cos(0.3), math.sin(0.3)
+        arbitrary = (c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0)
+        encoded = _encode_matrix(arbitrary)
+        self.assertEqual(encoded[0], 1)  # kind=1: full-float fallback path
+        decoded, _ = _decode_matrix(encoded, 0)
+        for a, b in zip(decoded, arbitrary):
+            self.assertAlmostEqual(a, b, places=5)
+
+    def test_shape_over_65535_vertices_rejected_not_truncated(self):
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        shape = Shape(name="TooBig", color=(1, 2, 3),
+                     vertices=[(float(i), 0.0, 0.0) for i in range(65536)],
+                     strips=[])
+        ref = Reference(name="Leaf", shape_index=0, children=[])
+        scene = Scene3D(shapes=[shape], references=[ref], root=0)
+        with self.assertRaises(Scene3DError):
+            encode_payload(scene)
 
 
 class TestGltfExport(unittest.TestCase):

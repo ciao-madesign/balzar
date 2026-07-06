@@ -1,13 +1,5 @@
 """3D parametric assemblies: 3DXML ingestion -> compact payload (BZM1).
 
-First working version — scope and every measurement behind the design
-choices here are in CLAUDE.md SS9. Correctness (round-trip self-check)
-comes first; size optimizations already prototyped and measured there
-(per-shape int16 vertex quantization, compact axis-aligned rotation
-codes) are a deliberate follow-up, not included yet — same "working
-baseline first, then optimize with measurement" pattern already used
-for the PNG adaptive filters and the median-cut quantizer.
-
 Source format is 3DXML (Dassault, published schema), not STEP and not
 the proprietary SOLIDWORKS Composer .smg binary blob — see CLAUDE.md
 SS9.1 for why. A 3DXML file is a ZIP: Manifest.xml points at the main
@@ -24,6 +16,24 @@ once no matter how many parents instance it) — that reuse is where most
 of the compression comes from (see CLAUDE.md SS9.2: ~20.8x instancing on
 the real test assembly), so flattening it away here would throw away
 the whole point.
+
+Size optimizations applied in the binary payload (all prototyped and
+measured against the real test assembly before landing here — see
+CLAUDE.md SS9.2/SS9.7 for the numbers, not re-derived from scratch):
+  - vertex positions: int16 per-shape (own bounding box -> its own
+    scale/offset), not float32 -- a real, disclosed precision loss
+    (`mean_vertex_error` on the encode result says exactly how much),
+    same honesty pattern as `mean_color_error` in encoder.py: the
+    self-check compares against the already-quantized source, not the
+    original full-precision vertices.
+  - triangle-strip indices: uint16, not uint32 -- every real shape seen
+    so far has well under 65536 vertices; `_serialize` raises a clear
+    Scene3DError for the (so far unseen) shape that doesn't fit, rather
+    than silently truncating an index.
+  - RelativeMatrix rotation: a 2-byte code for the common case (a pure
+    axis permutation with entries only in {-1,0,1} -- measured as 100%
+    of leaf-level placements on the real test assembly), falling back
+    to 9 raw floats only when the rotation is a genuine arbitrary angle.
 """
 
 from __future__ import annotations
@@ -77,6 +87,9 @@ class Scene3DEncodeResult:
     instance_count: int
     vertex_count: int
     triangle_index_count: int
+    mean_vertex_error: float  # avg per-axis abs distance introduced by int16
+                              # quantization -- 0.0 only for a degenerate
+                              # (single-point or perfectly flat) shape
 
 
 def _f32(v: float) -> float:
@@ -88,6 +101,84 @@ def _f32(v: float) -> float:
     already-quantized value, not preservation of the source's full
     double precision."""
     return struct.unpack("<f", struct.pack("<f", v))[0]
+
+
+# ------------------------------------------------- vertex quantization
+
+def _quantize_positions(vertices: list[tuple[float, float, float]]):
+    """Per-shape int16 quantization: each shape gets its own bounding box
+    as scale/offset (a small local part gets far more precision out of
+    16 bits than one scale shared across the whole assembly would).
+    Returns (lo, scale, quantized) where quantized is a list of
+    (qx,qy,qz) int16-range triples; dequantize with `_dequantize_positions`
+    using the same (lo, scale)."""
+    if not vertices:
+        return (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), []
+    xs = [v[0] for v in vertices]
+    ys = [v[1] for v in vertices]
+    zs = [v[2] for v in vertices]
+    lo = tuple(_f32(v) for v in (min(xs), min(ys), min(zs)))
+    hi = (max(xs), max(ys), max(zs))
+    # a flat axis (hi == lo, e.g. a planar face) gets scale=1 as a safe
+    # placeholder -- every vertex quantizes to the same code and
+    # dequantizes back to exactly `lo` on that axis, zero error
+    scale = tuple(_f32((hi[k] - lo[k]) / 65534) if hi[k] > lo[k] else 1.0 for k in range(3))
+    quantized = []
+    for x, y, z in vertices:
+        q = (
+            round((x - lo[0]) / scale[0]) - 32767,
+            round((y - lo[1]) / scale[1]) - 32767,
+            round((z - lo[2]) / scale[2]) - 32767,
+        )
+        quantized.append(tuple(max(-32767, min(32767, v)) for v in q))
+    return lo, scale, quantized
+
+
+def _dequantize_positions(lo, scale, quantized) -> list[tuple[float, float, float]]:
+    return [
+        (_f32(lo[0] + (qx + 32767) * scale[0]),
+         _f32(lo[1] + (qy + 32767) * scale[1]),
+         _f32(lo[2] + (qz + 32767) * scale[2]))
+        for qx, qy, qz in quantized
+    ]
+
+
+# ------------------------------------------- compact transform encoding
+
+def _encode_matrix(m: tuple[float, ...]) -> bytes:
+    """RelativeMatrix (9 rotation + 3 translation) -> bytes. The common
+    case on real assemblies (measured: 100% of leaf placements on the
+    test file) is a pure axis permutation -- every entry exactly -1, 0
+    or 1 -- encodable as one base-3 digit per entry (3**9 = 19683 fits
+    in 2 bytes) instead of 9 raw floats. Anything else (a genuine
+    arbitrary rotation angle) falls back to the 9 floats untouched."""
+    rot, tr = m[:9], m[9:12]
+    if all(abs(v - round(v)) < 1e-6 and round(v) in (-1, 0, 1) for v in rot):
+        code = 0
+        for v in rot:
+            code = code * 3 + (round(v) + 1)
+        out = struct.pack("<BH", 0, code)
+    else:
+        out = struct.pack("<B", 1) + struct.pack("<9f", *rot)
+    return out + struct.pack("<3f", *tr)
+
+
+def _decode_matrix(data: bytes, off: int) -> tuple[tuple[float, ...], int]:
+    (kind,) = struct.unpack_from("<B", data, off); off += 1
+    if kind == 0:
+        (code,) = struct.unpack_from("<H", data, off); off += 2
+        digits = []
+        for _ in range(9):
+            digits.append(code % 3)
+            code //= 3
+        digits.reverse()  # extraction order is least-significant first
+                          # (== last-encoded first); reverse to restore
+                          # the original r[0]..r[8] order
+        rot = tuple(float(d - 1) for d in digits)
+    else:
+        rot = struct.unpack_from("<9f", data, off); off += 36
+    tr = struct.unpack_from("<3f", data, off); off += 12
+    return rot + tr, off
 
 
 # --------------------------------------------------------------- parsing
@@ -267,16 +358,23 @@ def _serialize(scene: Scene3D) -> bytes:
 
     out += struct.pack("<H", len(scene.shapes))
     for shape in scene.shapes:
+        if len(shape.vertices) > 65535:
+            raise Scene3DError(
+                f"forma '{shape.name}' con {len(shape.vertices)} vertici: "
+                "supera il limite di 65535 per gli indici a 16 bit")
         out += struct.pack("<H", name_idx(shape.name))
         out += struct.pack("<BBB", *shape.color)
         out += struct.pack("<I", len(shape.vertices))
-        for x, y, z in shape.vertices:
-            out += struct.pack("<fff", x, y, z)
+        lo, scale, quantized = _quantize_positions(shape.vertices)
+        out += struct.pack("<3f", *lo)
+        out += struct.pack("<3f", *scale)
+        for qx, qy, qz in quantized:
+            out += struct.pack("<3h", qx, qy, qz)
         out += struct.pack("<H", len(shape.strips))
         for strip in shape.strips:
             out += struct.pack("<H", len(strip))
             for idx in strip:
-                out += struct.pack("<I", idx)
+                out += struct.pack("<H", idx)
 
     out += struct.pack("<I", len(scene.references))
     for ref in scene.references:
@@ -287,7 +385,7 @@ def _serialize(scene: Scene3D) -> bytes:
         for target, inst_name, matrix in ref.children:
             out += struct.pack("<I", target)
             out += struct.pack("<H", name_idx(inst_name))
-            out += struct.pack("<12f", *matrix)
+            out += _encode_matrix(matrix)
 
     out += struct.pack("<I", scene.root)
     return bytes(out)
@@ -305,15 +403,18 @@ def _deserialize(data: bytes) -> Scene3D:
         (name_i,) = struct.unpack_from("<H", data, off); off += 2
         color = struct.unpack_from("<BBB", data, off); off += 3
         (n_verts,) = struct.unpack_from("<I", data, off); off += 4
-        vertices = []
+        lo = struct.unpack_from("<3f", data, off); off += 12
+        scale = struct.unpack_from("<3f", data, off); off += 12
+        quantized = []
         for _ in range(n_verts):
-            xyz = struct.unpack_from("<fff", data, off); off += 12
-            vertices.append(xyz)
+            q = struct.unpack_from("<3h", data, off); off += 6
+            quantized.append(q)
+        vertices = _dequantize_positions(lo, scale, quantized)
         (n_strips,) = struct.unpack_from("<H", data, off); off += 2
         strips = []
         for _ in range(n_strips):
             (slen,) = struct.unpack_from("<H", data, off); off += 2
-            idxs = list(struct.unpack_from(f"<{slen}I", data, off)); off += 4 * slen
+            idxs = list(struct.unpack_from(f"<{slen}H", data, off)); off += 2 * slen
             strips.append(idxs)
         shapes.append(Shape(name=name_at(name_i), color=color, vertices=vertices, strips=strips))
 
@@ -327,7 +428,7 @@ def _deserialize(data: bytes) -> Scene3D:
         for _ in range(n_children):
             (target,) = struct.unpack_from("<I", data, off); off += 4
             (inst_name_i,) = struct.unpack_from("<H", data, off); off += 2
-            matrix = struct.unpack_from("<12f", data, off); off += 48
+            matrix, off = _decode_matrix(data, off)
             children.append((target, name_at(inst_name_i), matrix))
         references.append(Reference(
             name=name_at(name_i),
@@ -362,17 +463,42 @@ def decode_payload(data: bytes) -> Scene3D:
 
 # ------------------------------------------------------------- top level
 
+def _quantized_copy(scene: Scene3D) -> tuple[Scene3D, float]:
+    """The scene as it will actually come back out of decode_payload:
+    every shape's vertices already rounded through the same int16
+    quantize-then-dequantize round trip _serialize/_deserialize use.
+    Comparing the self-check against THIS (not the original full-
+    precision `scene`) is the same honesty pattern as the 2D encoder's
+    self-check against its already-quantized palette indices, not the
+    raw source RGB. Also returns the mean per-axis error introduced,
+    for honest disclosure in Scene3DEncodeResult."""
+    quantized_shapes = []
+    total_error = 0.0
+    total_axis_samples = 0
+    for shape in scene.shapes:
+        lo, scale, q = _quantize_positions(shape.vertices)
+        dequantized = _dequantize_positions(lo, scale, q)
+        for (x, y, z), (qx, qy, qz) in zip(shape.vertices, dequantized):
+            total_error += abs(x - qx) + abs(y - qy) + abs(z - qz)
+            total_axis_samples += 3
+        quantized_shapes.append(Shape(name=shape.name, color=shape.color,
+                                      vertices=dequantized, strips=shape.strips))
+    mean_error = round(total_error / total_axis_samples, 6) if total_axis_samples else 0.0
+    return Scene3D(shapes=quantized_shapes, references=scene.references, root=scene.root), mean_error
+
+
 def encode_3dxml_file(path: str) -> Scene3DEncodeResult:
     scene = parse_3dxml(path)
     payload = encode_payload(scene)
+    quantized_scene, mean_vertex_error = _quantized_copy(scene)
 
     # self-check: decoding the payload we just produced must reconstruct
-    # an identical scene (at the float32 precision already applied during
-    # parsing) -- never claim a round-trip works without verifying it
+    # the already-quantized scene exactly -- never claim a round-trip
+    # works without verifying it
     rebuilt = decode_payload(payload)
-    if rebuilt != scene:
+    if rebuilt != quantized_scene:
         raise RuntimeError("scene3d encoder self-check failed: decoded payload "
-                          "does not match the parsed source (internal bug)")
+                          "does not match the quantized source (internal bug)")
 
     instance_count = sum(len(r.children) for r in scene.references)
     vertex_count = sum(len(s.vertices) for s in scene.shapes)
@@ -385,4 +511,5 @@ def encode_3dxml_file(path: str) -> Scene3DEncodeResult:
         instance_count=instance_count,
         vertex_count=vertex_count,
         triangle_index_count=triangle_index_count,
+        mean_vertex_error=mean_vertex_error,
     )

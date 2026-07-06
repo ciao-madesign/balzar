@@ -183,10 +183,9 @@ def cmd_encode_vector(args: argparse.Namespace) -> int:
 
 
 def cmd_encode_3d(args: argparse.Namespace) -> int:
-    """3DXML -> payload binario BZM1 (balzar/scene3d.py). Prima versione:
-    corretta e auto-verificata, ottimizzazioni di dimensione (quantizzazione
-    vertici, codifica compatta delle rotazioni allineate agli assi -- gia'
-    prototipate e misurate, vedi CLAUDE.md SS9) non ancora applicate."""
+    """3DXML -> payload binario BZM1 (balzar/scene3d.py): quantizzazione
+    int16 dei vertici, indici a 16 bit, codifica compatta delle rotazioni
+    allineate agli assi -- vedi CLAUDE.md SS9 per le misure reali."""
     from .scene3d import Scene3DError, encode_3dxml_file
 
     try:
@@ -203,6 +202,7 @@ def cmd_encode_3d(args: argparse.Namespace) -> int:
     print(f"forme uniche: {result.shape_count}")
     print(f"riferimenti:  {_fmt(result.reference_count)}")
     print(f"istanze:      {_fmt(result.instance_count)}")
+    print(f"errore medio vertici (quantizzazione int16): {result.mean_vertex_error}")
     print(f"vertici:      {_fmt(result.vertex_count)}")
     print(f"payload:      {out}: {_fmt(len(result.payload))} byte "
           f"(QR singolo: {'si' if fits_in_qr(result.payload) else 'no'})")
