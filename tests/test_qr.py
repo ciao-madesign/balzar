@@ -96,6 +96,52 @@ class TestQRFrameSequence(unittest.TestCase):
         self.assertTrue(done)
         self.assertEqual(scanner.result(), payload)
 
+    def test_grid_dim_hint_gives_bit_identical_result(self):
+        from balzar.qr import LiveScanner, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertGreater(len(frames), 1)
+
+        scanner = LiveScanner()
+        for frame in frames:
+            buf = io.BytesIO()
+            frame.save(buf, format="PNG")
+            scanner.add(buf.getvalue(), grid_dim=4)
+        self.assertEqual(scanner.result(), payload)
+
+    def test_grid_dim_hint_falls_back_when_tiling_is_a_mismatch(self):
+        # a single, un-gridded QR: the grid_dim=4 hint cannot possibly
+        # apply (there's only one code, not 16) -- must still work via
+        # the whole-image fallback, not silently find nothing
+        from balzar.qr import LiveScanner, payload_to_qr_image
+        payload = encode_payload("CANVAS w=16 h=16 bg=0\nFILL region=FULL color=2")
+        img = payload_to_qr_image(payload)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+
+        scanner = LiveScanner()
+        done, missing = scanner.add(buf.getvalue(), grid_dim=4)
+        self.assertTrue(done)
+        self.assertEqual(scanner.result(), payload)
+
+    def test_scan_image_bytes_grid_dim_hint_matches_default(self):
+        import math
+
+        from balzar.payload import chunk_payload
+        from balzar.qr import CHUNK_RAW_BYTES, payload_to_qr_image, scan_image_bytes
+        payload = _big_payload()
+        img = payload_to_qr_image(payload)  # one auto-sized grid, all chunks
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+
+        n_chunks = len(chunk_payload(payload, chunk_size=CHUNK_RAW_BYTES))
+        grid_dim_hint = math.ceil(math.sqrt(n_chunks))
+
+        assembled_default = scan_image_bytes(buf.getvalue())
+        assembled_hinted = scan_image_bytes(buf.getvalue(), grid_dim=grid_dim_hint)
+        self.assertEqual(assembled_default, payload)
+        self.assertEqual(assembled_hinted, payload)
+
     def test_live_scanner_accepts_frames_out_of_order_and_repeated(self):
         from balzar.qr import LiveScanner, payload_to_qr_frames
         payload = _big_payload()

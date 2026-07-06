@@ -295,6 +295,58 @@ esposte come comando `balzar` o pulsante. Prossimo passo naturale se
 si vuole portare questo in campo, non fatto in questa sessione per
 tenere lo scope alla sola domanda posta (meccanismo + benchmark).
 
+**6) Ottimizzazione della lettura: ritaglio per-cella invece di ZBar
+sull'immagine intera — un primo tentativo ha peggiorato le cose, non
+migliorate.** Verifica end-to-end su un vero assieme 3DXML (§9.10) ha
+mostrato che il collo di bottiglia reale è la scansione: ZBar impiega
+5,84s per decodificare una griglia reale da 16 QR perché cerca i
+pattern finder sull'intera tela. Un primo tentativo di ottimizzazione
+ha ritagliato l'immagine in `grid_dim × grid_dim` regioni assumendo una
+divisione uniforme con un margine di sicurezza del 15% — **misurato
+peggio, non meglio**: il margine non era abbastanza preciso da
+catturare sempre tutti e 16 i codici (ne trovava 11-14/16), quindi il
+controllo "la griglia ritagliata ha recuperato tutto?" falliva quasi
+sempre e il codice pagava la scansione whole-image di riserva **in più
+del** tentativo di ritaglio, non al suo posto — 66,5s misurati contro
+i 39,7s di partenza, una regressione reale, scoperta solo ri-misurando
+end-to-end e non fidandosi del microbenchmark isolato (un singolo
+ritaglio decodificato in 0,118s contro 4,226s per l'immagine intera,
+che sembrava promettente ma non teneva conto del costo aggregato di 16
+chiamate ZBar separate né del tasso di mancata cattura).
+
+Fix: invece di indovinare una divisione uniforme, `_tile_boxes` ora
+**inverte la formula di layout che `_compose_grid` usa davvero**
+(`cell`/`pad` risolti per punto fisso, dato che `pad = max(12, cell //
+15)` dipende debolmente da `cell`), recuperando la geometria esatta
+invece di una approssimazione. Misurato sulla stessa griglia reale:
+**16/16 codici recuperati, 3,03s contro 5,84s** dell'immagine intera —
+un guadagno vero, non solo un ritaglio più piccolo. Guardia di
+sicurezza aggiunta: se la geometria risolta produce un `cell`
+implausibile (es. un singolo QR non in griglia, dove l'assunzione
+`grid_dim × grid_dim` non si applica affatto), `_tile_boxes` fallisce
+in modo esplicito restituendo nessun box invece di passare coordinate
+invertite a `Image.crop` — il chiamante nota semplicemente che il
+ritaglio non ha recuperato una griglia completa e passa alla scansione
+whole-image, mai un crash.
+
+Esposto come parametro opzionale `grid_dim` su `LiveScanner.add()` e
+`scan_image_bytes()` — **solo un suggerimento di velocità, mai un
+requisito di correttezza**: usato esclusivamente quando il ritaglio
+recupera una griglia `grid_dim²` completa, altrimenti ricade
+esattamente sulla stessa scansione whole-image di sempre (un frame
+finale parziale, o un'immagine che non è davvero una griglia). Un hint
+sbagliato o assente non perde mai un codice, costa solo la velocità
+extra.
+
+**Ri-misurato sulla pipeline reale** (§9.10, stessi 7 frame del secondo
+assieme 3DXML): lettura totale **44,62s → 28,65s** (~1,56×), tutti i
+capitoli recuperati, **bit-identico** in entrambi i casi. I 6 frame
+pieni scendono da ~6-7,5s a ~3,4-3,6s ciascuno; il 7° frame (parziale,
+13 codici) ricade sul fallback com'era prima. Verificato con
+`tests/test_qr.py` (3 nuovi test: hint bit-identico, fallback esplicito
+su un'immagine non a griglia, corrispondenza tra `_decode_tiled` e la
+scansione whole-image su una griglia completa) — 212 test totali.
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
@@ -748,7 +800,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-209 test, tutti verdi (`python3 -m unittest discover -s tests`):
+212 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -779,8 +831,11 @@ esplicita di non-regressione contro il vecchio writer solo-None,
 in `test_qr.py`: tetto sul numero di codici per frame, roundtrip
 completo via `LiveScanner` frame per frame, frame fuori ordine e
 ripetuti, progresso "mancanti" corretto prima del completamento,
-roundtrip attraverso bundle GIF e attraverso bundle a file separati —
-vedi §2.4b).
+roundtrip attraverso bundle GIF e attraverso bundle a file separati,
+l'hint `grid_dim` di velocità (risultato bit-identico con e senza,
+fallback esplicito su un'immagine a QR singolo dove l'assunzione a
+griglia non si applica affatto, corrispondenza tra `_decode_tiled` e la
+scansione whole-image su una griglia completa) — vedi §2.4b).
 
 ## 3. Numeri misurati (non stimati) fin qui
 
@@ -1770,10 +1825,19 @@ Nessuna modifica al codice da questa verifica: nessun bug da correggere,
 solo due correzioni oneste alle aspettative di prestazioni documentate
 in §9.3/§2.4b.
 
+**Seguito, stessa sessione**: la prima criticità (tempo dominato dalla
+lettura) è stata affrontata con l'hint `grid_dim` su
+`LiveScanner.add()`/`scan_image_bytes()` — vedi §2.4b punto 6 per la
+storia completa (incluso un primo tentativo che ha *peggiorato* i
+tempi, scoperto solo ri-misurando end-to-end su questi stessi 7 frame
+invece di fidarsi di un microbenchmark isolato). Ri-misurato su questa
+stessa pipeline reale dopo il fix: lettura totale **44,62s → 28,65s**
+(~1,56×), bit-identico in entrambi i casi.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 209 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 212 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop
