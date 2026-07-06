@@ -68,12 +68,20 @@
         <div class="downloads">
           <button id="dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="dl-program" type="button">scarica programma (.bzr)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="encode-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
           <button id="encode-gen-qr-btn" type="button">genera QR</button>
         </div>
         <div id="encode-qr-result" class="qr-block" hidden>
           <img id="encode-qr-img" class="qr-image" alt="QR del payload">
+          <div id="encode-qr-pages" class="qr-pages"></div>
           <p id="encode-qr-note" class="honesty"></p>
-          <button id="encode-qr-dl-btn" type="button">scarica QR (PNG)</button>
+          <button id="encode-qr-dl-btn" type="button">scarica QR</button>
         </div>
 
         <details>
@@ -125,12 +133,20 @@
           <button id="vector-dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="vector-dl-program" type="button">scarica programma (.bzr)</button>
           <button id="vector-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="vector-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
           <button id="vector-gen-qr-btn" type="button">genera QR</button>
         </div>
         <div id="vector-qr-result" class="qr-block" hidden>
           <img id="vector-qr-img" class="qr-image" alt="QR del payload">
+          <div id="vector-qr-pages" class="qr-pages"></div>
           <p id="vector-qr-note" class="honesty"></p>
-          <button id="vector-qr-dl-btn" type="button">scarica QR (PNG)</button>
+          <button id="vector-qr-dl-btn" type="button">scarica QR</button>
         </div>
 
         <details>
@@ -180,12 +196,20 @@
         <div class="downloads">
           <button id="video-dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="video-dl-program" type="button">scarica programma (.bzr)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="video-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
           <button id="video-gen-qr-btn" type="button">genera QR</button>
         </div>
         <div id="video-qr-result" class="qr-block" hidden>
           <img id="video-qr-img" class="qr-image" alt="QR del payload">
+          <div id="video-qr-pages" class="qr-pages"></div>
           <p id="video-qr-note" class="honesty"></p>
-          <button id="video-qr-dl-btn" type="button">scarica QR (PNG)</button>
+          <button id="video-qr-dl-btn" type="button">scarica QR</button>
         </div>
 
         <details>
@@ -246,12 +270,20 @@
         <div class="downloads">
           <button id="sequence-dl-payload" type="button">scarica payload (.bzp)</button>
           <button id="sequence-dl-program" type="button">scarica programma (.bzr)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="sequence-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
           <button id="sequence-gen-qr-btn" type="button">genera QR</button>
         </div>
         <div id="sequence-qr-result" class="qr-block" hidden>
           <img id="sequence-qr-img" class="qr-image" alt="QR del payload">
+          <div id="sequence-qr-pages" class="qr-pages"></div>
           <p id="sequence-qr-note" class="honesty"></p>
-          <button id="sequence-qr-dl-btn" type="button">scarica QR (PNG)</button>
+          <button id="sequence-qr-dl-btn" type="button">scarica QR</button>
         </div>
 
         <details>
@@ -309,6 +341,13 @@
         <div class="downloads">
           <button id="threed-dl-payload" type="button">scarica payload (.b3d)</button>
           <button id="threed-dl-glb" type="button">scarica modello (.glb)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="threed-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
           <button id="threed-gen-qr-btn" type="button">genera QR</button>
         </div>
         <p id="threed-glb-omitted" class="honesty" hidden>Il modello 3D è troppo grande per
@@ -316,8 +355,9 @@
           <code>balzar render-3d</code> in locale.</p>
         <div id="threed-qr-result" class="qr-block" hidden>
           <img id="threed-qr-img" class="qr-image" alt="QR del payload">
+          <div id="threed-qr-pages" class="qr-pages"></div>
           <p id="threed-qr-note" class="honesty"></p>
-          <button id="threed-qr-dl-btn" type="button">scarica QR (PNG)</button>
+          <button id="threed-qr-dl-btn" type="button">scarica QR</button>
         </div>
       </section>
     </div>
@@ -352,13 +392,21 @@
           <button id="open-dl-gif" type="button" hidden>scarica GIF</button>
           <button id="open-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
           <button id="open-dl-payload" type="button">scarica payload (.bzp)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="open-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
           <button id="open-gen-qr-btn" type="button">genera QR</button>
         </div>
         <p id="open-svg-reason" class="honesty" hidden></p>
         <div id="open-qr-result" class="qr-block" hidden>
           <img id="open-qr-img" class="qr-image" alt="QR del payload">
+          <div id="open-qr-pages" class="qr-pages"></div>
           <p id="open-qr-note" class="honesty"></p>
-          <button id="open-qr-dl-btn" type="button">scarica QR (PNG)</button>
+          <button id="open-qr-dl-btn" type="button">scarica QR</button>
         </div>
 
         <details>

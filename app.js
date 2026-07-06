@@ -166,11 +166,13 @@ function base64ToBytes(b64) {
 // serve solo per *leggere* un QR da una foto).
 function setupQrButton(prefix, getPayloadBase64) {
   const btn = document.getElementById(`${prefix}-gen-qr-btn`);
+  const modeSelect = document.getElementById(`${prefix}-qr-mode`);
   const resultEl = document.getElementById(`${prefix}-qr-result`);
   const imgEl = document.getElementById(`${prefix}-qr-img`);
+  const pagesEl = document.getElementById(`${prefix}-qr-pages`);
   const noteEl = document.getElementById(`${prefix}-qr-note`);
   const dlBtn = document.getElementById(`${prefix}-qr-dl-btn`);
-  let lastQrPngBase64 = null;
+  let lastDownload = null; // { bytes, filename, mime } for single/gif mode
 
   btn.addEventListener("click", async () => {
     const payloadB64 = getPayloadBase64();
@@ -180,24 +182,64 @@ function setupQrButton(prefix, getPayloadBase64) {
       noteEl.classList.add("error");
       return;
     }
+    const mode = modeSelect.value;
     const originalLabel = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Genero…";
+    imgEl.hidden = true;
+    pagesEl.innerHTML = "";
+    dlBtn.hidden = (mode === "pages");
+    lastDownload = null;
     try {
       const res = await fetch("/api/qr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload_base64: payloadB64 }),
+        body: JSON.stringify({ payload_base64: payloadB64, mode, grid_dim: 4 }),
       });
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || "errore sconosciuto");
 
-      lastQrPngBase64 = json.qr_png_base64;
-      imgEl.src = "data:image/png;base64," + lastQrPngBase64;
       noteEl.classList.remove("error");
-      noteEl.textContent = json.single_qr
-        ? "QR singolo — scansionalo con qualunque lettore o con 'balzar scan'."
-        : "Il payload non entra in un solo QR: griglia auto-dimensionata, scansiona l'immagine intera con 'balzar scan'.";
+      if (json.mode === "single") {
+        imgEl.src = "data:image/png;base64," + json.qr_png_base64;
+        imgEl.hidden = false;
+        lastDownload = { bytes: base64ToBytes(json.qr_png_base64), filename: "payload_qr.png", mime: "image/png" };
+        noteEl.textContent = json.single_qr
+          ? "QR singolo — scansionalo con qualunque lettore o con 'balzar scan'."
+          : "Il payload non entra in un solo QR: griglia auto-dimensionata in una sola immagine — utile come file, ma non pensata per essere fotografata/stampata a dimensione leggibile se la griglia è grande. Prova 'Sequenza QR' per una serie di frame più piccoli.";
+      } else if (json.mode === "gif") {
+        if (json.gif_omitted) {
+          noteEl.classList.add("error");
+          noteEl.textContent = `Sequenza generata (${json.n_frames} frame da ${json.grid_dim}×${json.grid_dim} QR) ma la GIF risultante è troppo grande per essere restituita da questo deployment.`;
+        } else {
+          imgEl.src = "data:image/gif;base64," + json.qr_gif_base64;
+          imgEl.hidden = false;
+          lastDownload = { bytes: base64ToBytes(json.qr_gif_base64), filename: "payload_qr.gif", mime: "image/gif" };
+          noteEl.textContent = `Sequenza di ${json.n_frames} frame (${json.grid_dim}×${json.grid_dim} QR ciascuno) in una GIF animata — riassembla ogni frame con la classe LiveScanner di balzar/qr.py (non ancora un comando CLI dedicato), in qualsiasi ordine e con ripetizioni tollerate.`;
+        }
+      } else { // pages
+        if (json.pages_omitted) {
+          noteEl.classList.add("error");
+          noteEl.textContent = `Sequenza generata (${json.n_frames} pagine da ${json.grid_dim}×${json.grid_dim} QR) ma troppo grande per essere restituita in un colpo solo da questo deployment.`;
+        } else {
+          json.pages.forEach((page, i) => {
+            const item = document.createElement("div");
+            item.className = "qr-page-item";
+            const pageImg = document.createElement("img");
+            pageImg.src = "data:image/png;base64," + page.png_base64;
+            pageImg.alt = `Pagina ${i + 1} di ${json.n_frames}`;
+            const pageDlBtn = document.createElement("button");
+            pageDlBtn.type = "button";
+            pageDlBtn.textContent = `Scarica pagina ${i + 1}/${json.n_frames}`;
+            pageDlBtn.addEventListener("click", () =>
+              downloadBlob(base64ToBytes(page.png_base64), `payload_qr_page_${i + 1}_of_${json.n_frames}.png`, "image/png"));
+            item.appendChild(pageImg);
+            item.appendChild(pageDlBtn);
+            pagesEl.appendChild(item);
+          });
+          noteEl.textContent = `Sequenza di ${json.n_frames} pagine (${json.grid_dim}×${json.grid_dim} QR ciascuna) — stampa/fotografa una pagina alla volta, in qualsiasi ordine, poi riassembla con la classe LiveScanner di balzar/qr.py (non ancora un comando CLI dedicato).`;
+        }
+      }
       resultEl.hidden = false;
     } catch (err) {
       noteEl.classList.add("error");
@@ -210,8 +252,8 @@ function setupQrButton(prefix, getPayloadBase64) {
   });
 
   dlBtn.addEventListener("click", () => {
-    if (!lastQrPngBase64) return;
-    downloadBlob(base64ToBytes(lastQrPngBase64), "payload_qr.png", "image/png");
+    if (!lastDownload) return;
+    downloadBlob(lastDownload.bytes, lastDownload.filename, lastDownload.mime);
   });
 }
 

@@ -288,12 +288,11 @@ controlla un supporto fisico/schermo diverso e vuole ripetere questo
 stesso benchmark sulle proprie condizioni reali — non è consigliato
 come default.
 
-**Non ancora fatto**: nessuna integrazione CLI/GUI/demo web per
-`payload_to_qr_frames`/`frames_to_gif`/`frames_to_files`/`LiveScanner`
-— oggi sono solo funzioni di libreria, verificate da test, non ancora
-esposte come comando `balzar` o pulsante. Prossimo passo naturale se
-si vuole portare questo in campo, non fatto in questa sessione per
-tenere lo scope alla sola domanda posta (meccanismo + benchmark).
+~~Non ancora fatto: nessuna integrazione CLI/GUI/demo web~~ —
+**integrato nella demo web in una sessione successiva** (non ancora in
+CLI/GUI desktop), vedi §2.9 per i dettagli: il bottone "genera QR" di
+ogni tab ora espone `payload_to_qr_frames`/`frames_to_gif`/
+`frames_to_files` con una scelta esplicita, non solo `payload_to_qr_image`.
 
 **6) Ottimizzazione della lettura: ritaglio per-cella invece di ZBar
 sull'immagine intera — un primo tentativo ha peggiorato le cose, non
@@ -664,16 +663,83 @@ scopo (nessuna spiegazione implicita lasciata all'utente):
    un `.bzr` testuale, non un `.bzp` già pronto.
 
 **Generatore QR** (`api/qr.py` + `handle_qr`), disponibile su tutti e
-cinque i tab dove esiste un payload: riusa `balzar/qr.py` esattamente
-com'è (singolo codice o griglia auto-dimensionata). A differenza della
-*lettura* di un QR (`pyzbar`/`libzbar0`, nativa, mai esposta sul web
-demo — serve un ambiente con quella libreria di sistema), la
-*generazione* usa solo `qrcode`, puro Python + Pillow: nessuna nuova
-dipendenza di sistema, sicuro da aggiungere a `requirements.txt` per
-Vercel. Verificato non solo visivamente ma con un vero round-trip ZBar
-in sessione: screenshot del QR generato dalla pagina → `pyzbar.decode`
-→ `assemble_chunks`/`decode_payload` → programma bit-identico
-all'originale caricato.
+sei i tab dove esiste un payload: riusa `balzar/qr.py` esattamente
+com'è. A differenza della *lettura* di un QR (`pyzbar`/`libzbar0`,
+nativa, mai esposta sul web demo — serve un ambiente con quella
+libreria di sistema), la *generazione* usa solo `qrcode`, puro Python +
+Pillow: nessuna nuova dipendenza di sistema, sicuro da aggiungere a
+`requirements.txt` per Vercel. Verificato non solo visivamente ma con
+un vero round-trip ZBar in sessione: screenshot del QR generato dalla
+pagina → `pyzbar.decode` → `assemble_chunks`/`decode_payload` →
+programma bit-identico all'originale caricato.
+
+**Tre modalità di export, scelta esplicita dell'utente (sessione
+successiva)** — domanda diretta: "la demo web può produrre anche le
+sequenze QR e le matrici? l'utente può scegliere?". Risposta onesta al
+momento della domanda: **no**, `handle_qr` chiamava solo
+`payload_to_qr_image` — singola griglia auto-dimensionata, nessun tetto
+sul numero di codici per immagine (una griglia 14×14 per il payload 3D
+reale da 178 capitoli, §2.4b/§9.10 — "inutile e inutilizzabile", parole
+dell'utente, correttamente: mai pensata per essere fotografata o
+proiettata a dimensione leggibile). `payload_to_qr_frames`/
+`frames_to_gif`/`frames_to_files` esistevano già, verificate da test,
+ma erano **solo funzioni di libreria**, mai raggiungibili da un
+bottone. Fix, nel bottone "genera QR" di ogni tab, ora con un
+`<select>` a monte:
+- **"Immagine singola (griglia unica)"** — comportamento originale
+  invariato, default per compatibilità;
+- **"Sequenza QR — GIF animata"** — `payload_to_qr_frames(grid_dim=4)`
+  + `frames_to_gif`, una GIF che cicla i frame per uno schermo che la
+  riproduce da solo;
+- **"Sequenza QR — pagine PNG"** — stesso split, restituito come lista
+  di PNG separati (un `<div class="qr-page-item">` per pagina, ognuno
+  col proprio bottone di download), per la stampa su carta dove
+  "auto-play" non ha senso.
+
+`handle_qr` guadagna i parametri `mode` (`single`/`gif`/`pages`,
+default `single`) e `grid_dim` (default 4, **clampato lato server a
+[2, 8]**: un valore assurdo come 100 da un endpoint pubblico produrrebbe
+un'immagine composta enorme, va sempre validato anche se il valore
+tecnico non ha limiti nel codice di libreria). Stesso principio
+`_omitted` già usato altrove nel modulo (PNG/GLB) applicato all'output
+GIF/pagine: la dimensione del payload **sorgente** non basta a limitare
+l'output (misurato: un payload di 500KB può gonfiarsi a una GIF di 9MB
+per 7 frame, §9.10), quindi `gif_omitted`/`pages_omitted` ricontrollano
+la dimensione reale della risposta contro `max_payload_b64_bytes` prima
+di restituirla, evitando di sforare il limite di risposta di Vercel
+(~4.5MB) con un payload sorgente che di per sé passava il controllo.
+
+**Numero reale misurato** (payload sintetico di test, 41.143 B, 19
+capitoli): la vecchia modalità unica produce un'immagine da **5862×4792
+px** (19 QR in una sola griglia, illeggibile a qualunque dimensione
+fisica ragionevole); la nuova modalità sequenza (`grid_dim=4`) la
+spezza in **2 frame da 4704×4818 px** ciascuno (16+3 QR), la stessa
+dimensione già misurata come "piena risoluzione, affidabile" nel
+benchmark di §2.4b/§9.10 — non una stima, lo stesso frame è stato
+generato e verificato.
+
+Verificato end-to-end con Playwright contro un server locale che
+instrada `/api/qr` al vero `handle_qr` (stessa metodologia, non un
+mock): upload di un programma sintetico che produce quel payload da
+41KB tramite il tab "Apri programma" → modalità "singola" invariata
+(sanity check) → modalità GIF: risposta reale con `n_frames=2`,
+`qr_gif_base64` scaricato e riaperto con Pillow, **confermato
+2 frame reali nel file GIF** (non una singola griglia travestita) →
+modalità pagine: galleria con 2 elementi, ciascuno scaricabile
+singolarmente, prima pagina riaperta e verificata (4704×4818 px, PNG
+reale). Nessun bug trovato in questa verifica (a differenza della
+scoperta `toBlob`/`toDataURL` di §9.14). Aggiunti 7 test in
+`tests/test_webapi.py::TestHandleQr` (modalità gif/pages, split
+multi-frame per un payload grande, `grid_dim` fuori range clampato,
+`mode` sconosciuto rifiutato con 400, roundtrip reale via ZBar +
+`LiveScanner` attraverso la modalità pagine, omissione della risposta
+oltre il limite) — 223 test totali.
+
+**Non ancora fatto**: CLI e GUI desktop non espongono ancora le tre
+modalità (solo la demo web); `LiveScanner`/la lettura multi-frame
+restano solo funzioni di libreria senza un comando `balzar scan`
+dedicato per leggerle indietro (nessun flag `--live`, verificato nel
+codice di `cli.py` prima di scriverlo in questa nota — non inventato).
 
 Tutti e cinque i tab (più il generatore QR) verificati end-to-end in
 sessione (Playwright contro un server locale che espone le stesse

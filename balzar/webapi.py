@@ -576,15 +576,43 @@ def _png_frame(rendered, index: int, max_dim: int | None = None) -> bytes:
 
 
 def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
-    """Payload bytes -> a printable QR image (single code, or an
-    auto-sized grid if the payload doesn't fit one) — reuses
-    balzar/qr.py exactly as the CLI/GUI do. Generation only needs the
-    pure-Python `qrcode` package (+ Pillow, already a dependency); unlike
-    *reading* a QR (pyzbar/libzbar0, native, not wired into the web demo)
-    this has no extra system dependency, so it is safe to expose here."""
+    """Payload bytes -> a printable QR image, or a real multi-frame
+    sequence — reuses balzar/qr.py exactly as the CLI does. Generation
+    only needs the pure-Python `qrcode` package (+ Pillow, already a
+    dependency); unlike *reading* a QR (pyzbar/libzbar0, native, not
+    wired into the web demo) this has no extra system dependency, so it
+    is safe to expose here.
+
+    `mode` (default "single") picks the output shape:
+    - "single": one image, single QR or one auto-sized grid with every
+      chunk crammed in (payload_to_qr_image) -- the original behaviour,
+      still the default. For a large payload this can mean a grid with
+      no cap on codes-per-image (e.g. 14x14 for a real 3D assembly
+      payload) that's fine as a *file* but not something a person can
+      usefully scan or print at a fixed physical size.
+    - "gif": payload_to_qr_frames (capped at grid_dim**2 codes/frame) +
+      frames_to_gif -- one auto-playing GIF, for a screen that cycles
+      frames on its own.
+    - "pages": same frame split, returned as a list of individual PNGs
+      (base64 each) -- for printing one page per frame, where
+      "auto-play" has no meaning.
+    grid_dim (default 4, clamped to [2, 8]) is a property of the
+    physical output medium, not the payload -- see CLAUDE.md §2.4b for
+    why 4 is the recommended default and 8 is available but not
+    recommended."""
     payload_b64 = body.get("payload_base64")
     if not payload_b64:
         return 400, {"ok": False, "error": "campo 'payload_base64' mancante"}
+
+    mode = body.get("mode", "single")
+    if mode not in ("single", "gif", "pages"):
+        return 400, {"ok": False, "error": f"mode sconosciuto: {mode!r} (atteso single/gif/pages)"}
+
+    try:
+        grid_dim = int(body.get("grid_dim", 4))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "error": "grid_dim deve essere un intero"}
+    grid_dim = max(2, min(8, grid_dim))
 
     try:
         import qrcode  # noqa: F401  (import check only; qr.py does the real import)
@@ -594,7 +622,7 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
                              "(pacchetto 'qrcode' mancante)"}
 
     from .payload import fits_in_qr
-    from .qr import payload_to_qr_image
+    from .qr import frames_to_gif, payload_to_qr_frames, payload_to_qr_image
 
     try:
         payload = _b64decode(payload_b64)
@@ -603,18 +631,60 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
     if len(base64.b64encode(payload)) > limits.max_payload_b64_bytes:
         return 400, {"ok": False, "error": "payload troppo grande per generare un QR qui"}
 
-    img = payload_to_qr_image(payload)
-
     import io as _io
-    buf = _io.BytesIO()
-    img.save(buf, format="PNG")
 
+    if mode == "single":
+        img = payload_to_qr_image(payload)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return 200, {
+            "ok": True,
+            "mode": "single",
+            "single_qr": fits_in_qr(payload),
+            "width": img.size[0],
+            "height": img.size[1],
+            "qr_png_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        }
+
+    frames = payload_to_qr_frames(payload, grid_dim=grid_dim)
+
+    if mode == "gif":
+        gif_b64 = base64.b64encode(frames_to_gif(frames)).decode("ascii")
+        # a GIF bundle inflates well past the source payload (measured:
+        # 500KB payload -> 9MB GIF for 7 frames, CLAUDE.md §9.10), so the
+        # payload-size check above does not bound this -- re-check the
+        # actual output, same _omitted pattern as png/glb elsewhere in
+        # this module, rather than letting a huge response blow past
+        # Vercel's ~4.5MB reply cap.
+        gif_omitted = len(gif_b64) > limits.max_payload_b64_bytes
+        return 200, {
+            "ok": True,
+            "mode": "gif",
+            "n_frames": len(frames),
+            "grid_dim": grid_dim,
+            "width": frames[0].size[0],
+            "height": frames[0].size[1],
+            "qr_gif_base64": "" if gif_omitted else gif_b64,
+            "gif_omitted": gif_omitted,
+        }
+
+    # mode == "pages"
+    pages = []
+    total_b64_len = 0
+    for frame in frames:
+        buf = _io.BytesIO()
+        frame.save(buf, format="PNG")
+        page_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        total_b64_len += len(page_b64)
+        pages.append({"width": frame.size[0], "height": frame.size[1], "png_base64": page_b64})
+    pages_omitted = total_b64_len > limits.max_payload_b64_bytes
     return 200, {
         "ok": True,
-        "single_qr": fits_in_qr(payload),
-        "width": img.size[0],
-        "height": img.size[1],
-        "qr_png_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "mode": "pages",
+        "n_frames": len(frames),
+        "grid_dim": grid_dim,
+        "pages": [] if pages_omitted else pages,
+        "pages_omitted": pages_omitted,
     }
 
 

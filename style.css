@@ -230,6 +230,47 @@ table.stats tr.part.selected td:first-child { color: #fff; }
   padding: 6px;
 }
 
+.qr-mode-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* "pages" mode result: one thumbnail + its own download button per QR
+   frame -- a person printing this wants N separate pages, not one grid
+   image, so each page needs its own affordance instead of a single
+   whole-block download. Empty (display:none via :empty) in single/gif
+   mode, where the plain <img>/dl button above is used instead. */
+.qr-pages {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.8rem;
+  width: 100%;
+}
+.qr-pages:empty {
+  display: none;
+}
+.qr-page-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+.qr-page-item img {
+  width: 100%;
+  max-width: 160px;
+  height: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+}
+.qr-page-item button {
+  font-size: 0.8rem;
+}
+
 .file-list {
   list-style: none;
   margin: 1rem 0 0;

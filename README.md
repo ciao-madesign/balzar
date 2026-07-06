@@ -480,12 +480,20 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
 
 Ogni tab mostra in cima un badge esplicito ("Codifica" o "Consumo") con
 lo scopo di quel flusso specifico, e — dove esiste un payload — un
-bottone **"genera QR"** (`api/qr.py` + `handle_qr`): riusa
-`balzar/qr.py` così com'è, singolo codice o griglia auto-dimensionata a
-seconda della dimensione. Genera un'immagine, non la legge: usa solo
-`qrcode` (puro Python + Pillow), **nessuna dipendenza nativa** — a
-differenza di `pyzbar`/`libzbar0` che serve solo per leggere un QR da
-una foto e non è mai stato esposto sulla demo web.
+bottone **"genera QR"** (`api/qr.py` + `handle_qr`) con una scelta
+esplicita di tre modalità: **"Immagine singola"** (griglia
+auto-dimensionata unica, comportamento originale — utile come file, ma
+per un payload grande diventa una griglia enorme e illeggibile a
+qualunque dimensione fisica, es. 14×14 codici in un colpo solo per un
+assieme 3D reale), **"Sequenza QR — GIF animata"** e **"Sequenza QR —
+pagine PNG"** (`payload_to_qr_frames`, tetto di 16 codici per
+frame/pagina — la stessa dimensione già misurata come affidabile in
+CLAUDE.md §2.4b — invece di un'unica griglia senza limite). Genera
+un'immagine, non la legge: usa solo `qrcode` (puro Python + Pillow),
+**nessuna dipendenza nativa** — a differenza di `pyzbar`/`libzbar0` che
+serve solo per leggere un QR da una foto e non è mai stato esposto
+sulla demo web (la sequenza generata si rilegge con la classe
+`LiveScanner` di `balzar/qr.py`, non ancora un comando CLI dedicato).
 
 ```bash
 # deploy

@@ -524,6 +524,103 @@ class TestHandleQr(unittest.TestCase):
         chunk = from_base64(results[0].data.decode("ascii"))
         self.assertEqual(assemble_chunks([chunk]), payload)
 
+    def test_invalid_mode_rejected(self):
+        status, resp = handle_qr(
+            {"payload_base64": _b64(b"hello"), "mode": "mp4"}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_grid_dim_is_clamped_to_sane_range(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        # 100 is absurd for a public endpoint (huge composed image); must
+        # clamp instead of trying to honour it literally.
+        status, resp = handle_qr(
+            {"payload_base64": _b64(b"x" * 200), "mode": "gif", "grid_dim": 100}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["grid_dim"], 8)
+
+    def test_gif_mode_single_frame_for_small_payload(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        status, resp = handle_qr(
+            {"payload_base64": _b64(b"tiny"), "mode": "gif"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["mode"], "gif")
+        self.assertEqual(resp["n_frames"], 1)
+        self.assertFalse(resp["gif_omitted"])
+        self.assertIn("qr_gif_base64", resp)
+
+    def test_gif_mode_produces_multiple_frames_for_a_large_payload(self):
+        # grid_dim=4 default -> 16 QR/frame, ~2206 raw bytes/chunk
+        # (CHUNK_RAW_BYTES): 40000 bytes needs > 16 chunks, so this must
+        # split into more than one frame -- the whole point of this mode.
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        big = b"y" * 40000
+        status, resp = handle_qr({"payload_base64": _b64(big), "mode": "gif"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertGreater(resp["n_frames"], 1)
+        self.assertEqual(resp["grid_dim"], 4)
+
+    def test_pages_mode_returns_one_png_per_frame(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        big = b"z" * 40000
+        status, resp = handle_qr({"payload_base64": _b64(big), "mode": "pages"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["mode"], "pages")
+        self.assertGreater(resp["n_frames"], 1)
+        self.assertEqual(len(resp["pages"]), resp["n_frames"])
+        for page in resp["pages"]:
+            self.assertIn("png_base64", page)
+            self.assertGreater(page["width"], 0)
+
+    def test_pages_mode_roundtrips_via_zbar_and_livescanner_if_available(self):
+        try:
+            from pyzbar.pyzbar import decode as zbar_decode
+        except ImportError:
+            self.skipTest("pyzbar non installato")
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        from balzar.qr import LiveScanner
+
+        payload = b"balzar multi-frame QR roundtrip" * 1000
+        status, resp = handle_qr(
+            {"payload_base64": _b64(payload), "mode": "pages", "grid_dim": 2}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertGreater(resp["n_frames"], 1)
+
+        scanner = LiveScanner()
+        complete = False
+        for page in resp["pages"]:
+            complete, _missing = scanner.add(base64.b64decode(page["png_base64"]))
+        self.assertTrue(complete)
+        self.assertEqual(scanner.result(), payload)
+
+    def test_response_omits_gif_when_over_the_response_size_limit(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        tiny_limits = Limits(max_upload_bytes=10_000_000, max_analysis_dim=800,
+                             max_preview_dim=400, max_program_chars=300_000,
+                             max_payload_b64_bytes=1000, max_video_frames=40)
+        status, resp = handle_qr({"payload_base64": _b64(b"small"), "mode": "gif"}, tiny_limits)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["gif_omitted"])
+        self.assertEqual(resp["qr_gif_base64"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
