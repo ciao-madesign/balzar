@@ -1691,6 +1691,85 @@ caricato in `<model-viewer>` (`loaded === true`) → download payload/GLB
 dati mancanti, base64 malformato, 3DXML non valido, GLB omesso oltre
 il limite di risposta) — 202 test totali.
 
+### 9.10 Verifica end-to-end reale: secondo assieme 3DXML, pipeline completa QR
+
+Sessione successiva: l'utente ha fornito un **secondo** assieme 3DXML
+reale (skid industriale con serbatoi/telaio/pompa, non incluso nel
+repository per lo stesso motivo di copyright già visto per il logo
+Harley-Davidson §2.6 e il primo assieme §9.2) con la richiesta esplicita
+di eseguire l'intera pipeline — codifica → QR multi-frame (§2.4b) →
+lettura → rigenerazione 3D — e misurare ogni passo, non solo confermare
+che "funziona". Numeri reali (nessuno stimato):
+
+| Passo | Tempo | Note |
+|---|---|---|
+| Parse 3DXML originale | 0,095 s | 88 forme, 360 riferimenti, 516 istanze (archi DAG totali) |
+| **1. Codifica** (`encode_3dxml_file`) | 0,457 s | 500.756 B → **239.491 B payload**, **2,09×** vs il `.3dxml` sorgente, **8,60×** vs flattening ingenuo senza dedup (2.060.324 B) |
+| **2. Generazione QR** (`payload_to_qr_frames`, grid_dim=4) | 22,9 s | 109 capitoli → **7 frame** (4704×4818 px, piena risoluzione) |
+| bundle GIF (`frames_to_gif`) | 15,7 s | 8.999.976 B (9 MB — pesante, per il caso "schermo che cicla da solo") |
+| bundle PNG (`frames_to_files`) | 3,0 s | 2.339.416 B totali, 7 file |
+| **3. Lettura** (`LiveScanner`, risoluzione piena) | 28,6–60,4 s (varianza tra run, vedi sotto) | tutti e 109 i capitoli recuperati, **bit-identico** al payload originale sia dal bundle PNG sia dal bundle GIF ri-letto |
+| **4. Decodifica + export GLB** | 0,045 s + 0,033 s | 88 mesh / 1.033 nodi / 245 nodi-con-mesh (confermato **indipendentemente** da `pygltflib`, non dal nostro stesso codice) |
+
+**Fedeltà (passo 4), misurata contro l'originale vero, non contro la
+copia già quantizzata che `encode_3dxml_file` usa per il proprio
+self-check interno**: errore medio per vertice **0,00079 mm**, massimo
+**0,0074 mm** — un ordine di grandezza sotto la tolleranza CAD tipica.
+Conteggi forme/riferimenti/BOM **tutti coincidenti** con l'originale.
+Verifica visiva indipendente (Playwright + `<model-viewer>`, stessa
+metodologia §9.7): modello caricato (`loaded === true`), screenshot
+reale — un assieme industriale riconoscibile (skid con due serbatoi,
+telaio tubolare, gruppo valvole/pompa separato), nessun artefatto di
+geometria degenere o "fantasma".
+
+**Zero bug funzionali trovati**: nessun crash, nessuna corruzione,
+nessun conteggio disallineato, nessuna eccezione non gestita in tutta
+la pipeline. Un apparente problema si è rivelato **non essere un bug**
+dopo verifica diretta: il render appare monocromatico (un solo
+materiale/colore su tutte le 88 forme, `(204,204,230)`) — controllato
+alla fonte (`scene.shapes` prima di qualunque nostra elaborazione) e
+confermato che è una proprietà genuina del file 3DXML sorgente (nessun
+colore per-parte impostato in origine), non una perdita introdotta da
+`scene3d.py`/`gltf.py`.
+
+**Due criticità reali trovate, non di correttezza ma di prestazioni e
+di validità delle assunzioni precedenti**:
+
+1. **La generazione (22,9 s) e soprattutto la lettura a piena
+   risoluzione (28,6–60,4 s, varianza tra esecuzioni identiche — rumore
+   di scheduling della CPU condivisa in questo sandbox, non determinismo
+   del codice) dominano il tempo totale della pipeline** (~52–92 s),
+   ben oltre l'obiettivo di prodotto "<6-7 s" fissato in §9.3. Quella
+   stima presupponeva la scansione allo sweet spot 1700-2400px note lì
+   misurato, non alla risoluzione piena.
+2. **Lo sweet spot 1700–2400px misurato in §9.3/§2.4b su contenuto
+   sintetico NON si trasferisce a questo contenuto reale** — correzione
+   onesta a un'assunzione implicita precedente. Uno sweep di risoluzione
+   sugli stessi 7 frame reali:
+
+   | Larghezza | Esito |
+   |---|---|
+   | 4704px (piena) | tutti i capitoli letti |
+   | 3800px | tutti i capitoli letti |
+   | 3400px | **incompleto** (un frame è sceso a 4/16 codici) |
+   | 3000–2800px | **incompleto** (un frame sceso a 3/16) |
+   | 2400–2000px | **incompleto** (mancano capitoli sparsi) |
+
+   Il crollo è a picco, non graduale (stesso pattern già visto per la
+   griglia 8×8 in §2.4b), ma la soglia esatta dipende dal contenuto
+   reale del singolo QR (lunghezza dei dati base64 per capitolo, quindi
+   versione QR effettiva), non è una costante universale. **Conclusione
+   corretta**: la risoluzione di lettura va sempre riverificata sul
+   payload reale che si intende scansionare, non assunta dal benchmark
+   di un altro contenuto — `payload_to_qr_frames`/`LiveScanner` restano
+   corretti, è la scelta della risoluzione di acquisizione a valle
+   (fuori dal codice di libreria) a richiedere una verifica caso per
+   caso, non ancora automatizzata.
+
+Nessuna modifica al codice da questa verifica: nessun bug da correggere,
+solo due correzioni oneste alle aspettative di prestazioni documentate
+in §9.3/§2.4b.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
