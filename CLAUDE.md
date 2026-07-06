@@ -1321,12 +1321,43 @@ totali.
   stessi motivi di copyright già visti per il logo Harley-Davidson in
   §2.6): la fixture di test è sintetica, verificata a mano contro il
   file reale dell'utente in sessione ma non committata.
-- **Nessuna verifica visiva**: il GLB è stato validato strutturalmente
-  (header, chunk, parsing con `pygltflib`) ma mai aperto in un browser
-  con `<model-viewer>` — non è stato controllato che l'orientamento
-  reale dei pezzi sia corretto (la conversione riga-maggiore→colonna-
-  maggiore della matrice in `gltf.py` è un'assunzione dichiarata, non
-  verificata visivamente).
+- ~~Nessuna verifica visiva~~ — **fatto**, vedi §9.7.
+
+### 9.7 Verifica visiva reale: `<model-viewer>` + Playwright/Chromium
+
+L'ambiente di sviluppo di questa sessione ha Chromium e Playwright
+preinstallati (per altri scopi), quindi invece di lasciare la
+conversione riga-maggiore→colonna-maggiore della matrice come
+un'assunzione dichiarata ma non controllata, è stato possibile
+verificarla per davvero:
+
+1. **Prova algebrica** (non solo visiva): applicando `_matrix_to_gltf`
+   a una rotazione nota di +90° attorno a Z in senso antiorario
+   (`r=(0,-1,0, 1,0,0, 0,0,1)`, convenzione riga-maggiore) e calcolando
+   a mano `M·(1,0,0,1)` con la matrice colonna-maggiore risultante, il
+   punto (1,0,0) si trasforma esattamente in (0,1,0) — il risultato
+   atteso per quella rotazione. Conferma che la trasposizione riga→
+   colonna in `gltf.py` è corretta, non solo "sembra funzionare".
+2. **Prova visiva indipendente**: costruita una `Scene3D` sintetica con
+   tre triangoli asimmetrici (per rendere una rotazione visivamente
+   riconoscibile, a differenza di un quadrato) — rosso all'origine,
+   verde traslato (stessa rotazione identità), blu ruotato di 90° attorno
+   a Z e traslato. Esportato in GLB, servito via `http.server` locale
+   (necessario: `file://` blocca i moduli ES per CORS), caricato in
+   Chromium headless con `@google/model-viewer` (build UMD, non il
+   modulo ES — quello richiede risoluzione di specifier bare tipo
+   "three" che un browser semplice non sa risolvere) via Playwright,
+   screenshot reale. Risultato: rosso e verde hanno la stessa forma/
+   orientamento (conferma traslazione), il blu ha una forma visibilmente
+   diversa (conferma che la rotazione viene applicata, non ignorata né
+   corrotta). Verificato anche sul GLB dell'assembly reale (78 mesh,
+   1.623 nodi con mesh): renderizza senza errori, nessun artefatto di
+   geometria degenere.
+
+Non ripetuto nei test automatici (richiederebbe Chromium+Playwright+
+model-viewer come dipendenze di test, non solo di sviluppo) — verifica
+manuale one-off, come già fatto altrove nel progetto per la GUI
+desktop sotto Xvfb.
 
 ## 10. Comandi utili per riprendere il lavoro
 

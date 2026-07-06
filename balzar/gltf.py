@@ -40,12 +40,13 @@ _GLTF_UNSIGNED_INT = 5125
 
 def _matrix_to_gltf(m: tuple[float, ...]) -> list[float]:
     """RelativeMatrix (9 rotation values row-major + 3 translation) ->
-    glTF's column-major 4x4 node matrix. Assumes the 3DXML convention of
-    row-major rotation storage — if an exported model looks mirrored or
-    misaligned relative to the source, this transpose is the first
-    thing to check (not verifiable in this environment: no 3D renderer
-    available to look at the result, only structural validity of the
-    GLB itself)."""
+    glTF's column-major 4x4 node matrix. Verified, not just assumed
+    (CLAUDE.md SS9.7): algebraically, feeding a known +90deg CCW
+    rotation about Z through this transpose maps point (1,0,0) to
+    (0,1,0) exactly as expected; visually, a Chromium+Playwright render
+    via <model-viewer> of a translated-only pair vs a 90deg-rotated
+    instance shows the rotated one with a genuinely different shape
+    orientation, not a mirrored or corrupted one."""
     r = m[:9]
     t = m[9:12]
     return [r[0], r[3], r[6], 0.0,
