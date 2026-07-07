@@ -103,12 +103,14 @@ class BalzarApp:
         # technician can load this once and reuse it across several 3D
         # files, so it lives on the app, not on Job.
         self.alarm_rows: list[tuple[str, str]] = []
-        # library entry id -> the running http.server.HTTPServer already
-        # serving it (balzar/library.py) -- avoids spawning a second
+        # library entry id (or a job's own fallback id) -> (the running
+        # http.server.HTTPServer already serving it, its temp work_dir)
+        # (balzar/library.py) -- avoids spawning a second
         # HTTPServer+browser-tab pair for content already open when the
         # operator switches away and back via the library panel, and
-        # lets "Chiudi visualizzazione" shut the right one down
-        self._open_viewers: dict = {}  # entry id -> http.server.HTTPServer
+        # lets "Chiudi visualizzazione" shut the right one down and
+        # remove its temp directory
+        self._open_viewers: dict = {}  # key -> (HTTPServer, work_dir)
         self._library_window: tk.Toplevel | None = None
         self._library_listbox: tk.Listbox | None = None
         self._library_entries: list = []  # parallel to _library_listbox rows
@@ -528,7 +530,7 @@ class BalzarApp:
         key = job.library_entry_id or job.id
         if key in self._open_viewers:
             import webbrowser
-            server = self._open_viewers[key]
+            server, _work_dir = self._open_viewers[key]
             webbrowser.open(f"http://127.0.0.1:{server.server_address[1]}/viewer.html")
             self.status.set("Riaperto nel browser (visualizzatore già attivo)")
             return
@@ -541,7 +543,7 @@ class BalzarApp:
             from .viewer3d import open_glb_in_browser
             server = open_glb_in_browser(job.glb, job.bom_lines, work_dir,
                                          alarm_rows=self.alarm_rows or None)
-        self._open_viewers[key] = server
+        self._open_viewers[key] = (server, work_dir)
         self.status.set("Aperto nel browser predefinito")
 
     # --------------------------------------------------------------- library
@@ -644,12 +646,16 @@ class BalzarApp:
 
     def _shutdown_viewer(self, key: str) -> None:
         """Shuts down and pops the running server registered under `key`
-        (a library entry id, or a job's own fallback id) and frees its
-        port -- shared by both places that can close a viewer, so the
-        teardown sequence only needs to be right in one place."""
-        server = self._open_viewers.pop(key)
+        (a library entry id, or a job's own fallback id), frees its
+        port, and removes its temp work_dir (model-viewer.min.js + the
+        GLB copy, ~1MB) from disk -- shared by both places that can
+        close a viewer, so the teardown sequence only needs to be right
+        in one place."""
+        import shutil
+        server, work_dir = self._open_viewers.pop(key)
         server.shutdown()
         server.server_close()
+        shutil.rmtree(work_dir, ignore_errors=True)
 
     def _close_library_viewer_selected(self) -> None:
         """Shuts down the ephemeral local server for the selected entry
