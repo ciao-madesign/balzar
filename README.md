@@ -106,6 +106,18 @@ utile per procedure di montaggio step-by-step, non solo per la riproduzione
 automatica), statistiche di guadagno oneste, salvataggio `.bzp`/`.bzr`,
 export del contenuto rigenerato (PNG/GIF) e dei capitoli QR.
 
+**Libreria locale** (`balzar/library.py`): ogni apertura di un file
+esistente o scansione di un QR (il lato Balzar Live, non un encode
+fresco) viene salvata automaticamente in `~/.balzar/library/` — utile
+per lo scenario "3 macchine, 3 QR scansionati": il bottone "Libreria…"
+elenca ogni voce salvata, permette di riaprirne una senza riscansionare
+(anche dopo aver chiuso e riaperto l'app), e di chiudere/eliminare
+quelle non più utili. Riaprire due volte la stessa voce riusa lo stesso
+server locale invece di aprirne uno nuovo ogni volta. Vedi CLAUDE.md
+§9.22 per il bug di crash risolto nel percorso di scansione (un QR con
+un assieme 3D/bundle andava in crash prima di questa sessione) e per il
+bug di risorsa risolto nel visualizzatore.
+
 Per distribuirla come eseguibile singolo senza Python installato:
 
 ```bash
@@ -580,6 +592,7 @@ balzar/
                   multi-frame GIF/PNG); lettura ZBar (foto singola o
                   accumulo live su più foto, LiveScanner)
   gui.py          applicazione desktop (Tkinter)
+  library.py      libreria locale persistente per Balzar Live (scan/apri -> ~/.balzar/library/)
   sequence.py     sequenze multi-file (vettoriali dedup, raster delta)
   explode.py      esploso automatico per layer/gruppo (CAD/SVG)
   scene3d.py      ingestione 3DXML -> payload binario BZM1 (assiemi CAD, dettagli in CLAUDE.md §9)

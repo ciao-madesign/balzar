@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-280 test, tutti verdi (`python3 -m unittest discover -s tests`):
+288 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -2934,10 +2934,99 @@ extra non corrompe più il nome), 2 in `tests/test_webapi.py`
 → BOM resta espansa, onesto invece di un comportamento silenzioso
 diverso) — 280 test totali.
 
+### 9.22 Libreria locale persistente per Balzar Live (app desktop) + fix di un bug reale nello scan
+
+Seguito diretto di sessione: valutato dove finiscono i file dopo una
+scansione/apertura in Balzar Live (scenario concreto discusso: 3
+macchine, 3 QR scansionati, bisogno di scegliere quale visualizzare,
+chiuderlo, aprirne un altro). Decisione presa in sessione: la demo web
+resta a sola memoria di sessione (non serve altro, è solo vetrina); per
+l'app desktop ha senso salvare in memoria fisica del dispositivo di
+lettura — non un registro solo in RAM per la durata del processo.
+
+**Bug reale trovato progettando la feature, non ipotizzato**: `_scan_worker`
+instradava **sempre** il payload scansionato a `_job_from_payload`, che
+capisce solo `BZR1`/testo — scansionare un QR che porta un assieme 3D o
+un bundle **andava in crash** con un `UnicodeDecodeError` grezzo tentando
+di decodificare come UTF-8 dei byte binari `BZM1`/`BZX1`. Riprodotto
+prima di correggere (non solo letto il codice): payload BZM1 reale,
+`data.decode('utf-8')` solleva `'utf-8' codec can't decode byte 0x8c...`.
+Fix: nuovo `_dispatch_payload_bytes(job, data)` in `balzar/gui.py`, lo
+stesso controllo a tre vie sui magic byte (`BZX1`→bundle, `BZM1`→3D,
+altrimenti `BZR1`/testo) già usato da `_worker` per un file su disco, ma
+senza il fallback sull'estensione del percorso (una foto scansionata non
+ne ha uno) — stesso principio di `chunk_payload`/`qr.py`: il payload è
+autodescrivente, non serve un'estensione. `_worker` resta invariato (il
+suo fallback su estensione per un caso di magic corrotto è una difesa
+in più, non ridondante da rimuovere).
+
+**`balzar/library.py` (nuovo modulo)**: un registro locale persistente
+di ciò che è stato decodificato/scansionato — `save_to_library`/
+`list_library`/`load_library_payload`/`delete_from_library`, appoggiati
+a una cartella (`~/.balzar/library/`, sovrascrivibile con
+`BALZAR_LIBRARY_DIR` per i test) con un `manifest.json` e un file per
+voce (stessa estensione già usata ovunque nel progetto: `.bzp`/`.b3d`/
+`.bzx`). Dichiarato onestamente cosa **non** fa: "cloud" qui significa
+solo una cartella normale su disco — se l'utente la punta a una cartella
+sincronizzata da Dropbox/OneDrive/iCloud, è il sistema operativo del
+dispositivo a fare la parte "cloud", balzar non integra nessun
+provider specifico (sarebbe una feature diversa, autenticazione e
+gestione errori di rete incluse, non tentata qui).
+
+**Salvataggio automatico, non su richiesta**: `Job` guadagna
+`is_live_artifact` (vero solo per un job che ha decodificato/scansionato
+un artefatto **esistente** — aprire un `.b3d`/`.bzx`/`.bzp` o scansionare
+un QR — mai per un encode fresco lato Balzar Studio, che l'utente salva
+già esplicitamente se vuole tenerlo). `_poll_queue` chiama
+`_save_job_to_library` solo quando questo flag è vero, subito dopo aver
+mostrato il job — nessun blocco, nessuna domanda, ogni scansione si
+accumula e basta; l'operatore pota le voci vecchie dal pannello quando
+vuole, non ad ogni scansione.
+
+**Pannello "Libreria…"** (nuovo bottone in toolbar): una `Toplevel` con
+una lista di tutte le voci (etichetta, tipo, timestamp), doppio click o
+bottone "Apri" per riaprire una voce esattamente con lo stesso percorso
+di codice di un'apertura normale (`_dispatch_payload_bytes` via un nuovo
+`_open_library_worker`, senza fissare di nuovo `is_live_artifact` —
+altrimenti riaprire una voce già in libreria ne creerebbe una copia
+duplicata ogni volta). "Elimina dalla libreria" rimuove voce e file.
+
+**Bug di risorsa trovato e corretto nello stesso lavoro**: `view_3d()`
+apriva sempre un **nuovo** `http.server.HTTPServer` su una porta effimera
+ad ogni click, anche per lo stesso identico job — passare avanti e
+indietro tra 3 voci di libreria avrebbe lasciato un server in background
+per ogni click, per sempre, fino alla chiusura dell'app. Fix:
+`_render_viewer_page`/`open_glb_in_browser`/`open_bundle_in_browser`
+ora restituiscono il server (non più `None`) — `view_3d()` tiene un
+registro `entry_id -> server` (`self._open_viewers`) e, se un server per
+quella voce è già attivo, riapre solo una scheda del browser sulla stessa
+porta invece di crearne uno nuovo; "Chiudi visualizzazione" nel pannello
+chiama `server.shutdown()` + `server.server_close()` e libera la voce dal
+registro. Nessun cambiamento all'API pubblica per chi non ha bisogno del
+valore di ritorno (nessun altro chiamante nel progetto lo usava).
+
+Verificato con uno smoke test Xvfb dedicato (stessa tecnica già
+consolidata nel progetto: `filedialog`/`messagebox` monkeypatchati, nessun
+vero file picker), non solo scritto: scansione di un QR con payload 3D
+→ nessun crash (bug confermato risolto), auto-salvataggio in libreria
+confermato; apertura di 2 file `.b3d` aggiuntivi → 3 voci in libreria
+(lo scenario "3 macchine" esatto); pannello popolato con 3 righe; apertura
+di una voce dalla libreria → `job.library_entry_id` impostato; **due**
+click consecutivi su "Visualizza in 3D" sulla stessa voce → **una sola**
+`HTTPServer` nel registro, stessa porta entrambe le volte (bug di risorsa
+confermato risolto); chiusura della visualizzazione → registro svuotato;
+eliminazione di una voce → libreria passa da 3 a 2. Nessun bug rimasto.
+
+Test aggiunti: `tests/test_library.py` (8 test, logica pura file/JSON,
+isolata via `BALZAR_LIBRARY_DIR` — nessun Tkinter richiesto, coerente col
+principio già seguito nel progetto: l'interazione Tkinter/browser si
+verifica manualmente sotto Xvfb, non nella suite `unittest`) — 288 test
+totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 280 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 288 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

@@ -559,7 +559,7 @@ def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
 
 
 def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
-                        work_dir: str) -> None:
+                        work_dir: str) -> http.server.HTTPServer:
     """Write model.glb (if any) + viewer.html + a copy of
     model-viewer.min.js, then serve `work_dir` on an ephemeral localhost
     port and open the default browser. The single page builder behind
@@ -567,7 +567,11 @@ def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
     (model-viewer + controls + BOM + search) is present only when there
     is a GLB, and the document index is present only when there are
     documents, so a document-only bundle renders an index-only page and
-    a plain assembly renders exactly the old 3D page."""
+    a plain assembly renders exactly the old 3D page. Returns the
+    running server (`.server_address[1]` is the port), so a caller that
+    wants to avoid spawning a second server for content it already has
+    open (gui.py's library panel) can reopen a browser tab at the same
+    port instead, and can `.shutdown()` it explicitly when done."""
     if glb is not None:
         with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
             fh.write(glb)
@@ -597,12 +601,13 @@ def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
     thread.start()
 
     webbrowser.open(f"http://127.0.0.1:{port}/viewer.html")
+    return server
 
 
 def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] | None,
                         work_dir: str,
                         alarm_rows: list[tuple[str, str]] | None = None,
-                        documents: list[dict] | None = None) -> None:
+                        documents: list[dict] | None = None) -> "http.server.HTTPServer":
     """Write model.glb + viewer.html + a copy of model-viewer.min.js into
     `work_dir`, serve it on an ephemeral localhost port, open the default
     browser. `work_dir` is the caller's responsibility (a TemporaryDirectory
@@ -619,8 +624,10 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] 
 
     `documents` (optional, each {role, label, b64}) adds a navigable
     index of consultable documents alongside the model -- see
-    open_bundle_in_browser, which builds it from a bundle's doc items."""
-    _render_viewer_page(glb, bom_lines, alarm_rows, documents, work_dir)
+    open_bundle_in_browser, which builds it from a bundle's doc items.
+
+    Returns the running server (see _render_viewer_page)."""
+    return _render_viewer_page(glb, bom_lines, alarm_rows, documents, work_dir)
 
 
 def _render_2d_item(item) -> list[dict]:
@@ -697,7 +704,7 @@ def _documents_from_items(items) -> list[dict]:
     return docs
 
 
-def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
+def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HTTPServer":
     """Open a multi-document bundle (balzar/bundle.py): the "3d" item
     (if any) becomes the model.glb + BOM this module already shows, any
     alarm item wires the search bar with no manual upload, and every
@@ -709,7 +716,9 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
     Deliberately local imports (scene3d.py/gltf.py, not used by the rest
     of this module) so the plain GLB+BOM path stays as decoupled from the
     3D encoding stack as before -- this function is the only place in
-    viewer3d.py that needs to know a bundle exists."""
+    viewer3d.py that needs to know a bundle exists.
+
+    Returns the running server (see _render_viewer_page)."""
     from .bundle import BundleError, decode_bundle, is_alarm_kind
     from .bundle import KIND_3D
     from .gltf import scene3d_to_glb
@@ -736,8 +745,7 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
         # a document-only bundle: no model, just the navigable index
         if not documents:
             raise ValueError("il bundle e' vuoto: niente da mostrare")
-        _render_viewer_page(None, None, None, documents, work_dir)
-        return
+        return _render_viewer_page(None, None, None, documents, work_dir)
 
     # a bundle with more than one 3D item is valid (the format doesn't
     # forbid it) but this viewer shows exactly one model -- the first one,
@@ -750,5 +758,5 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
     glb = scene3d_to_glb(scene, collapse_names=collapse_names)
     bom_lines = [(e.name, e.count, e.material_names)
                 for e in generate_bom(scene, collapse_names)]
-    open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None,
-                        documents=documents or None)
+    return open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None,
+                               documents=documents or None)
