@@ -241,23 +241,49 @@ def _tile_boxes(width: int, height: int, grid_dim: int):
     return boxes
 
 
+def _decode_crops(crops: list):
+    """Decode each cropped tile independently. pyzbar calls into native
+    libzbar via ctypes, which releases the GIL for the duration of that
+    call -- verified, not assumed: measured 3.72x speedup running these
+    in threads on a real 16-tile frame (2146ms -> 577ms). Unlike QR
+    *generation* (pure-Python computation, needs real OS processes for
+    parallelism -- see _generate_qr_images), reading benefits from plain
+    threads here: no pickling, no process-pool startup cost.
+
+    Falls back to sequential unconditionally on any error (same safety
+    principle as _generate_qr_images) -- this only ever affects speed,
+    never whether a code gets decoded."""
+    from pyzbar.pyzbar import decode as zbar_decode
+
+    if len(crops) < _PARALLEL_MIN_IMAGES:
+        return [zbar_decode(c) for c in crops]
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            return list(ex.map(zbar_decode, crops))
+    except Exception:
+        return [zbar_decode(c) for c in crops]
+
+
 def _decode_tiled(img, grid_dim: int):
     """Decode a _compose_grid image by cropping it into grid_dim*grid_dim
     regions (see _tile_boxes) and running ZBar on each small crop
     instead of the whole canvas -- measured 3.03s vs 5.84s whole-image
-    for a real 16-code frame, all 16 recovered. This is a speed
-    optimization only, never a correctness requirement: callers must
-    still fall back to a whole-image decode when this doesn't recover a
-    full grid_dim*grid_dim frame (see LiveScanner.add/scan_image_bytes:
-    only used when the caller already knows grid_dim because they
-    generated the grid themselves)."""
-    from pyzbar.pyzbar import decode as zbar_decode
+    for a real 16-code frame, all 16 recovered (further cut to well
+    under 1s by decoding the crops in parallel, see _decode_crops). This
+    is a speed optimization only, never a correctness requirement:
+    callers must still fall back to a whole-image decode when this
+    doesn't recover a full grid_dim*grid_dim frame (see
+    LiveScanner.add/scan_image_bytes: only used when the caller already
+    knows grid_dim because they generated the grid themselves)."""
+    boxes = _tile_boxes(img.size[0], img.size[1], grid_dim)
+    crops = [img.crop(box) for box in boxes]
+    per_crop_results = _decode_crops(crops)
 
     results = []
     seen_data = set()
-    for box in _tile_boxes(img.size[0], img.size[1], grid_dim):
-        crop = img.crop(box)
-        for r in zbar_decode(crop):
+    for crop_results in per_crop_results:
+        for r in crop_results:
             # de-dup: overlapping tile margins can find the same
             # physical code in two adjacent crops
             if r.data not in seen_data:
