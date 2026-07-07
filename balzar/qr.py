@@ -161,7 +161,16 @@ def _compose_grid(images, labels, frame_label=None):
     for i, im in enumerate(images):
         r, c = divmod(i, cols)
         x, y = pad + c * (cell + pad), top + pad + r * (cell + pad + label_h)
-        grid.paste(im.resize((cell, cell)), (x, y))
+        # NEAREST, not the default (bicubic): a shorter final chunk
+        # produces a smaller QR (fewer modules -> a lower QR version),
+        # so it's the one usually needing this resize up to `cell` --
+        # bicubic interpolation blurs the sharp module edges into ~256
+        # distinct gray levels (measured), turning a pure black/white
+        # code into a noisier one to binarize under exactly the
+        # non-ideal conditions (handheld camera, autofocus, real
+        # lighting) this format is meant to tolerate. NEAREST preserves
+        # the original 2 colors exactly, just at a different pixel size.
+        grid.paste(im.resize((cell, cell), Image.NEAREST), (x, y))
         draw.text((x, y + cell + 2), labels[i], fill="black")
     return grid
 

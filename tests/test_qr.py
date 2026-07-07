@@ -53,6 +53,34 @@ class TestQRCarrier(unittest.TestCase):
         with self.assertRaises(ValueError):
             scan_image_bytes(buf.getvalue())
 
+    def test_partial_last_chunk_stays_pure_black_and_white_in_the_grid(self):
+        # regression test for a real bug: _compose_grid resized every QR
+        # image up to the frame's cell size with the default (bicubic)
+        # filter. A payload whose last chunk is shorter than the rest
+        # produces a smaller QR (fewer modules), which is exactly the
+        # one that then gets resized -- bicubic interpolation blurs the
+        # sharp module edges into ~256 distinct gray levels instead of
+        # the 2 (pure black/white) a QR code should have, which is
+        # harder to binarize under non-ideal scanning conditions.
+        from balzar.qr import CHUNK_RAW_BYTES, _compose_grid, _qr_image
+        from balzar.payload import to_base64
+
+        small = _qr_image(to_base64(b"x" * 50))
+        big = _qr_image(to_base64(b"x" * (CHUNK_RAW_BYTES - 8)))
+        self.assertLess(small.size[0], big.size[0])
+
+        grid = _compose_grid([big, small], labels=["1/2", "2/2"])
+        cell = big.size[0]
+        pad = max(12, cell // 15)
+        # the second image (small) lands at column 1, row 0 in a 2-wide grid
+        x = pad + 1 * (cell + pad)
+        resized_region = grid.crop((x, pad, x + cell, pad + cell))
+        colors = resized_region.getcolors(maxcolors=100000)
+        self.assertIsNotNone(colors)
+        self.assertLessEqual(len(colors), 2,
+                             "resized QR must stay pure black/white (NEAREST), not "
+                             "gain interpolation gray levels (bicubic)")
+
 
 def _big_payload(n_lines=28000):
     lines = ["CANVAS w=64 h=64 bg=0"]
