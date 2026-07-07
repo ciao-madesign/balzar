@@ -948,7 +948,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-303 test, tutti verdi (`python3 -m unittest discover -s tests`):
+PLACEHOLDER_COUNT test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -3304,10 +3304,104 @@ percorso parallelo identico byte-per-byte al sequenziale, sotto soglia
 resta sequenziale anche con un pool rotto, fallback a sequenziale
 corretto quando il pool fallisce) — 293 test totali.
 
+### 9.25 Revisione di una specifica esterna sulle sequenze QR: 3 fix reali, uno scartato
+
+Un consulente ha fornito una specifica tecnica per "ottimizzare" il
+processo di generazione/lettura di sequenze QR (matrici dinamiche per
+dimensione del supporto, frequenza frame fissa, acquisizione continua
+con selezione del frame migliore, decodifica in pipeline, nessun
+ridimensionamento lossy). Invece di implementarla alla cieca, ogni
+proposta è stata confrontata con il codice reale e, dove possibile,
+misurata — non solo letta.
+
+**Scartato, contraddetto dai dati reali**: la specifica raccomanda
+matrici più dense (6×6, 8×8) per supporti fisici più grandi, stimando
+"~4× più throughput" per l'8×8 senza aver mai testato una griglia 8×8
+reale. Il benchmark reale già in questo documento (§2.4b/§9.10) dice
+l'opposto: un'8×8 vera ha un'unica finestra di lettura affidabile,
+esattamente alla risoluzione già nota come "lenta senza guadagno" per
+il 4×4, con un tempo di decodifica per singolo QR **15-18× peggiore**.
+`grid_dim=4` resta il default corretto indipendentemente dalla
+dimensione del supporto.
+
+**Confermato, già implementato**: "non cercare QR nell'immagine intera,
+ritaglia per posizione nota" (§9.1 della specifica) è esattamente
+`_tile_boxes`/`_decode_tiled`, già costruito e ottimizzato in una
+sessione precedente (§2.4b punto 6). "Verifica integrità per QR"
+(sequenza/frame/posizione/checksum) è ridondante rispetto a BZC1, che
+già basta da solo (frame/posizione sono solo un'etichetta umana, per
+design — vedi il docstring di `payload_to_qr_frames`).
+
+**Tre fix reali implementati, verificati e misurati**:
+
+1. **Resize bicubico che sfoca l'ultimo chunk di quasi ogni frame —
+   bug reale, non solo ipotetico.** La specifica dice "evitare
+   ridimensionamento automatico, nero/bianco puro". Verificato: `_compose_grid`
+   ridimensiona ogni QR alla cella più grande della griglia col filtro
+   di default di Pillow (bicubico). L'ultimo chunk di un payload (a
+   meno che la dimensione non sia un multiplo esatto di
+   `CHUNK_RAW_BYTES`, il caso comune) produce un QR più piccolo — che è
+   esattamente quello che poi viene ingrandito. Misurato: il resize di
+   default introduce **256 livelli di grigio distinti** da un QR puro
+   bianco/nero; `Image.NEAREST` (esplicito, non più il default) ne
+   preserva **2**. Un QR sfumato è oggettivamente più difficile da
+   binarizzare per un decoder sotto le condizioni non ideali (sfocatura,
+   autofocus, luce reale) che il formato deve tollerare. Test scritto
+   e verificato per davvero (non solo aggiunto): rimosso temporaneamente
+   il fix, confermato che il test fallisce con 256 colori, ripristinato,
+   confermato verde.
+
+2. **Decodifica dei tile in parallelo — completamento naturale della
+   parallelizzazione già fatta per la generazione (§9.24).** La
+   specifica chiede di decodificare i QR di una matrice in parallelo
+   invece che in sequenza (§9.2). Verificato che `pyzbar` chiama
+   `libzbar` nativa via `ctypes`, che rilascia il GIL durante la
+   chiamata — quindi, a differenza della generazione (calcolo puro
+   Python, serviva un process pool), qui bastano i **thread**, più
+   economici (nessun pickling, nessun costo di avvio processo).
+   Misurato: **3,72×** più veloce su una griglia 4×4 reale (2146ms →
+   577ms). Applicato al benchmark del §9.24 (67,6s totali, di cui
+   41,9s di lettura): **lettura 41,9s → 17,1s**, **pipeline totale
+   67,6s → 43,66s — ora entro il budget di 60s**, con margine, contro
+   i 137,3s di partenza prima di entrambi i fix. Un problema emerso
+   scrivendo i test, non nel codice: un frame reale può contenere una
+   lettura spuria di un altro formato di codice a barre nella zona
+   dell'etichetta testuale (comportamento preesistente di zbar, non
+   una regressione — già innocuo perché `LiveScanner`/`scan_image_bytes`
+   filtrano già per il prefisso `CHUNK_MAGIC` a valle) — corretta
+   l'assunzione del test (contare solo i chunk BZC1 reali), non il
+   codice.
+
+3. **Stima onesta del tempo di lettura, mostrata all'operatore.**
+   La specifica chiede che il generatore restituisca "tempo stimato
+   acquisizione, livello affidabilità previsto" (§12). Nuova
+   `estimate_scan_seconds(n_frames)` in `balzar/qr.py`, calibrata sul
+   benchmark reale appena misurato (~1,1s/frame di sola decodifica a
+   piena risoluzione con il percorso parallelo) — **non un numero
+   inventato**, ma dichiarata esplicitamente come stima: un intervallo
+   (basso, alto) dove l'alto raddoppia il basso come margine per il
+   tempo reale di scatto/messa a fuoco che un benchmark di sola
+   decodifica non può includere. Esposta in `handle_qr` (modalità
+   gif/pages) come `estimated_scan_seconds_low`/`_high`, mostrata
+   nella demo web accanto al risultato. **Non ancora esposta in
+   CLI/GUI desktop**: quei percorsi generano solo `payload_to_qr_image`
+   (una singola griglia auto-dimensionata, mai la sequenza a frame
+   `grid_dim`), per cui la stima calibrata sul percorso a frame non si
+   applicherebbe onestamente — nessuna finta precisione aggiunta dove
+   non è calibrata.
+
+Test aggiunti: 1 in `tests/test_qr.py::TestQRCarrier` (resize
+NEAREST), 4 in `tests/test_qr.py::TestParallelTileDecoding` (decodifica
+parallela identica alla sequenziale, fallback sotto soglia e su pool
+rotto, `_decode_tiled` end-to-end), 3 in
+`tests/test_qr.py::TestEstimateScanSeconds`, 3 in
+`tests/test_webapi.py::TestHandleQr` (nuovi campi nella risposta) —
+301 test totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 303 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # PLACEHOLDER_COUNT test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d

@@ -805,6 +805,9 @@ class TestHandleQr(unittest.TestCase):
         self.assertEqual(resp["n_frames"], 1)
         self.assertFalse(resp["gif_omitted"])
         self.assertIn("qr_gif_base64", resp)
+        self.assertIn("estimated_scan_seconds_low", resp)
+        self.assertIn("estimated_scan_seconds_high", resp)
+        self.assertLessEqual(resp["estimated_scan_seconds_low"], resp["estimated_scan_seconds_high"])
 
     def test_gif_mode_produces_multiple_frames_for_a_large_payload(self):
         # grid_dim=4 default -> 16 QR/frame, ~2206 raw bytes/chunk
@@ -819,6 +822,8 @@ class TestHandleQr(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertGreater(resp["n_frames"], 1)
         self.assertEqual(resp["grid_dim"], 4)
+        # more frames -> a proportionally larger estimate, not a fixed number
+        self.assertGreater(resp["estimated_scan_seconds_low"], resp["n_frames"])
 
     def test_pages_mode_returns_one_png_per_frame(self):
         try:
@@ -834,6 +839,8 @@ class TestHandleQr(unittest.TestCase):
         for page in resp["pages"]:
             self.assertIn("png_base64", page)
             self.assertGreater(page["width"], 0)
+        self.assertIn("estimated_scan_seconds_low", resp)
+        self.assertIn("estimated_scan_seconds_high", resp)
 
     def test_pages_mode_roundtrips_via_zbar_and_livescanner_if_available(self):
         try:

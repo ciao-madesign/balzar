@@ -292,6 +292,30 @@ def _decode_tiled(img, grid_dim: int):
     return results
 
 
+# Calibrated from a real, measured benchmark (CLAUDE.md SS9.24): reading
+# an already-generated grid_dim=4 frame at full resolution through the
+# tiled+parallel decode path above measured ~1.1s/frame (17.1s for 16
+# frames on a synthetic large-assembly payload). This is a decode-only
+# proxy -- it times feeding an already-rendered frame image through
+# _decode_tiled, not a live camera -- so it can't capture a real
+# photograph's focus/exposure/operator-positioning overhead. Doubled as
+# a rough, honestly-labelled safety margin for that gap, not a
+# guarantee: the actual number depends on the camera, lighting, and
+# operator, none of which this library can know in advance.
+_MEASURED_DECODE_SECONDS_PER_FRAME = 1.1
+
+
+def estimate_scan_seconds(n_frames: int) -> tuple[float, float]:
+    """Honest ballpark (low, high) in seconds for scanning n_frames of a
+    grid_dim=4 QR sequence back -- calibrated from a real measurement,
+    not invented, but still an estimate to set expectations with, never
+    a promise. `low` is the measured decode-only cost; `high` doubles it
+    for real-world photograph capture overhead the benchmark it's
+    calibrated from doesn't include."""
+    low = n_frames * _MEASURED_DECODE_SECONDS_PER_FRAME
+    return (round(low, 1), round(low * 2, 1))
+
+
 def payload_to_qr_image(payload: bytes):
     """One payload -> one printable image (single QR, or an auto-sized
     grid of QR codes if the payload doesn't fit in one)."""

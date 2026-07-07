@@ -703,7 +703,13 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
     grid_dim (default 4, clamped to [2, 8]) is a property of the
     physical output medium, not the payload -- see CLAUDE.md §2.4b for
     why 4 is the recommended default and 8 is available but not
-    recommended."""
+    recommended.
+
+    "gif"/"pages" responses also include estimated_scan_seconds_low/high
+    -- an honest ballpark for how long reading the sequence back is
+    likely to take, calibrated from a real decode benchmark (CLAUDE.md
+    §9.24), not a promise: it can't know the operator's actual camera,
+    lighting, or handling."""
     payload_b64 = body.get("payload_base64")
     if not payload_b64:
         return 400, {"ok": False, "error": "campo 'payload_base64' mancante"}
@@ -726,7 +732,8 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
                              "(pacchetto 'qrcode' mancante)"}
 
     from .payload import fits_in_qr
-    from .qr import frames_to_gif, payload_to_qr_frames, payload_to_qr_image
+    from .qr import (estimate_scan_seconds, frames_to_gif, payload_to_qr_frames,
+                     payload_to_qr_image)
 
     try:
         payload = _b64decode(payload_b64)
@@ -751,6 +758,7 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
         }
 
     frames = payload_to_qr_frames(payload, grid_dim=grid_dim)
+    scan_low, scan_high = estimate_scan_seconds(len(frames))
 
     if mode == "gif":
         gif_b64 = base64.b64encode(frames_to_gif(frames)).decode("ascii")
@@ -770,6 +778,9 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
             "height": frames[0].size[1],
             "qr_gif_base64": "" if gif_omitted else gif_b64,
             "gif_omitted": gif_omitted,
+            # honest ballpark, not a promise -- see estimate_scan_seconds
+            "estimated_scan_seconds_low": scan_low,
+            "estimated_scan_seconds_high": scan_high,
         }
 
     # mode == "pages"
@@ -789,6 +800,8 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
         "grid_dim": grid_dim,
         "pages": [] if pages_omitted else pages,
         "pages_omitted": pages_omitted,
+        "estimated_scan_seconds_low": scan_low,
+        "estimated_scan_seconds_high": scan_high,
     }
 
 

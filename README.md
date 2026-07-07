@@ -218,6 +218,20 @@ identici al percorso sequenziale — vedi `CLAUDE.md` §9.24 per la
 misura completa su un assieme sintetico grande (137 s → 68 s di
 pipeline totale).
 
+**Lettura parallelizzata + resize corretto** (`_decode_crops`/
+`_compose_grid` in `balzar/qr.py`, revisione di una specifica esterna,
+CLAUDE.md §9.25): la decodifica dei singoli QR ritagliati usa thread
+(pyzbar chiama `libzbar` nativa via `ctypes`, che rilascia il GIL —
+misurato **3,72×** più veloce su una griglia 4×4 reale), portando la
+stessa pipeline di §9.24 da 68 s a **43,7 s totali — entro il budget
+di 60 s**. Corretto anche un bug reale: l'ultimo chunk di un payload
+produce spesso un QR più piccolo, che veniva ingrandito col filtro
+bicubico di default — misurato 256 livelli di grigio introdotti invece
+di 2, più difficile da leggere in condizioni non ideali; ora forzato
+`Image.NEAREST`. `handle_qr` (demo web) restituisce anche una stima
+onesta del tempo di lettura (`estimated_scan_seconds_low`/`_high`,
+calibrata sul benchmark reale, non inventata).
+
 ## Il linguaggio (DSL)
 
 Un'istruzione per riga, argomenti `chiave=valore`; parentesi e virgole sono
