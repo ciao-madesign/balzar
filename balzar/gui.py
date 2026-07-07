@@ -249,27 +249,48 @@ class BalzarApp:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)
 
-    def _dispatch_payload_bytes(self, job: Job, data: bytes) -> None:
+    def _dispatch_payload_bytes(self, job: Job, data: bytes, path: str | None = None) -> str:
         """Dispatch a decoded/reassembled payload by its own magic header
-        -- BZX1 bundle, BZM1 3D scene, or BZR1/plain-text 2D program,
-        same three-way check `_worker` does for a file already on disk,
-        but with no filename extension to fall back on: a QR scan has
-        no path, the bytes are all there is (same principle
-        chunk_payload/qr.py already use -- the payload is self-
-        describing). Fixes a real bug found while designing the
-        library feature: scanning a QR that carries a 3D assembly or a
-        bundle used to always go through _job_from_payload, which only
-        understands BZR1/text, so it crashed with a raw
-        UnicodeDecodeError trying to utf-8-decode binary BZM1/BZX1
-        bytes instead of failing (or succeeding) honestly."""
+        -- BZX1 bundle, BZM1 3D scene, or BZR1/plain-text 2D program --
+        the single shared implementation for both a file already on disk
+        (`path` given, so a mismatched/missing magic still gets an
+        extension-based fallback, and a completely unrecognized file
+        falls back to a fresh raster encode via _job_from_image) and a
+        QR scan or library reopen (`path=None`: no filename to fall back
+        on, the bytes are all there is -- same principle
+        chunk_payload/qr.py already use, the payload is self-describing,
+        so an unrecognized-but-not-BZR1 scan still tries _job_from_payload
+        as a last resort rather than misreading it as a raster image).
+
+        Returns which kind of EXISTING artifact was recognized ("bundle"/
+        "3d"/"2d"), or "image" for the image-fallback branch (a FRESH
+        raster encode, not an existing artifact) -- callers use this to
+        decide job.is_live_artifact.
+
+        Fixes a real bug found while designing the library feature:
+        scanning a QR that carries a 3D assembly or a bundle used to
+        always go through _job_from_payload, which only understands
+        BZR1/text, so it crashed with a raw UnicodeDecodeError trying to
+        utf-8-decode binary BZM1/BZX1 bytes instead of failing (or
+        succeeding) honestly. Previously duplicated (with slight
+        variations) between this method and _worker; unified so the
+        two entry points can't silently drift apart."""
         from .bundle import MAGIC as BZX1_MAGIC
         from .scene3d import MAGIC as BZM1_MAGIC
-        if data[:4] == BZX1_MAGIC:
+        if data[:4] == BZX1_MAGIC or (path is not None and path.endswith(".bzx")):
             self._job_from_bundle(job, data)
-        elif data[:4] == BZM1_MAGIC:
+            return "bundle"
+        if data[:4] == BZM1_MAGIC or (path is not None and path.endswith(".b3d")):
             self._job_from_3d_payload(job, data)
-        else:
-            self._job_from_payload(job, job.source_name, data)
+            return "3d"
+        if data[:4] == MAGIC or (path is not None and path.endswith(".bzr")):
+            self._job_from_payload(job, path or job.source_name, data)
+            return "2d"
+        if path is not None:
+            self._job_from_image(job, data, len(data))
+            return "image"
+        self._job_from_payload(job, job.source_name, data)
+        return "2d"
 
     def _worker(self, path: str) -> None:
         job = Job()
@@ -280,19 +301,8 @@ class BalzarApp:
             else:
                 with open(path, "rb") as fh:
                     data = fh.read()
-                from .bundle import MAGIC as BZX1_MAGIC
-                from .scene3d import MAGIC as BZM1_MAGIC
-                if data[:4] == BZX1_MAGIC or path.endswith(".bzx"):
-                    self._job_from_bundle(job, data)
-                    job.is_live_artifact = True  # opening an EXISTING bundle, not creating one
-                elif data[:4] == BZM1_MAGIC or path.endswith(".b3d"):
-                    self._job_from_3d_payload(job, data)
-                    job.is_live_artifact = True
-                elif data[:4] == MAGIC or path.endswith(".bzr"):
-                    self._job_from_payload(job, path, data)
-                    job.is_live_artifact = True
-                else:
-                    self._job_from_image(job, data, len(data))
+                kind = self._dispatch_payload_bytes(job, data, path=path)
+                job.is_live_artifact = kind != "image"  # opening an EXISTING artifact, not creating one
         except Exception as exc:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)
