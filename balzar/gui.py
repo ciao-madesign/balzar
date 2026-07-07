@@ -833,10 +833,16 @@ class BalzarApp:
         try:
             entry = save_to_library(job.payload, kind, job.source_name)
             job.library_entry_id = entry.id
-        except OSError as exc:
-            # a full disk or a locked-down home directory shouldn't take
-            # down the job the operator just successfully opened/scanned
-            # -- the artifact is still shown, only the library save failed
+        except (OSError, ValueError) as exc:
+            # a full disk or a locked-down home directory (OSError), or
+            # a corrupt manifest.json / an unrecognized kind (ValueError,
+            # incl. json.JSONDecodeError which subclasses it) shouldn't
+            # take down the job the operator just successfully
+            # opened/scanned -- the artifact is still shown, only the
+            # library save failed. This is called from _poll_queue,
+            # whose own `after` reschedule runs right after this method
+            # returns -- letting anything but these two escape here would
+            # permanently stop the GUI's job-queue polling loop.
             self.status.set(f"{self.status.get()} (libreria non salvata: {exc})")
         self._refresh_library_panel()
 
