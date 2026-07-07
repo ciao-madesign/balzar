@@ -24,6 +24,7 @@ import os
 import queue
 import threading
 import tkinter as tk
+import uuid
 from tkinter import filedialog, messagebox, ttk
 
 from .imageio import load_frames, save_gif
@@ -43,6 +44,11 @@ class Job:
     """Everything produced by one encode/decode, consumed by the UI."""
 
     def __init__(self):
+        # stable per-instance id, independent of the library (see
+        # library_entry_id below) -- lets view_3d() dedup repeat clicks
+        # on a job that was never saved to the library at all (a fresh
+        # Balzar Studio encode), not only on library-backed ones
+        self.id = uuid.uuid4().hex[:12]
         self.source_name = ""
         self.width = 0
         self.height = 0
@@ -506,12 +512,21 @@ class BalzarApp:
         a browser tab at that same port instead of spawning a second
         HTTPServer+thread for content that's already up -- otherwise
         clicking back and forth between library entries would leak one
-        background server per click, forever, until the app closes."""
+        background server per click, forever, until the app closes.
+
+        The same caching applies to a job that was never saved to the
+        library at all (a fresh Balzar Studio encode, which never gets
+        a library_entry_id -- see Job.is_live_artifact): job.id is a
+        stable per-instance fallback key, so repeatedly clicking
+        'Visualizza in 3D' on the very same just-encoded job also
+        reuses one server instead of leaking one per click. Encoding a
+        genuinely new file creates a new Job (a new key), which
+        correctly gets its own server."""
         job = self.job
         if not job or not (job.is_3d or job.is_bundle):
             return
-        key = job.library_entry_id
-        if key and key in self._open_viewers:
+        key = job.library_entry_id or job.id
+        if key in self._open_viewers:
             import webbrowser
             server = self._open_viewers[key]
             webbrowser.open(f"http://127.0.0.1:{server.server_address[1]}/viewer.html")
@@ -526,8 +541,7 @@ class BalzarApp:
             from .viewer3d import open_glb_in_browser
             server = open_glb_in_browser(job.glb, job.bom_lines, work_dir,
                                          alarm_rows=self.alarm_rows or None)
-        if key:
-            self._open_viewers[key] = server
+        self._open_viewers[key] = server
         self.status.set("Aperto nel browser predefinito")
 
     # --------------------------------------------------------------- library
