@@ -307,6 +307,18 @@
         compatto per il trasporto; la vista qui e il download <code>.glb</code> sono un
         formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
 
+      <p class="honesty">Puoi includere anche una tabella allarmi nello stesso QR:
+        scegli il CSV qui sotto <strong>prima</strong> di caricare il file 3D — i due
+        vengono impacchettati insieme in un bundle (<code>BZX1</code>,
+        <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca per codice
+        allarme pronta, senza upload separati. Opzionale: senza CSV il payload resta
+        un semplice <code>BZM1</code> come prima.</p>
+      <p>
+        <label>Tabella allarmi da includere nel bundle (opzionale):
+          <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
+        <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
+      </p>
+
       <section id="threed-drop" class="dropzone">
         <input type="file" id="threed-file-input" accept=".3dxml" hidden>
         <p>Trascina un file <code>.3dxml</code> qui, oppure
@@ -348,10 +360,13 @@
           distinta base per evidenziare tutte le istanze di quel tipo di parte. Con una parte
           selezionata, "esporta scheda ricambio" scarica un'immagine con la vista isolata più
           nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.
-          La barra di ricerca cerca per nome componente o, se carichi una tabella allarmi
-          (CSV a due colonne: codice_allarme,nome_componente), per codice allarme — utile per
-          un operatore che legge un codice sulla macchina e vuole vedere subito il componente
-          coinvolto senza conoscerne il nome CAD.</p>
+          La barra di ricerca cerca per nome componente o, se hai caricato una tabella
+          allarmi (CSV a due colonne: codice_allarme,nome_componente — nel bundle sopra,
+          o qui sotto), per codice allarme — utile per un operatore che legge un codice
+          sulla macchina e vuole vedere subito il componente coinvolto senza conoscerne
+          il nome CAD. Differenza tra le due vie: quella sopra (prima dell'upload) entra
+          nel bundle scaricabile/QR, questa qui sotto è solo per questa sessione del
+          browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
 
         <table class="stats" id="threed-stats-table"></table>
 

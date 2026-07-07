@@ -836,6 +836,8 @@ setupQrButton("sequence", () => (lastSequenceResult && !lastSequenceResult.paylo
 const threedDrop = document.getElementById("threed-drop");
 const threedFileInput = document.getElementById("threed-file-input");
 const threedBrowseBtn = document.getElementById("threed-browse-btn");
+const threedBundleCsvInput = document.getElementById("threed-bundle-csv-input");
+const threedBundleCsvClearBtn = document.getElementById("threed-bundle-csv-clear-btn");
 const threedStatusEl = document.getElementById("threed-status");
 const threedResultEl = document.getElementById("threed-result");
 const threedViewer = document.getElementById("threed-viewer");
@@ -1028,6 +1030,7 @@ threedBrowseBtn.addEventListener("click", () => threedFileInput.click());
 threedFileInput.addEventListener("change", () => {
   if (threedFileInput.files[0]) handleThreedFile(threedFileInput.files[0]);
 });
+threedBundleCsvClearBtn.addEventListener("click", () => { threedBundleCsvInput.value = ""; });
 ["dragenter", "dragover"].forEach(evt =>
   threedDrop.addEventListener(evt, e => { e.preventDefault(); threedDrop.classList.add("dragover"); })
 );
@@ -1055,20 +1058,27 @@ async function handleThreedFile(file) {
     );
     return;
   }
-  setThreedStatus(`Analisi di "${file.name}" in corso…`);
+  const csvFile = threedBundleCsvInput.files[0];
+  setThreedStatus(csvFile
+    ? `Analisi di "${file.name}" + "${csvFile.name}" (bundle) in corso…`
+    : `Analisi di "${file.name}" in corso…`);
   try {
     const data = await fileToBase64(file);
+    const body = { data };
+    if (csvFile) body.alarm_csv = await fileToBase64(csvFile);
     const res = await fetch("/api/encode_3d", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data }),
+      body: JSON.stringify(body),
     });
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || "errore sconosciuto");
 
     lastThreedResult = json;
     renderThreedResult(json);
-    setThreedStatus(`Fatto: ${file.name}`);
+    setThreedStatus(json.bundled
+      ? `Fatto: ${file.name} + ${csvFile.name} (bundle BZX1)`
+      : `Fatto: ${file.name}`);
   } catch (err) {
     setThreedStatus("Errore: " + err.message, true);
   }
@@ -1097,6 +1107,7 @@ function renderThreedResult(r) {
   threedDlPayload.title = r.payload_omitted
     ? "payload più grande del limite di risposta del server: usa la CLI in locale"
     : "";
+  threedDlPayload.textContent = r.bundled ? "scarica bundle (.bzx)" : "scarica payload (.b3d)";
   threedDlGlb.disabled = !!r.glb_omitted;
 
   const rows = [
@@ -1124,12 +1135,30 @@ function renderThreedResult(r) {
   threedSelectedNames = [];
   threedSelectedCount = null;
   threedExportBtn.disabled = true;
-  threedSearchNote.textContent = "";
+
+  // a bundled response (r.bundled) already carries its parsed alarm
+  // table -- wire it in directly, no separate CSV upload needed; a
+  // non-bundled response clears any table from a previous bundle upload
+  // in this same session, so search doesn't silently use stale data
+  // from an unrelated model
+  threedAlarmMap = new Map();
+  if (r.bundled && r.alarm_rows && r.alarm_rows.length) {
+    r.alarm_rows.forEach(([code, name]) => {
+      const key = code.trim().toUpperCase();
+      if (!threedAlarmMap.has(key)) threedAlarmMap.set(key, []);
+      threedAlarmMap.get(key).push(name);
+    });
+    threedSearchNote.textContent =
+      `Bundle: tabella allarmi già inclusa (${threedAlarmMap.size} codici) -- cerca subito per nome o codice.`;
+  } else {
+    threedSearchNote.textContent = "";
+  }
 }
 
 threedDlPayload.addEventListener("click", () => {
   if (!lastThreedResult) return;
-  downloadBlob(base64ToBytes(lastThreedResult.payload_base64), "output.b3d", "application/octet-stream");
+  const filename = lastThreedResult.bundled ? "output.bzx" : "output.b3d";
+  downloadBlob(base64ToBytes(lastThreedResult.payload_base64), filename, "application/octet-stream");
 });
 
 threedDlGlb.addEventListener("click", () => {

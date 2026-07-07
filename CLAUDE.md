@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-230 test, tutti verdi (`python3 -m unittest discover -s tests`):
+247 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -874,7 +874,9 @@ installati — dipendenze opzionali, non nel motore core),
 `test_explode.py`, `test_webapi.py`, `test_png.py`, `test_cli.py`,
 `test_scene3d.py` (parser 3DXML, formato binario `BZM1`, export glTF —
 vedi §9.5), `test_viewer3d.py` (`parse_alarm_csv` per la barra di
-ricerca/tabella allarmi del viewer 3D — vedi §9.15). Copertura: round-trip
+ricerca/tabella allarmi del viewer 3D — vedi §9.15), `test_bundle.py`
+(formato `BZX1`, dispatch per estensione, transito byte-identico
+attraverso il chunking QR — vedi §9.16). Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -2316,10 +2318,147 @@ tra virgolette preservati correttamente dal parser Python — a
 differenza del parser JS lato client, che dichiara esplicitamente di
 non supportarlo).
 
+### 9.16 Bundle multi-documento: 3D + tabella allarmi in un solo QR/file
+
+Domanda diretta di sessione: si possono codificare più documenti
+insieme (esempio posto dall'utente: 3D + CSV allarmi + 2 tavole PDF) in
+un solo giro, un solo QR/sequenza, con dispatch automatico a più
+viewer alla scansione? Risposta separata in due parti perché il
+meccanismo e i PDF hanno risposte molto diverse — vedi la valutazione
+di sessione precedente per il perché i PDF restano **esplicitamente
+fuori scope** (nessun encoder PDF nel progetto, e un vero disegno
+tecnico pesa abbastanza da vanificare il "sta in pochi QR" che rende
+utile il supporto fisico). Questa sezione copre solo il meccanismo di
+bundle + dispatch multi-viewer per 3D+CSV, costruito per davvero.
+
+**Formato `BZX1` (`balzar/bundle.py`, nuovo modulo)**: diversi
+sotto-documenti tipizzati concatenati in un solo blob —
+
+```
+b"BZX1" | u16 versione | u16 n.elementi | u32 lunghezza-corpo
+        | u32 crc32(corpo) | deflate(corpo)
+
+corpo = concatenazione di elementi, ciascuno:
+  u8 lunghezza-kind | kind ascii       ("3d" o "csv")
+  u8 lunghezza-label | label utf-8     (es. nome file originale)
+  u32 lunghezza-dati | dati            (bytes nativi dell'elemento:
+                                         BZM1 già codificato per "3d",
+                                         testo UTF-8 per "csv")
+```
+
+**L'intuizione architetturale che rende questo pulito**: il livello
+QR/chunking (`chunk_payload`/`payload_to_qr_frames`/`LiveScanner` in
+`payload.py`/`qr.py`) tratta già qualunque payload come byte opachi
+con un CRC — non serve **nessuna modifica** a `qr.py` per farci
+transitare un bundle invece di un `BZM1`/`BZR1` nudo. Verificato non
+solo a parole: `tests/test_bundle.py::TestBundleThroughQrCarrier`
+spacchetta un bundle in `chunk_payload`, lo rimescola, lo riassembla
+con `assemble_chunks`, e conferma byte-identico all'originale.
+
+**Un solo passaggio di compressione sul corpo intero**, non uno per
+elemento: ogni formato nativo già si autoverifica al proprio decode
+(`BZM1` ha già la propria lunghezza+CRC), e comprimere una volta la
+concatenazione intera sfrutta meglio la ridondanza tra elementi di N
+passaggi separati — stesso principio già usato da `BZM1`/`BZR1` per i
+propri corpi.
+
+**Scoperta reale, non ottimistica, sul guadagno di dimensione**:
+misurato su una fixture di test reale (assieme sintetico a 2 parti +
+CSV a 3 righe), il bundle **non comprime — pesa più della somma delle
+parti separate**: BZM1 da solo 162 B, CSV da solo 64 B (somma 226 B),
+bundle risultante **290 B** (+28%). Scomponendo il perché: il corpo
+grezzo con framing pesa già 282 B (56 B in più della somma — quasi
+tutto per i due nomi-file usati come `label`, non per l'intestazione
+BZX1 stessa, che è fissa a 16 B), e la compressione lo riduce solo a
+274 B (+16 B di intestazione = 290) perché **il BZM1 al suo interno è
+già compresso** — comprimere di nuovo byte quasi-incomprimibili non
+guadagna quasi nulla, lo stesso principio già noto per cui ri-zippare
+un PNG guadagna solo il 10% (criticità §8). **Il valore del bundle non
+è la dimensione, è la convenienza**: un solo file/QR/scan invece di
+due, con il viewer già wired — dichiarato onestamente invece di
+vendere una compressione che non esiste. Il gap percentuale si riduce
+comunque all'aumentare della dimensione reale dell'assieme 3D (l'unico
+costo fisso è il framing per elemento, dell'ordine delle decine di
+byte per label — trascurabile su un payload di centinaia di KB), ma
+non è stato rimisurato su un assieme reale grande in questa sessione:
+dichiarato come ragionamento qualitativo, non una nuova misura.
+
+**Dispatch multi-viewer alla "scansione"**: `open_bundle_in_browser`
+(nuova funzione in `balzar/viewer3d.py`, GUI desktop) spacchetta il
+bundle, decodifica l'elemento "3d" in GLB+BOM con lo stesso percorso
+già esistente (`scene3d.decode_payload` + `gltf.scene3d_to_glb` +
+`generate_bom`), e passa l'elemento "csv" (se presente) come
+`alarm_rows` a `open_glb_in_browser` — la stessa pagina/ricerca di
+§9.15, ora popolata **senza upload manuale**: chi apre il bundle vede
+subito il viewer 3D con la ricerca per codice allarme già pronta.
+Nessuna nuova UI: è la stessa pagina di sempre, solo alimentata da un
+bundle invece che da un GLB nudo. Un bundle con più di un elemento "3d"
+è valido per il formato ma il viewer ne mostra solo il primo — dichiarato
+esplicitamente nell'errore, non ignorato in silenzio; un bundle senza
+nessun elemento "3d" è rifiutato con un messaggio chiaro (il viewer 3D
+non ha senso senza un 3D da mostrare).
+
+**Superfici collegate**:
+- **CLI**: `balzar encode-bundle assembly.3dxml alarms.csv -o out.bzx`
+  (dispatch per estensione: `.3dxml`/`.b3d` -> elemento 3D, `.csv` ->
+  elemento CSV; qualunque altra estensione, incluso `.pdf`, viene
+  rifiutata con il nome del file e il motivo esatto — mai saltata in
+  silenzio, a differenza di `encode_independent` in `sequence.py`, che
+  qui non si applica: un bundle è un piccolo insieme deliberato, non
+  un mucchio scorrelato).
+- **GUI desktop**: nuovo bottone "Crea bundle (3D + CSV)…" (due
+  dialog di selezione file, il secondo — il CSV — annullabile per un
+  bundle solo-3D), e riconoscimento del magic `BZX1`/estensione `.bzx`
+  nel flusso "Apri file" esistente (`_worker`), cosicché un bundle
+  salvato si riapra esattamente come un file `.b3d`, con
+  `job.alarm_rows` popolato dal bundle e usato in "Visualizza in 3D"
+  con priorità sulla tabella caricata manualmente via "Carica tabella
+  allarmi" (quest'ultima resta come fallback, non sovrascritta se il
+  bundle non porta un proprio CSV).
+- **Demo web**: il tab "Assemblee 3D" guadagna un campo file opzionale
+  "Tabella allarmi da includere nel bundle" **prima** della dropzone
+  3D — se compilato al momento dell'upload, `handle_encode_3d` (esteso,
+  non un endpoint nuovo) impacchetta i due in un `BZX1` e restituisce
+  `bundled: true` + `alarm_rows` già estratti; il frontend popola la
+  ricerca **senza un secondo upload CSV lato client** (a differenza
+  del percorso manuale di §9.15, che resta disponibile invariato per
+  chi vuole provare una tabella diversa senza rigenerare il payload).
+  Lo stesso bottone "genera QR" già esistente funziona senza modifiche
+  (conferma diretta della tesi architetturale sopra): il payload
+  restituito è semplicemente più grande e contiene un bundle invece di
+  un BZM1 nudo, invisibile al generatore di QR.
+
+**Verificato con Playwright, non solo scritto**, su entrambe le
+interfacce con la stessa fixture sintetica a due parti (nessun file
+CAD reale, stesso principio di §9.11/§9.15): bundle generato e aperto
+→ ricerca per codice allarme funziona **al primo tentativo**, zero
+upload manuale, un allarme a più componenti evidenzia entrambi e
+disabilita "esporta scheda ricambio" (coerente con §9.15); verificato
+anche il percorso di **non-regressione** — un upload senza CSV
+selezionato produce `bundled: false` e il vecchio upload manuale del
+tab funziona esattamente come prima. Aggiunti: `tests/test_bundle.py`
+(11 test: round-trip, corruzione rilevata, dispatch per estensione con
+errore che nomina il file, transito byte-identico attraverso
+chunk/riassemblaggio), 2 test in `tests/test_cli.py`, 4 test in
+`tests/test_webapi.py::TestHandleEncode3D` per il nuovo campo
+`alarm_csv` (non-bundling di default, bundling, decodifica coerente
+della scena, base64 malformato onestamente rifiutato con 400) — 247
+test totali.
+
+**Non fatto in questa sessione, dichiarato esplicitamente**: nessun
+supporto PDF (per scelta, vedi sopra); nessun modo di aprire/dispacciare
+un `.bzx` dalla demo web se non passando dal tab "Assemblee 3D" al
+momento della codifica — il tab generico "Apri programma" resta
+specifico per `BZR1` 2D, non esteso a `BZX1` (avrebbe richiesto
+insegnargli a mostrare GLB+BOM, fuori dallo scope di questa richiesta);
+nessuna UI per un bundle con più di un elemento "3d" o con più CSV
+combinati in modi diversi dal semplice "unisci tutte le righe" già
+implementato in `open_bundle_in_browser`.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 230 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 247 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

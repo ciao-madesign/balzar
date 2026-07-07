@@ -301,6 +301,28 @@ class TestCli(unittest.TestCase):
         self.assertIn("errore:", err)
         self.assertNotIn("Traceback", err)
 
+    # ----------------------------------------------------- encode-bundle
+
+    def test_encode_bundle_3dxml_plus_csv(self):
+        xml_path = self._write_minimal_3dxml("assembly.3dxml")
+        csv_path = self._write("alarms.csv", "E100,PartA\nE200,PartA\n")
+        out_path = self._path("assembly.bzx")
+        code, out, err = _run(["encode-bundle", xml_path, csv_path, "-o", out_path])
+        self.assertEqual(code, 0)
+        self.assertIn("2 elementi", out)
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path, "rb") as fh:
+            self.assertEqual(fh.read(4), b"BZX1")
+
+    def test_encode_bundle_unsupported_extension_gives_clean_error(self):
+        xml_path = self._write_minimal_3dxml("assembly.3dxml")
+        pdf_path = self._write("drawing.pdf", "%PDF-1.4 fake")
+        code, out, err = _run(["encode-bundle", xml_path, pdf_path])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+        self.assertIn("drawing.pdf", err)
+        self.assertNotIn("Traceback", err)
+
     # ------------------------------------------------------ encode-video
 
     def test_encode_video_gif(self):

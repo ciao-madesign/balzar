@@ -296,6 +296,48 @@ class TestHandleEncode3D(unittest.TestCase):
         self.assertEqual(resp["glb_base64"], "")
         self.assertTrue(resp["payload_omitted"])
 
+    def test_no_alarm_csv_means_not_bundled(self):
+        status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertFalse(resp["bundled"])
+        self.assertEqual(resp["alarm_rows"], [])
+
+    def test_alarm_csv_produces_a_bundle_payload(self):
+        from balzar.bundle import is_bundle
+        from balzar.payload import from_base64
+
+        csv_text = "E100,Bullone-M6\nE200,Bullone-M6\n"
+        status, resp = handle_encode_3d(
+            {"data": _b64(_make_3dxml_bytes()), "alarm_csv": _b64(csv_text.encode("utf-8"))},
+            LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["bundled"])
+        self.assertEqual(resp["alarm_rows"], [["E100", "Bullone-M6"], ["E200", "Bullone-M6"]])
+        payload = from_base64(resp["payload_base64"])
+        self.assertTrue(is_bundle(payload))
+
+    def test_bundled_payload_still_decodes_to_the_same_3d_scene(self):
+        from balzar.bundle import KIND_3D, decode_bundle
+        from balzar.payload import from_base64
+        from balzar.scene3d import decode_payload as decode_scene, generate_bom
+
+        csv_text = "E100,Bullone-M6\n"
+        status, resp = handle_encode_3d(
+            {"data": _b64(_make_3dxml_bytes()), "alarm_csv": _b64(csv_text.encode("utf-8"))},
+            LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        items = decode_bundle(from_base64(resp["payload_base64"]))
+        three_d = next(it for it in items if it.kind == KIND_3D)
+        scene = decode_scene(three_d.data)
+        bom = generate_bom(scene)
+        self.assertEqual([(e.name, e.count) for e in bom], [("Bullone-M6", 2)])
+
+    def test_malformed_alarm_csv_base64_gives_clean_400(self):
+        status, resp = handle_encode_3d(
+            {"data": _b64(_make_3dxml_bytes()), "alarm_csv": "not-valid-base64!!!"}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
 
 class TestHandleEncodeVideo(unittest.TestCase):
     def _make_gif(self, n_frames=4):

@@ -271,7 +271,17 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
     <model-viewer> + the bill of materials. Unlike the 2D tabs there is no
     PNG/pixel preview to render — the "preview" here IS the GLB, built by
     balzar/gltf.py and shown client-side by the same model-viewer web
-    component the desktop app opens in a browser (balzar/viewer3d.py)."""
+    component the desktop app opens in a browser (balzar/viewer3d.py).
+
+    Optional `alarm_csv` field (base64 of a codice_allarme,nome_componente
+    CSV): when present, the 3D payload and the CSV are packed together
+    into one BZX1 bundle (balzar/bundle.py) instead of a bare BZM1 --
+    `payload_base64`/`fits_qr` then describe the *bundle*, and the same
+    "genera QR" button already wired to this tab keeps working with zero
+    changes, since chunk_payload/payload_to_qr_frames treat any payload
+    as opaque bytes. `alarm_rows` is returned either way so the frontend
+    can wire the 3D viewer's search bar immediately, without a separate
+    client-side CSV upload step."""
     data_b64 = body.get("data")
     if not data_b64:
         return 400, {"ok": False, "error": "campo 'data' mancante"}
@@ -279,6 +289,14 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         raw = _b64decode(data_b64)
     except ValueError as exc:
         return 400, {"ok": False, "error": str(exc)}
+
+    alarm_csv_b64 = body.get("alarm_csv")
+    alarm_csv_text = None
+    if alarm_csv_b64:
+        try:
+            alarm_csv_text = _b64decode(alarm_csv_b64).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            return 400, {"ok": False, "error": f"tabella allarmi non valida: {exc}"}
 
     from .scene3d import Scene3DError, encode_3dxml_file
 
@@ -312,7 +330,23 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         "glb_omitted": glb_omitted,
         "glb_base64": "" if glb_omitted else glb_b64,
     }
-    response.update(_payload_response_fields(result.payload, limits))
+
+    if alarm_csv_text is not None:
+        from .bundle import KIND_3D, KIND_CSV, BundleItem, encode_bundle
+        from .viewer3d import parse_alarm_csv_text
+        alarm_rows = parse_alarm_csv_text(alarm_csv_text)
+        bundle_bytes = encode_bundle([
+            BundleItem(KIND_3D, "assembly.b3d", result.payload),
+            BundleItem(KIND_CSV, "alarms.csv", alarm_csv_text.encode("utf-8")),
+        ])
+        response.update(_payload_response_fields(bundle_bytes, limits))
+        response["bundled"] = True
+        response["alarm_rows"] = [[code, name] for code, name in alarm_rows]
+    else:
+        response.update(_payload_response_fields(result.payload, limits))
+        response["bundled"] = False
+        response["alarm_rows"] = []
+
     return 200, response
 
 

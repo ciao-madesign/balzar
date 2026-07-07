@@ -7,6 +7,7 @@
     python -m balzar encode-sequence step1.dxf step2.dxf ... -o payload.bzp
     python -m balzar encode-sequence a.svg b.dxf c.png --mode independent -o outdir/
     python -m balzar explode-vector drawing.dxf   -o payload.bzp [--steps N]
+    python -m balzar encode-bundle assembly.3dxml alarms.csv -o bundle.bzx
     python -m balzar decode        payload.bzp    -o program.bzr
     python -m balzar info          payload.bzp
 
@@ -21,7 +22,11 @@ images) into one multi-frame payload (balzar/sequence.py), or with
 `--mode independent` encodes each file on its own (no format restriction,
 one broken file doesn't sink the batch). `explode-vector`
 auto-generates an exploded-view animation from a single multi-layer CAD/SVG
-file, grouping by layer/`<g>` (balzar/explode.py).
+file, grouping by layer/`<g>` (balzar/explode.py). `encode-bundle` packs a
+3D assembly and one or more CSV lookup tables (e.g. an alarm-code table)
+into a single BZX1 bundle (balzar/bundle.py) that flows through the same
+QR/chunking machinery as any other payload — `render-3d` doesn't unpack
+one (see balzar/viewer3d.py's open_bundle_in_browser / the GUI instead).
 """
 
 from __future__ import annotations
@@ -233,6 +238,32 @@ def cmd_render_3d(args: argparse.Namespace) -> int:
     with open(out, "wb") as fh:
         fh.write(glb)
     print(f"glb:          {out} ({_fmt(len(glb))} byte)")
+    return 0
+
+
+def cmd_encode_bundle(args: argparse.Namespace) -> int:
+    """3D assembly (.3dxml/.b3d) + optional CSV lookup table(s) -> one
+    .bzx bundle (balzar/bundle.py) -- a single file/QR that opens with
+    both the 3D viewer and the alarm search already wired, see CLAUDE.md
+    for the multi-document flow this exists for."""
+    from .bundle import BundleError, decode_bundle, encode_bundle_files
+
+    try:
+        data = encode_bundle_files(args.inputs)
+    except BundleError as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    out = args.output or (os.path.splitext(args.inputs[0])[0] + ".bzx")
+    with open(out, "wb") as fh:
+        fh.write(data)
+
+    items = decode_bundle(data)
+    print(f"bundle:       {len(items)} elementi")
+    for item in items:
+        print(f"  {item.kind:<4} {item.label} ({_fmt(len(item.data))} byte)")
+    print(f"payload:      {out}: {_fmt(len(data))} byte "
+          f"(QR singolo: {'si' if fits_in_qr(data) else 'no'})")
     return 0
 
 
@@ -559,6 +590,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("input", help="file .b3d (payload BZM1)")
     p.add_argument("-o", "--output", default=None)
     p.set_defaults(func=cmd_render_3d)
+
+    p = sub.add_parser("encode-bundle",
+                       help="assieme 3D + CSV allarmi -> un bundle .bzx (balzar/bundle.py)")
+    p.add_argument("inputs", nargs="+",
+                   help="file da includere: .3dxml/.b3d (assieme 3D) e .csv (tabella allarmi)")
+    p.add_argument("-o", "--output", default=None)
+    p.set_defaults(func=cmd_encode_bundle)
 
     p = sub.add_parser("encode-video",
                        help="GIF animata/sequenza -> payload (delta tra frame)")

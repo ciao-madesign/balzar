@@ -58,6 +58,13 @@ class Job:
         self.is_3d = False
         self.glb = b""
         self.bom_lines: list[tuple[str, int]] = []
+        # a multi-document bundle (balzar/bundle.py) is still a 3D job
+        # (is_3d=True) but saves as .bzx instead of .b3d, and carries its
+        # own alarm table -- distinct from BalzarApp.alarm_rows, which is
+        # loaded manually via "Carica tabella allarmi" and applies across
+        # whichever job is open
+        self.is_bundle = False
+        self.alarm_rows: list[tuple[str, str]] = []
 
 
 class BalzarApp:
@@ -165,14 +172,19 @@ class BalzarApp:
         self.btn_load_alarms = ttk.Button(
             btns, text="Carica tabella allarmi (CSV)", command=self.load_alarm_csv)
         self.btn_load_alarms.pack(fill="x", pady=2)
+        # also independent of the currently open job -- picks its own
+        # files rather than combining whatever is already loaded
+        self.btn_create_bundle = ttk.Button(
+            btns, text="Crea bundle (3D + CSV)…", command=self.create_bundle)
+        self.btn_create_bundle.pack(fill="x", pady=2)
 
     # ------------------------------------------------------------- actions
 
     def open_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Apri immagine, GIF animata, assieme 3D (.3dxml) o payload balzar",
-            filetypes=[("Immagini, 3D e payload",
-                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.3dxml *.bzp *.b3d *.bzr"),
+            title="Apri immagine, GIF animata, assieme 3D (.3dxml), bundle o payload balzar",
+            filetypes=[("Immagini, 3D, bundle e payload",
+                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.3dxml *.bzp *.b3d *.bzx *.bzr"),
                        ("Tutti i file", "*.*")])
         if not path:
             return
@@ -214,8 +226,11 @@ class BalzarApp:
             else:
                 with open(path, "rb") as fh:
                     data = fh.read()
+                from .bundle import MAGIC as BZX1_MAGIC
                 from .scene3d import MAGIC as BZM1_MAGIC
-                if data[:4] == BZM1_MAGIC or path.endswith(".b3d"):
+                if data[:4] == BZX1_MAGIC or path.endswith(".bzx"):
+                    self._job_from_bundle(job, data)
+                elif data[:4] == BZM1_MAGIC or path.endswith(".b3d"):
                     self._job_from_3d_payload(job, data)
                 elif data[:4] == MAGIC or path.endswith(".bzr"):
                     self._job_from_payload(job, path, data)
@@ -279,7 +294,13 @@ class BalzarApp:
             ("riferimenti", _fmt(len(scene.references))),
         ])
 
-    def _finish_3d_job(self, job: Job, payload: bytes, bom, extra_stats) -> None:
+    def _finish_3d_job(self, job: Job, payload: bytes, bom, extra_stats,
+                       stats_payload: bytes | None = None) -> None:
+        """stats_payload overrides which bytes the 'payload size'/'QR
+        singolo' stats describe -- needed for a bundle job (_job_from_bundle),
+        where the glb is built from the 3D sub-item's own BZM1 bytes but
+        the size/QR-fit that matters to the user is the whole bundle
+        that actually gets saved/scanned, not just the sub-item."""
         from .gltf import scene3d_to_glb
         from .scene3d import decode_payload
 
@@ -287,15 +308,44 @@ class BalzarApp:
         job.is_3d = True
         job.glb = scene3d_to_glb(scene)
         job.bom_lines = [(e.name, e.count) for e in sorted(bom, key=lambda e: -e.count)]
+        size_payload = payload if stats_payload is None else stats_payload
         job.stats = [
             ("sorgente", job.source_name),
             *extra_stats,
             ("distinta base", f"{_fmt(len(bom))} parti uniche, "
              f"{_fmt(sum(e.count for e in bom))} posizionamenti totali"),
-            ("payload", f"{_fmt(len(payload))} B"),
-            ("QR singolo", "sì" if fits_in_qr(payload) else
-             f"no ({_fmt(len(chunk_payload(payload)))} capitoli)"),
+            ("payload", f"{_fmt(len(size_payload))} B"),
+            ("QR singolo", "sì" if fits_in_qr(size_payload) else
+             f"no ({_fmt(len(chunk_payload(size_payload)))} capitoli)"),
         ]
+
+    def _job_from_bundle(self, job: Job, data: bytes) -> None:
+        """Re-open (or receive freshly built by create_bundle) a
+        multi-document bundle (.bzx, balzar/bundle.py): unpack the 3D
+        item into the usual glb/BOM view, and any CSV item(s) straight
+        into job.alarm_rows -- the whole point being that a bundle's
+        alarm search works immediately, no separate 'Carica tabella
+        allarmi' step needed."""
+        from .bundle import KIND_3D, KIND_CSV, decode_bundle
+        from .scene3d import decode_payload, generate_bom
+        from .viewer3d import parse_alarm_csv_text
+
+        items = decode_bundle(data)
+        three_d_items = [it for it in items if it.kind == KIND_3D]
+        if not three_d_items:
+            kinds = ", ".join(sorted({it.kind for it in items})) or "nessuno"
+            raise ValueError(f"il bundle non contiene un assieme 3D (trovato: {kinds})")
+        scene = decode_payload(three_d_items[0].data)
+        job.is_bundle = True
+        job.payload = data
+        self._finish_3d_job(job, three_d_items[0].data, generate_bom(scene), extra_stats=[
+            ("forme uniche", _fmt(len(scene.shapes))),
+            ("riferimenti", _fmt(len(scene.references))),
+            ("bundle", f"{len(items)} elementi ({', '.join(it.kind for it in items)})"),
+        ], stats_payload=data)
+        job.alarm_rows = []
+        for csv_item in (it for it in items if it.kind == KIND_CSV):
+            job.alarm_rows.extend(parse_alarm_csv_text(csv_item.data.decode("utf-8")))
 
     def _job_from_image(self, job: Job, data: bytes, upload_size: int) -> None:
         """Encode an image or animation: the 'zip'."""
@@ -349,11 +399,15 @@ class BalzarApp:
     def save_payload(self) -> None:
         if not self.job:
             return
-        # a 3D job's payload is BZM1, a genuinely different format from
-        # the 2D BZR1 payload -- different extension so it's never
-        # confused with (or opened as) a 2D program
-        ext = ".b3d" if self.job.is_3d else ".bzp"
-        label = "payload 3D balzar" if self.job.is_3d else "payload balzar"
+        # each format gets its own extension so it's never confused with
+        # (or opened as) another: a bundle (.bzx) is still is_3d=True but
+        # is a genuinely different container than a bare 3D payload
+        if self.job.is_bundle:
+            ext, label = ".bzx", "bundle balzar (3D + allarmi)"
+        elif self.job.is_3d:
+            ext, label = ".b3d", "payload 3D balzar"
+        else:
+            ext, label = ".bzp", "payload balzar"
         path = self._ask_save(self._stem() + ext, ext, [(label, f"*{ext}")])
         if path:
             with open(path, "wb") as fh:
@@ -373,8 +427,44 @@ class BalzarApp:
 
         from .viewer3d import open_glb_in_browser
         work_dir = tempfile.mkdtemp(prefix="balzar_view3d_")
-        open_glb_in_browser(job.glb, job.bom_lines, work_dir, alarm_rows=self.alarm_rows or None)
+        # a bundle's own alarm table (job.alarm_rows) takes priority over
+        # whatever was loaded separately via "Carica tabella allarmi" --
+        # the whole point of a bundle is not needing that separate step
+        alarm_rows = job.alarm_rows or self.alarm_rows or None
+        open_glb_in_browser(job.glb, job.bom_lines, work_dir, alarm_rows=alarm_rows)
         self.status.set("Aperto nel browser predefinito")
+
+    def create_bundle(self) -> None:
+        """Combine a 3D assembly and an alarm CSV into one .bzx bundle
+        (balzar/bundle.py): one file, one future QR/scan, and 'Visualizza
+        in 3D' opens with the alarm search already wired -- no separate
+        CSV upload step. The CSV is optional: cancelling that second
+        dialog still produces a valid bundle, just without the search
+        shortcut (add it later with 'Carica tabella allarmi')."""
+        threed_path = filedialog.askopenfilename(
+            title="Assieme 3D da includere nel bundle (.3dxml o .b3d)",
+            filetypes=[("Assieme 3D", "*.3dxml *.b3d"), ("Tutti i file", "*.*")])
+        if not threed_path:
+            return
+        csv_path = filedialog.askopenfilename(
+            title="Tabella allarmi da includere (opzionale -- Annulla per saltare)",
+            filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
+        paths = [threed_path] + ([csv_path] if csv_path else [])
+        self.status.set("Creazione bundle in corso…")
+        self._set_buttons(False)
+        threading.Thread(target=self._bundle_worker, args=(paths,), daemon=True).start()
+
+    def _bundle_worker(self, paths: list[str]) -> None:
+        job = Job()
+        job.source_name = os.path.splitext(os.path.basename(paths[0]))[0] + ".bzx"
+        try:
+            from .bundle import encode_bundle_files
+            data = encode_bundle_files(paths)
+            self._job_from_bundle(job, data)
+            job.stats.insert(0, ("creato da", ", ".join(os.path.basename(p) for p in paths)))
+        except Exception as exc:
+            job.error = f"{type(exc).__name__}: {exc}"
+        self.queue.put(job)
 
     def load_alarm_csv(self) -> None:
         """Load a codice_allarme,nome_componente CSV for the 3D viewer's
@@ -509,7 +599,8 @@ class BalzarApp:
         meaningless; only the payload/QR (format-agnostic) and the new
         3D viewer button apply."""
         if job.is_3d:
-            self.btn_payload.configure(state="normal", text="Salva payload (.b3d)")
+            payload_text = "Salva bundle (.bzx)" if job.is_bundle else "Salva payload (.b3d)"
+            self.btn_payload.configure(state="normal", text=payload_text)
             self.btn_program.configure(state="disabled")
             self.btn_export.configure(state="disabled")
             self.btn_svg.configure(state="disabled")

@@ -483,7 +483,17 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   aprire il componente giusto con zero digitazione — vedi CLAUDE.md
   §9.15 per i meccanismi di automazione proposti su questa base
   (endpoint locale, integrazione PLC/SCADA, QR fisico sul quadro
-  allarmi).
+  allarmi). Puoi anche **caricare la tabella allarmi insieme al file
+  3D** (campo file prima della dropzone, sia qui sia nella GUI
+  desktop): i due vengono impacchettati in un bundle `BZX1`
+  (`balzar/bundle.py`) che viaggia in un solo QR/file e apre il viewer
+  con la ricerca già pronta, zero upload separati — il bottone "genera
+  QR" funziona senza modifiche, perché il livello QR tratta qualunque
+  payload (bundle incluso) come byte opachi. Vedi CLAUDE.md §9.16 per
+  il formato e una scoperta onesta: per un assieme piccolo il bundle
+  *pesa di più* della somma delle parti separate (il payload 3D è già
+  compresso, comprimerlo di nuovo non aiuta) — il vantaggio è la
+  convenienza di un solo scan, non la dimensione.
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
@@ -547,11 +557,14 @@ balzar/
                   cliccabile/distinguibile via materialFromPoint)
   viewer3d.py     GLB + BOM -> pagina locale (model-viewer) aperta nel browser di
                   sistema (solo GUI desktop); clicca una parte per evidenziarla/
-                  isolarla, click sulla BOM per selezionare tutte le istanze di un tipo
+                  isolarla, click sulla BOM per selezionare tutte le istanze di un tipo;
+                  barra di ricerca per nome/codice allarme, apre anche bundle BZX1
+  bundle.py       formato BZX1: più documenti tipizzati (3D + CSV) in un solo blob,
+                  transita nel livello QR/chunking senza modifiche (vedi CLAUDE.md §9.16)
   webapi.py       logica dell'API web con profili di limiti
   cli.py          render / encode / encode-image / encode-vector / encode-3d /
                   encode-video / encode-sequence / explode-vector / render-3d /
-                  decode / info / chunks / scan / assemble / gui
+                  encode-bundle / decode / info / chunks / scan / assemble / gui
 balzar-app.py     entry point per PyInstaller
 examples/         programmi dimostrativi (.bzr) + sorgenti vettoriali (.svg/.dxf)
 tests/            determinismo, round-trip, op, espansione, encoder, video,

@@ -332,7 +332,7 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass  # the desktop app has no console for this to usefully go to
 
 
-def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
+def parse_alarm_csv_text(text: str) -> list[tuple[str, str]]:
     """Two-column CSV (codice_allarme,nome_componente) -> [(code, name), ...].
     One alarm code can appear on several rows (several affected
     components); an optional header row is detected and skipped by the
@@ -341,17 +341,26 @@ def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
     `csv` module here (unlike the client-side JS parser, which is a
     plain split() -- a real CSV reader is cheap in Python and handles
     quoted commas correctly, so no need to declare the same limitation
-    twice)."""
+    twice). Takes text directly (not a path) so it works equally on a
+    CSV loaded from disk or one unpacked from a bundle (balzar/bundle.py)
+    in memory."""
+    import io as _io
+
     rows: list[tuple[str, str]] = []
-    with open(path, newline="", encoding="utf-8") as fh:
-        for i, cells in enumerate(csv.reader(fh)):
-            if len(cells) < 2 or not cells[0].strip():
-                continue
-            code = cells[0].strip()
-            if i == 0 and any(w in code.lower() for w in ("code", "codice", "allarme", "alarm")):
-                continue
-            rows.append((code, ",".join(cells[1:]).strip()))
+    for i, cells in enumerate(csv.reader(_io.StringIO(text))):
+        if len(cells) < 2 or not cells[0].strip():
+            continue
+        code = cells[0].strip()
+        if i == 0 and any(w in code.lower() for w in ("code", "codice", "allarme", "alarm")):
+            continue
+        rows.append((code, ",".join(cells[1:]).strip()))
     return rows
+
+
+def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
+    """parse_alarm_csv_text, reading from a file path."""
+    with open(path, encoding="utf-8") as fh:
+        return parse_alarm_csv_text(fh.read())
 
 
 def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
@@ -392,3 +401,46 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
     thread.start()
 
     webbrowser.open(f"http://127.0.0.1:{port}/viewer.html")
+
+
+def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
+    """Same as open_glb_in_browser, but the input is a multi-document
+    bundle (balzar/bundle.py) instead of a bare GLB -- unpacks the "3d"
+    item into the model.glb + BOM this module already knows how to show,
+    and any "csv" item(s) straight into alarm_rows with no manual upload
+    step in the browser: one scan, everything already wired.
+
+    Deliberately local imports (scene3d.py/gltf.py, not used by the rest
+    of this module) so the plain GLB+BOM path above stays exactly as
+    decoupled from the 3D encoding stack as before -- this function is
+    the only place in viewer3d.py that needs to know a bundle exists."""
+    from .bundle import KIND_3D, KIND_CSV, BundleError, decode_bundle
+    from .gltf import scene3d_to_glb
+    from .scene3d import Scene3DError, decode_payload as decode_scene, generate_bom
+
+    try:
+        items = decode_bundle(bundle_data)
+    except BundleError as exc:
+        raise ValueError(f"bundle non valido: {exc}") from None
+
+    three_d_items = [it for it in items if it.kind == KIND_3D]
+    if not three_d_items:
+        kinds = ", ".join(sorted({it.kind for it in items})) or "nessuno"
+        raise ValueError(f"il bundle non contiene un assieme 3D da visualizzare (trovato: {kinds})")
+    # a bundle with more than one 3D item is valid (the format doesn't
+    # forbid it) but this viewer shows exactly one model -- the first one,
+    # not silently merged or dropped without saying so
+    try:
+        scene = decode_scene(three_d_items[0].data)
+    except Scene3DError as exc:
+        raise ValueError(f"assieme 3D nel bundle non valido: {exc}") from None
+
+    glb = scene3d_to_glb(scene)
+    bom = generate_bom(scene)
+    bom_lines = [(e.name, e.count) for e in bom]
+
+    alarm_rows: list[tuple[str, str]] = []
+    for csv_item in (it for it in items if it.kind == KIND_CSV):
+        alarm_rows.extend(parse_alarm_csv_text(csv_item.data.decode("utf-8")))
+
+    open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None)
