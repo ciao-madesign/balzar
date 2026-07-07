@@ -215,7 +215,7 @@ function setupQrButton(prefix, getPayloadBase64) {
           imgEl.src = "data:image/gif;base64," + json.qr_gif_base64;
           imgEl.hidden = false;
           lastDownload = { bytes: base64ToBytes(json.qr_gif_base64), filename: "payload_qr.gif", mime: "image/gif" };
-          noteEl.textContent = `Sequenza di ${json.n_frames} frame (${json.grid_dim}×${json.grid_dim} QR ciascuno) in una GIF animata — riassembla ogni frame con la classe LiveScanner di balzar/qr.py (non ancora un comando CLI dedicato), in qualsiasi ordine e con ripetizioni tollerate.`;
+          noteEl.textContent = `Sequenza di ${json.n_frames} frame (${json.grid_dim}×${json.grid_dim} QR ciascuno) in una GIF animata — riassembla ogni frame con la classe LiveScanner di balzar/qr.py (non ancora un comando CLI dedicato), in qualsiasi ordine e con ripetizioni tollerate. Tempo di lettura stimato: ${json.estimated_scan_seconds_low}–${json.estimated_scan_seconds_high}s (stima, non una garanzia — dipende da fotocamera/luce/operatore).`;
         }
       } else { // pages
         if (json.pages_omitted) {
@@ -237,7 +237,7 @@ function setupQrButton(prefix, getPayloadBase64) {
             item.appendChild(pageDlBtn);
             pagesEl.appendChild(item);
           });
-          noteEl.textContent = `Sequenza di ${json.n_frames} pagine (${json.grid_dim}×${json.grid_dim} QR ciascuna) — stampa/fotografa una pagina alla volta, in qualsiasi ordine, poi riassembla con la classe LiveScanner di balzar/qr.py (non ancora un comando CLI dedicato).`;
+          noteEl.textContent = `Sequenza di ${json.n_frames} pagine (${json.grid_dim}×${json.grid_dim} QR ciascuna) — stampa/fotografa una pagina alla volta, in qualsiasi ordine, poi riassembla con la classe LiveScanner di balzar/qr.py (non ancora un comando CLI dedicato). Tempo di lettura stimato: ${json.estimated_scan_seconds_low}–${json.estimated_scan_seconds_high}s (stima, non una garanzia — dipende da fotocamera/luce/operatore).`;
         }
       }
       resultEl.hidden = false;
