@@ -846,12 +846,19 @@ const threedDlGlb = document.getElementById("threed-dl-glb");
 const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
 const threedResetBtn = document.getElementById("threed-reset-btn");
 const threedExportBtn = document.getElementById("threed-export-btn");
+const threedSearchInput = document.getElementById("threed-search-input");
+const threedSearchBtn = document.getElementById("threed-search-btn");
+const threedSearchNote = document.getElementById("threed-search-note");
+const threedAlarmCsvInput = document.getElementById("threed-alarm-csv-input");
 
 let lastThreedResult = null;
 let lastThreedGlbUrl = null;
 let threedOriginalColors = null; // Map<Material, [r,g,b,a]>, cached on model load
-let threedSelectedName = null;
-let threedSelectedCount = null;
+let threedSelectedNames = [];    // names currently highlighted -- 0, 1 or many
+let threedSelectedCount = null; // BOM count, only meaningful for exactly 1 name
+// alarm code (trimmed, uppercased) -> [component name, ...]; an alarm can
+// affect several components at once, hence an array of names per code
+let threedAlarmMap = new Map();
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -867,6 +874,13 @@ function threedCacheColors() {
   threedViewer.model.materials.forEach(m => {
     threedOriginalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
   });
+  // automation hook: a page that deep-links here with ?q=<code> after a
+  // model is loaded runs the search with no typing -- see CLAUDE.md for
+  // why this is only a convenience here (the web demo always needs a
+  // fresh upload first, unlike the desktop viewer which can bake an
+  // alarm table into a page that gets reopened later with no upload).
+  const q = new URLSearchParams(location.search).get("q");
+  if (q) { threedSearchInput.value = q; threedRunSearch(q); }
 }
 
 function threedResetSelection() {
@@ -874,41 +888,84 @@ function threedResetSelection() {
   threedViewer.model.materials.forEach(m => {
     m.pbrMetallicRoughness.setBaseColorFactor(threedOriginalColors.get(m));
   });
-  threedSetBomSelection(null);
+  threedSetSelection([]);
 }
 
-function threedSelectMaterial(material) {
+function threedHighlightNames(names) {
   if (!threedOriginalColors) return;
+  const nameSet = new Set(names);
   threedViewer.model.materials.forEach(m => {
     const orig = threedOriginalColors.get(m);
-    if (m === material) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
+    if (nameSet.has(m.name)) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
     else m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], THREED_DIM_ALPHA]);
   });
-  threedSetBomSelection(material.name);
+  threedSetSelection(names);
 }
 
-function threedSelectByName(name) {
-  if (!threedOriginalColors) return;
-  threedViewer.model.materials.forEach(m => {
-    const orig = threedOriginalColors.get(m);
-    if (m.name === name) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
-    else m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], THREED_DIM_ALPHA]);
-  });
-  threedSetBomSelection(name);
-}
+function threedSelectMaterial(material) { threedHighlightNames([material.name]); }
+function threedSelectByName(name) { threedHighlightNames([name]); }
 
-function threedSetBomSelection(name) {
+function threedSetSelection(names) {
+  const nameSet = new Set(names);
   threedBomTable.querySelectorAll("tr.part").forEach(row => {
-    row.classList.toggle("selected", name !== null && row.dataset.partName === name);
+    row.classList.toggle("selected", nameSet.has(row.dataset.partName));
   });
-  threedSelectedName = name;
-  if (name !== null) {
-    const row = threedBomTable.querySelector(`tr.part[data-part-name="${CSS.escape(name)}"]`);
+  threedSelectedNames = names;
+  if (names.length === 1) {
+    const row = threedBomTable.querySelector(`tr.part[data-part-name="${CSS.escape(names[0])}"]`);
     threedSelectedCount = row ? row.dataset.partCount : null;
   } else {
     threedSelectedCount = null;
   }
-  threedExportBtn.disabled = (threedSelectedName === null);
+  // a part sheet is a picture of ONE part -- stays disabled for zero or
+  // multiple matches (an alarm affecting several components has no
+  // single "the" part to print a sheet for)
+  threedExportBtn.disabled = (threedSelectedNames.length !== 1);
+}
+
+function threedParseCsvText(text) {
+  // Simple two-column CSV (codice_allarme,nome_componente), no quoted-
+  // comma support -- a full RFC4180 parser is overkill for a two-field
+  // lookup table, declared honestly rather than silently mishandling an
+  // edge case nobody asked for.
+  const map = new Map();
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!line.trim()) return;
+    const parts = line.split(",");
+    if (parts.length < 2) return;
+    const code = parts[0].trim();
+    if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
+    const name = parts.slice(1).join(",").trim();
+    const key = code.toUpperCase();
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(name);
+  });
+  return map;
+}
+
+function threedRunSearch(query) {
+  query = (query || "").trim();
+  if (!query) { threedResetSelection(); return; }
+  const key = query.toUpperCase();
+  if (threedAlarmMap.has(key)) {
+    const names = threedAlarmMap.get(key);
+    threedHighlightNames(names);
+    threedSearchNote.textContent =
+      `Allarme ${query}: ${names.length} componente/i evidenziato/i (${names.join(", ")}).`;
+    return;
+  }
+  const allNames = Array.from(threedBomTable.querySelectorAll("tr.part"))
+    .map(row => row.dataset.partName);
+  const qLower = query.toLowerCase();
+  const exact = allNames.filter(n => n.toLowerCase() === qLower);
+  const matches = exact.length ? exact : allNames.filter(n => n.toLowerCase().includes(qLower));
+  if (matches.length) {
+    threedHighlightNames(matches);
+    threedSearchNote.textContent = `${matches.length} componente/i trovato/i per "${query}".`;
+  } else {
+    threedResetSelection();
+    threedSearchNote.textContent = `Nessun componente o codice allarme trovato per "${query}".`;
+  }
 }
 
 async function threedExportPartSheet() {
@@ -920,7 +977,8 @@ async function threedExportPartSheet() {
   // timing race (no amount of waiting or retrying fixed it). Losing the
   // idealAspect crop is a cosmetic trade for a capture that actually
   // contains the model.
-  if (!threedSelectedName) return;
+  if (threedSelectedNames.length !== 1) return;
+  const selectedName = threedSelectedNames[0];
   const dataUrl = threedViewer.toDataURL("image/png");
   const img = new Image();
   await new Promise(resolve => { img.onload = resolve; img.src = dataUrl; });
@@ -935,12 +993,12 @@ async function threedExportPartSheet() {
   ctx.drawImage(img, 0, headerH);
   ctx.fillStyle = "#000000";
   ctx.font = "bold 22px sans-serif";
-  ctx.fillText(threedSelectedName, 12, 28);
+  ctx.fillText(selectedName, 12, 28);
   ctx.font = "16px sans-serif";
   ctx.fillText(`Quantita' nell'assieme: ${threedSelectedCount ?? "?"}`, 12, 50);
 
   canvas.toBlob(sheetBlob => {
-    downloadBlob(sheetBlob, `scheda_${threedSelectedName.replace(/[^a-z0-9]+/gi, "_")}.png`, "image/png");
+    downloadBlob(sheetBlob, `scheda_${selectedName.replace(/[^a-z0-9]+/gi, "_")}.png`, "image/png");
   }, "image/png");
 }
 
@@ -951,6 +1009,20 @@ threedViewer.addEventListener("click", (ev) => {
 });
 threedResetBtn.addEventListener("click", threedResetSelection);
 threedExportBtn.addEventListener("click", threedExportPartSheet);
+threedSearchBtn.addEventListener("click", () => threedRunSearch(threedSearchInput.value));
+threedSearchInput.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") threedRunSearch(threedSearchInput.value);
+});
+threedAlarmCsvInput.addEventListener("change", () => {
+  const file = threedAlarmCsvInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    threedAlarmMap = threedParseCsvText(String(reader.result));
+    threedSearchNote.textContent = `Tabella allarmi caricata: ${threedAlarmMap.size} codici allarme.`;
+  };
+  reader.readAsText(file);
+});
 
 threedBrowseBtn.addEventListener("click", () => threedFileInput.click());
 threedFileInput.addEventListener("change", () => {
@@ -1049,9 +1121,10 @@ function renderThreedResult(r) {
   });
 
   threedOriginalColors = null; // new model: cached again on its own 'load' event
-  threedSelectedName = null;
+  threedSelectedNames = [];
   threedSelectedCount = null;
   threedExportBtn.disabled = true;
+  threedSearchNote.textContent = "";
 }
 
 threedDlPayload.addEventListener("click", () => {

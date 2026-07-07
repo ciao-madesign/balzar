@@ -469,7 +469,21 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   quantità nell'assieme — un'immagine e un codice, pensata per un
   tecnico che ha trovato un pezzo difettoso e deve richiedere il
   ricambio (vedi CLAUDE.md §9.14 per la scelta API dietro la cattura).
-  Stessa funzione nella GUI desktop (`balzar/viewer3d.py`).
+  Stessa funzione nella GUI desktop (`balzar/viewer3d.py`). Una **barra
+  di ricerca** cerca per nome componente o, se carichi una tabella
+  allarmi (CSV a due colonne `codice_allarme,nome_componente`), per
+  codice allarme — un operatore che legge un codice sulla macchina lo
+  digita qui e vede subito il componente coinvolto, senza conoscerne
+  il nome CAD (un allarme può coinvolgere più componenti: tutti si
+  evidenziano insieme, "esporta scheda ricambio" resta disabilitato in
+  quel caso — una scheda è la foto di una parte sola). La ricerca
+  supporta anche `?q=<codice>` nell'URL: sulla GUI desktop, dove la
+  tabella allarmi può essere incorporata alla generazione della pagina
+  (`open_glb_in_browser(..., alarm_rows=...)`), questo permette di
+  aprire il componente giusto con zero digitazione — vedi CLAUDE.md
+  §9.15 per i meccanismi di automazione proposti su questa base
+  (endpoint locale, integrazione PLC/SCADA, QR fisico sul quadro
+  allarmi).
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il

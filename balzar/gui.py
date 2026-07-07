@@ -73,6 +73,11 @@ class BalzarApp:
         self._frame_count = 1
         self._playing = True
         self._photo_refs: list = []  # keep PhotoImage references alive
+        # alarm code -> component name table for the 3D viewer's search bar
+        # (balzar/viewer3d.py); independent of which job is loaded -- a
+        # technician can load this once and reuse it across several 3D
+        # files, so it lives on the app, not on Job.
+        self.alarm_rows: list[tuple[str, str]] = []
 
         self._build_ui()
         root.after(100, self._poll_queue)
@@ -154,6 +159,12 @@ class BalzarApp:
         self.btn_view3d = ttk.Button(btns, text="Visualizza in 3D (browser)",
                                      command=self.view_3d, state="disabled")
         self.btn_view3d.pack(fill="x", pady=2)
+        # not tied to job state: the alarm table is independent of which
+        # 3D file is open, can be loaded before or after opening one, and
+        # is reused across files until replaced by loading another CSV
+        self.btn_load_alarms = ttk.Button(
+            btns, text="Carica tabella allarmi (CSV)", command=self.load_alarm_csv)
+        self.btn_load_alarms.pack(fill="x", pady=2)
 
     # ------------------------------------------------------------- actions
 
@@ -362,8 +373,34 @@ class BalzarApp:
 
         from .viewer3d import open_glb_in_browser
         work_dir = tempfile.mkdtemp(prefix="balzar_view3d_")
-        open_glb_in_browser(job.glb, job.bom_lines, work_dir)
+        open_glb_in_browser(job.glb, job.bom_lines, work_dir, alarm_rows=self.alarm_rows or None)
         self.status.set("Aperto nel browser predefinito")
+
+    def load_alarm_csv(self) -> None:
+        """Load a codice_allarme,nome_componente CSV for the 3D viewer's
+        search bar (balzar/viewer3d.py) -- baked into the page the next
+        time 'Visualizza in 3D' opens one, so the operator can search by
+        alarm code with no manual upload step in the browser itself."""
+        path = filedialog.askopenfilename(
+            title="Carica tabella allarmi (codice_allarme,nome_componente)",
+            filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        from .viewer3d import parse_alarm_csv
+        try:
+            rows = parse_alarm_csv(path)
+        except OSError as exc:
+            messagebox.showerror("balzar", f"Impossibile leggere {os.path.basename(path)}:\n{exc}")
+            return
+        if not rows:
+            messagebox.showwarning(
+                "balzar", f"Nessuna riga valida trovata in {os.path.basename(path)}.\n"
+                "Formato atteso: codice_allarme,nome_componente (una riga per coppia).")
+            return
+        self.alarm_rows = rows
+        n_codes = len({code for code, _ in rows})
+        self.status.set(f"Tabella allarmi caricata: {n_codes} codici, {len(rows)} righe "
+                        f"({os.path.basename(path)})")
 
     def save_program(self) -> None:
         if not self.job:

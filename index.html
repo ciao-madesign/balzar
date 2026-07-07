@@ -323,13 +323,35 @@
                  style="position:absolute;top:10px;left:10px">Mostra tutto</button>
           <button id="threed-export-btn" type="button" disabled
                  style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
+          <p id="threed-search-note" style="position:absolute;bottom:52px;left:10px;right:10px;
+             margin:0;color:#eee;font-size:12px;background:rgba(20,20,20,0.7);padding:4px 8px;
+             border-radius:4px;max-height:60px;overflow-y:auto"></p>
+          <div style="position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:8px;
+               align-items:center;flex-wrap:wrap">
+            <input id="threed-search-input" type="text"
+                   placeholder="Cerca componente o codice allarme…"
+                   style="flex:1;min-width:200px;padding:6px 10px;border-radius:6px;
+                          border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
+                          font:inherit">
+            <button id="threed-search-btn" type="button">Cerca</button>
+            <label id="threed-alarm-csv-label" for="threed-alarm-csv-input"
+                   style="padding:6px 10px;border-radius:6px;border:1px solid #555;
+                          background:rgba(20,20,20,0.85);color:#eee;font-size:13px;cursor:pointer">
+              Carica tabella allarmi (CSV)
+              <input id="threed-alarm-csv-input" type="file" accept=".csv,text/csv" hidden>
+            </label>
+          </div>
         </div>
         <p class="honesty">Clicca una parte per evidenziarla e attenuare le altre (usa
           <code>materialFromPoint</code> di model-viewer — ogni posizionamento ha un proprio
           materiale, non condiviso, proprio per renderlo distinguibile). Clicca una riga della
           distinta base per evidenziare tutte le istanze di quel tipo di parte. Con una parte
           selezionata, "esporta scheda ricambio" scarica un'immagine con la vista isolata più
-          nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.</p>
+          nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.
+          La barra di ricerca cerca per nome componente o, se carichi una tabella allarmi
+          (CSV a due colonne: codice_allarme,nome_componente), per codice allarme — utile per
+          un operatore che legge un codice sulla macchina e vuole vedere subito il componente
+          coinvolto senza conoscerne il nome CAD.</p>
 
         <table class="stats" id="threed-stats-table"></table>
 

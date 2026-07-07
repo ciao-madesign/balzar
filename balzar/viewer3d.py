@@ -34,12 +34,30 @@ and BOM count on a plain <canvas> and downloaded as one PNG -- for a
 technician who's found a defective part and wants a one-image reference
 to request the replacement, the simplest version of that: a picture and
 a code, not a full report generator.
+
+Search bar + alarm table (maintenance flow): typing a component name
+reuses the exact same highlight path as clicking a BOM row (now
+generalized to a *set* of names, not one, since one alarm can affect
+several components at once). An optional two-column CSV
+(codice_allarme,nome_componente, see parse_alarm_csv) maps an alarm
+code to the component name(s) it affects -- an operator reads a code
+off the machine, types it here, and sees exactly which part lit up
+without knowing the CAD component name in advance. The mapping can be
+uploaded by hand in the browser (client-side, no server round-trip) or
+baked into the page at generation time via open_glb_in_browser's
+alarm_rows parameter, which is what makes automation possible: a page
+generated once with the current alarm table embedded can be re-opened
+with a `?q=<code>` URL parameter (from a script, an HMI button, a QR
+code) and the highlight happens with zero typing -- see CLAUDE.md for
+the proposed automation mechanisms this enables.
 """
 
 from __future__ import annotations
 
+import csv
 import html
 import http.server
+import json
 import os
 import shutil
 import threading
@@ -74,6 +92,17 @@ model-viewer{{width:100%;height:100%}}
 #export-btn{{left:120px}}
 #reset-btn:hover,#export-btn:hover{{border-color:#c77a2e}}
 #export-btn:disabled{{opacity:0.4;cursor:not-allowed}}
+#search-bar{{position:absolute;bottom:12px;left:12px;right:12px;display:flex;gap:8px;
+            align-items:center;flex-wrap:wrap}}
+#search-input{{flex:1;min-width:200px;padding:6px 10px;border-radius:6px;border:1px solid #555;
+              background:rgba(20,20,20,0.85);color:#eee;font:inherit}}
+#search-btn,#alarm-csv-label{{padding:6px 10px;border-radius:6px;border:1px solid #555;
+                             background:rgba(20,20,20,0.85);color:#eee;font:inherit;
+                             cursor:pointer;font-size:13px}}
+#search-btn:hover,#alarm-csv-label:hover{{border-color:#c77a2e}}
+#search-note{{position:absolute;bottom:52px;left:12px;right:12px;margin:0;color:#eee;
+             font-size:12px;background:rgba(20,20,20,0.7);padding:4px 8px;border-radius:4px;
+             max-height:60px;overflow-y:auto}}
 </style>
 </head>
 <body>
@@ -82,7 +111,17 @@ model-viewer{{width:100%;height:100%}}
 <button id="reset-btn" type="button">Mostra tutto</button>
 <button id="export-btn" type="button" disabled>Esporta scheda ricambio</button>
 {bom_html}
-<script>{select_js}</script>
+<p id="search-note"></p>
+<div id="search-bar">
+  <input id="search-input" type="text" placeholder="Cerca componente o codice allarme…">
+  <button id="search-btn" type="button">Cerca</button>
+  <label id="alarm-csv-label" for="alarm-csv-input">Carica tabella allarmi (CSV)</label>
+  <input id="alarm-csv-input" type="file" accept=".csv,text/csv" style="display:none">
+</div>
+<script>
+window.__BALZAR_ALARM_ROWS__ = {alarm_rows_json};
+{select_js}
+</script>
 </body>
 </html>
 """
@@ -95,61 +134,121 @@ _SELECT_JS = """
 (function(){
   var mv = document.getElementById('mv');
   var exportBtn = document.getElementById('export-btn');
+  var searchInput = document.getElementById('search-input');
+  var searchBtn = document.getElementById('search-btn');
+  var searchNote = document.getElementById('search-note');
+  var alarmCsvInput = document.getElementById('alarm-csv-input');
   var HIGHLIGHT = [1.0, 0.55, 0.05, 1.0];
   var DIM_ALPHA = 0.12;
   var originalColors = null;
-  var selectedName = null;
-  var selectedCount = null;
+  var selectedNames = [];   // names currently highlighted -- 0, 1 or many
+  var selectedCount = null; // BOM count, only meaningful for exactly 1 name
+  // alarm code (trimmed, uppercased) -> [component name, ...]. A code can
+  // map to several components (one alarm, several affected parts).
+  var alarmMap = new Map();
+  var allPartNames = Array.prototype.map.call(
+      document.querySelectorAll('#bom tr.part'), function(row){ return row.dataset.partName; });
+
+  function loadAlarmRows(rows){
+    (rows || []).forEach(function(pair){
+      var key = String(pair[0]).trim().toUpperCase();
+      if (!alarmMap.has(key)) alarmMap.set(key, []);
+      alarmMap.get(key).push(pair[1]);
+    });
+  }
 
   function cacheColors(){
     originalColors = new Map();
     mv.model.materials.forEach(function(m){
       originalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
     });
+    loadAlarmRows(window.__BALZAR_ALARM_ROWS__);
+    var q = new URLSearchParams(location.search).get('q');
+    if (q){ searchInput.value = q; runSearch(q); }
   }
   function resetAll(){
     if (!originalColors) return;
     mv.model.materials.forEach(function(m){
       m.pbrMetallicRoughness.setBaseColorFactor(originalColors.get(m));
     });
-    setBomSelection(null);
+    setSelection([]);
   }
-  function selectMaterial(material){
+  function highlightNames(names){
     if (!originalColors) return;
+    var nameSet = new Set(names);
     mv.model.materials.forEach(function(m){
       var orig = originalColors.get(m);
-      if (m === material){
+      if (nameSet.has(m.name)){
         m.pbrMetallicRoughness.setBaseColorFactor(HIGHLIGHT);
       } else {
         m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], DIM_ALPHA]);
       }
     });
-    setBomSelection(material.name);
+    setSelection(names);
   }
-  function selectByName(name){
-    if (!originalColors) return;
-    mv.model.materials.forEach(function(m){
-      var orig = originalColors.get(m);
-      if (m.name === name){
-        m.pbrMetallicRoughness.setBaseColorFactor(HIGHLIGHT);
-      } else {
-        m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], DIM_ALPHA]);
-      }
-    });
-    setBomSelection(name);
-  }
-  function setBomSelection(name){
+  function selectMaterial(material){ highlightNames([material.name]); }
+  function selectByName(name){ highlightNames([name]); }
+  function setSelection(names){
+    var nameSet = new Set(names);
     document.querySelectorAll('#bom tr.part').forEach(function(row){
-      row.classList.toggle('selected', name !== null && row.dataset.partName === name);
+      row.classList.toggle('selected', nameSet.has(row.dataset.partName));
     });
-    selectedName = name;
-    if (name !== null){
-      var row = document.querySelector('#bom tr.part[data-part-name="' + CSS.escape(name) + '"]');
+    selectedNames = names;
+    if (names.length === 1){
+      var row = document.querySelector('#bom tr.part[data-part-name="' + CSS.escape(names[0]) + '"]');
       selectedCount = row ? row.dataset.partCount : null;
     } else {
       selectedCount = null;
     }
-    exportBtn.disabled = (selectedName === null);
+    // a part sheet is a picture of ONE part -- export stays disabled for
+    // zero or multiple matches (an alarm affecting several components has
+    // no single "the" part to print a sheet for).
+    exportBtn.disabled = (selectedNames.length !== 1);
+  }
+
+  function parseAlarmCsv(text){
+    // Simple two-column CSV (codice_allarme,nome_componente), no quoted-
+    // comma support -- a full RFC4180 parser is overkill for a two-field
+    // lookup table, declared honestly rather than silently mishandling
+    // an edge case nobody asked for.
+    var map = new Map();
+    text.split(/\\r?\\n/).forEach(function(line, i){
+      if (!line.trim()) return;
+      var parts = line.split(',');
+      if (parts.length < 2) return;
+      var code = parts[0].trim();
+      if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
+      var name = parts.slice(1).join(',').trim();
+      var key = code.toUpperCase();
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(name);
+    });
+    return map;
+  }
+
+  function runSearch(query){
+    query = (query || '').trim();
+    if (!query){ resetAll(); return; }
+    var key = query.toUpperCase();
+    if (alarmMap.has(key)){
+      var names = alarmMap.get(key);
+      highlightNames(names);
+      searchNote.textContent = 'Allarme ' + query + ': ' + names.length +
+        ' componente/i evidenziato/i (' + names.join(', ') + ').';
+      return;
+    }
+    var qLower = query.toLowerCase();
+    var exact = allPartNames.filter(function(n){ return n.toLowerCase() === qLower; });
+    var matches = exact.length ? exact : allPartNames.filter(function(n){
+      return n.toLowerCase().indexOf(qLower) !== -1;
+    });
+    if (matches.length){
+      highlightNames(matches);
+      searchNote.textContent = matches.length + ' componente/i trovato/i per "' + query + '".';
+    } else {
+      resetAll();
+      searchNote.textContent = 'Nessun componente o codice allarme trovato per "' + query + '".';
+    }
   }
 
   async function exportPartSheet(){
@@ -161,7 +260,8 @@ _SELECT_JS = """
     // every time, so not a timing race: no amount of waiting or retrying
     // fixed it). Losing the idealAspect crop is a cosmetic trade for a
     // capture that actually contains the model.
-    if (!selectedName) return;
+    if (selectedNames.length !== 1) return;
+    var selectedName = selectedNames[0];
     var dataUrl = mv.toDataURL('image/png');
     var img = new Image();
     await new Promise(function(resolve){ img.onload = resolve; img.src = dataUrl; });
@@ -198,6 +298,20 @@ _SELECT_JS = """
   document.querySelectorAll('#bom tr.part').forEach(function(row){
     row.addEventListener('click', function(){ selectByName(row.dataset.partName); });
   });
+  searchBtn.addEventListener('click', function(){ runSearch(searchInput.value); });
+  searchInput.addEventListener('keydown', function(ev){
+    if (ev.key === 'Enter') runSearch(searchInput.value);
+  });
+  alarmCsvInput.addEventListener('change', function(){
+    var file = alarmCsvInput.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(){
+      alarmMap = parseAlarmCsv(String(reader.result));
+      searchNote.textContent = 'Tabella allarmi caricata: ' + alarmMap.size + ' codici allarme.';
+    };
+    reader.readAsText(file);
+  });
 })();
 """
 
@@ -218,18 +332,56 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass  # the desktop app has no console for this to usefully go to
 
 
+def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
+    """Two-column CSV (codice_allarme,nome_componente) -> [(code, name), ...].
+    One alarm code can appear on several rows (several affected
+    components); an optional header row is detected and skipped by the
+    same heuristic as the browser-side parser (first cell mentions
+    "code"/"codice"/"allarme"/"alarm"), not required. Uses the stdlib
+    `csv` module here (unlike the client-side JS parser, which is a
+    plain split() -- a real CSV reader is cheap in Python and handles
+    quoted commas correctly, so no need to declare the same limitation
+    twice)."""
+    rows: list[tuple[str, str]] = []
+    with open(path, newline="", encoding="utf-8") as fh:
+        for i, cells in enumerate(csv.reader(fh)):
+            if len(cells) < 2 or not cells[0].strip():
+                continue
+            code = cells[0].strip()
+            if i == 0 and any(w in code.lower() for w in ("code", "codice", "allarme", "alarm")):
+                continue
+            rows.append((code, ",".join(cells[1:]).strip()))
+    return rows
+
+
 def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
-                        work_dir: str) -> None:
+                        work_dir: str,
+                        alarm_rows: list[tuple[str, str]] | None = None) -> None:
     """Write model.glb + viewer.html + a copy of model-viewer.min.js into
     `work_dir`, serve it on an ephemeral localhost port, open the default
     browser. `work_dir` is the caller's responsibility (a TemporaryDirectory
     the caller keeps alive for as long as the viewer might be open — this
     function does not clean up after itself, since the HTTP server keeps
-    serving from it for the life of the background thread)."""
+    serving from it for the life of the background thread).
+
+    `alarm_rows` (optional, from parse_alarm_csv or built by hand) gets
+    baked into the page as a JS literal so the alarm-code search works
+    immediately on load, with no manual CSV upload step -- the piece that
+    makes automation possible: a page generated once can be re-opened
+    with `?q=<code>` (from a script, an HMI button, a QR code) and the
+    matching component highlights with zero typing."""
     with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
         fh.write(glb)
+    # </script> inside a component/alarm name would otherwise close the
+    # tag early -- escape the slash so the JSON stays inert text to the
+    # HTML parser, same mitigation as embedding any untrusted JSON in a
+    # <script> block.
+    alarm_rows_json = json.dumps(alarm_rows or []).replace("</", "<\\/")
     with open(os.path.join(work_dir, "viewer.html"), "w", encoding="utf-8") as fh:
-        fh.write(_PAGE_TEMPLATE.format(bom_html=_bom_html(bom_lines), select_js=_SELECT_JS))
+        fh.write(_PAGE_TEMPLATE.format(
+            bom_html=_bom_html(bom_lines),
+            alarm_rows_json=alarm_rows_json,
+            select_js=_SELECT_JS))
     if os.path.exists(_MODEL_VIEWER_JS):
         shutil.copy(_MODEL_VIEWER_JS, os.path.join(work_dir, "model-viewer.min.js"))
 

@@ -866,14 +866,15 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-216 test, tutti verdi (`python3 -m unittest discover -s tests`):
+230 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
 `test_video.py`, `test_svg.py`, `test_vectorio.py`, `test_sequence.py`,
 `test_explode.py`, `test_webapi.py`, `test_png.py`, `test_cli.py`,
 `test_scene3d.py` (parser 3DXML, formato binario `BZM1`, export glTF —
-vedi §9.5). Copertura: round-trip
+vedi §9.5), `test_viewer3d.py` (`parse_alarm_csv` per la barra di
+ricerca/tabella allarmi del viewer 3D — vedi §9.15). Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -2192,10 +2193,115 @@ stesso principio già seguito per il resto della UI 3D in §9.11: verifica
 Playwright manuale in sessione, non nella suite automatica). Suite
 Python invariata a 216 test, tutti verdi.
 
+### 9.15 Ricerca componente + tabella allarmi (aiuto alla manutenzione)
+
+Proposta diretta di sessione, seguito naturale del click-to-select
+(§9.11): un operatore che legge un codice di allarme sulla macchina
+oggi deve sapere già come si chiama il componente CAD coinvolto per
+poterlo cliccare/cercare nella BOM. Aggiunta una barra di ricerca al
+viewer 3D (desktop e demo web) che chiude quel salto: digitando un
+nome componente **o** un codice di allarme (se è stata caricata una
+tabella di corrispondenza), il componente giusto si isola ed evidenzia
+esattamente come un click diretto — stessa logica, un ingresso in più.
+
+**Meccanismo, riusa quanto già esisteva invece di duplicarlo**: il
+click su una riga BOM isolava già un nome; generalizzata quella logica
+da "un nome" a "un insieme di nomi" (`highlightNames(names[])` in
+`viewer3d.py`, `threedHighlightNames` in `app.js`) — un singolo
+click/ricerca-per-nome passa un insieme con un solo elemento, un
+allarme che coinvolge più parti ne passa diversi, stesso codice in
+entrambi i casi. Il pulsante "Esporta scheda ricambio" (§9.14) resta
+disabilitato quando la selezione contiene zero o più di un nome: una
+scheda ricambio è la foto di UNA parte, un allarme con più parti
+coinvolte non ha "la" parte su cui stampare una scheda.
+
+**Tabella allarmi**: CSV a due colonne (`codice_allarme,nome_componente`,
+un allarme può comparire su più righe se coinvolge più parti).
+Caricabile in due modi, entrambi supportati, per due esigenze diverse:
+- **upload manuale nel browser** (client-side, nessun round-trip
+  server — un parser CSV plain-text scritto a mano in JS, dichiarato
+  onestamente senza supporto per virgole tra virgolette: una tabella a
+  due campi non giustifica un parser RFC4180 completo) — comodo per
+  provare subito una tabella senza rigenerare nulla;
+- **incorporata alla generazione della pagina** (solo GUI desktop,
+  `open_glb_in_browser(..., alarm_rows=...)`, nuova funzione
+  `parse_alarm_csv()` con lo stesso parser ma via `csv` di stdlib,
+  quindi con supporto vero per virgole tra virgolette) — questa è la
+  via che rende possibile l'automazione (sotto): una pagina generata
+  una volta con la tabella già incorporata può essere riaperta con un
+  parametro URL, senza upload manuale.
+
+**Automazione — `?q=<codice>` nell'URL**: al caricamento del modello,
+la pagina legge `?q=` dalla propria URL e lancia la ricerca da sola,
+zero interazione umana. Combinato con l'incorporazione della tabella
+alla generazione (sopra), questo è il pezzo che chiude il flusso
+descritto in sessione: "operatore legge un codice sulla macchina, lo
+digita, vede il componente" diventa "qualunque cosa sappia costruire
+un URL apre la pagina già con quel codice e il componente si evidenzia
+da solo". Implementato e verificato (sotto) sia su desktop sia sulla
+demo web; sulla demo web la stessa automazione ha un limite onesto:
+ogni sessione richiede comunque un upload fresco del file 3D prima che
+un modello sia caricato, quindi un `?q=` in arrivo su una pagina vuota
+non ha nulla su cui agire — l'incorporazione alla generazione (e quindi
+l'automazione a zero-click vera) resta specifica del viewer desktop,
+dove la pagina esiste già pre-generata e può essere solo riaperta.
+
+**Meccanismi di automazione proposti, non implementati in questa
+sessione** (per tenere lo scope al meccanismo di ricerca in sé, che è
+quello richiesto):
+1. **Endpoint locale sul server già presente**: `open_glb_in_browser`
+   avvia già un `http.server.HTTPServer` locale per servire la pagina
+   (§9.9) — estendere quell'handler con una piccola route (es. `POST
+   /set_alarm?code=E100`) e far sì che la pagina già aperta la legga
+   (polling breve o Server-Sent Events, nessuna libreria nuova, tutto
+   stdlib) aggiornerebbe la vista **senza ricaricare la pagina** — più
+   fluido di un redirect a `?q=` su un monitor a muro sempre acceso,
+   ma richiede uno stato condiviso client/server che oggi non esiste.
+2. **Watcher di un sistema PLC/SCADA reale**: un piccolo processo che
+   osserva il tag/registro di allarme attivo della macchina (via
+   OPC-UA, un log, un file condiviso — dipende dall'impianto specifico,
+   informazione che non abbiamo per questo progetto) e traduce il
+   nuovo codice in una chiamata all'endpoint del punto 1, o in una
+   navigazione del browser a `?q=<codice>`. Questo è il pezzo che
+   servirebbe per il flusso "zero digitazione" completo descritto in
+   sessione — non iniziato, richiede di sapere con quale sistema reale
+   si integra prima di poter scrivere codice sensato (non un dettaglio
+   da indovinare).
+3. **QR fisico sul quadro allarmi**: un QR che codifica direttamente
+   l'URL `.../viewer.html?q=<codice>` (non un payload `BZC1` — un
+   normale URL in un QR, uso diverso della stessa libreria `qrcode`
+   già nel progetto) affisso vicino al pannello comandi della macchina:
+   l'operatore fotografa il codice invece di leggerlo e digitarlo.
+   Economico da provare (nessun codice nuovo, solo generare N QR con
+   `qrcode.make(url)` per gli N codici di allarme noti), non
+   implementato perché richiede l'elenco reale degli allarmi di un
+   impianto specifico per avere senso.
+
+Verificato con Playwright, non solo scritto, su entrambe le interfacce
+con una fixture 3DXML sintetica a due parti distinte (stesso principio
+già seguito per le altre feature del viewer 3D — nessun file CAD reale
+nel repository): ricerca per nome esatto/parziale, ricerca per codice
+allarme con corrispondenza a una sola parte e a più parti (evidenzia
+tutte, pulsante "esporta scheda" correttamente disabilitato),
+corrispondenza case-insensitive dei codici, `?q=` nell'URL che lancia
+la ricerca da solo al caricamento (sia con la tabella incorporata sul
+desktop, sia dopo un upload+CSV manuale sulla demo web), upload di una
+CSV che sostituisce la tabella precedente (non la unisce — comportamento
+dichiarato, non nascosto), messaggio onesto quando niente corrisponde.
+Nessun bug trovato in questa verifica. Aggiunto anche un vero test
+Python (`tests/test_viewer3d.py`, 7 test) per `parse_alarm_csv` — la
+sola parte di questa feature che non è JS lato client, quindi l'unica
+testabile senza Playwright (righe vuote/corte scartate, riga di
+intestazione riconosciuta ed esclusa solo quando è davvero
+un'intestazione, un codice con più righe/componenti, nomi con virgole
+tra virgolette preservati correttamente dal parser Python — a
+differenza del parser JS lato client, che dichiara esplicitamente di
+non supportarlo).
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 216 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 230 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop
