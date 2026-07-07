@@ -100,8 +100,17 @@ def save_to_library(payload: bytes, kind: str, source_name: str) -> LibraryEntry
 
 def list_library() -> list[LibraryEntry]:
     """Newest first -- the operator almost always wants the machine they
-    just scanned, not one from last month."""
-    return sorted(_read_manifest(), key=lambda e: e.saved_at, reverse=True)
+    just scanned, not one from last month.
+
+    saved_at has only 1-second resolution, and Python's sort is stable
+    even under reverse=True (entries with an equal key keep their
+    original relative order, they are NOT reversed among themselves) --
+    so two scans completed within the same second would otherwise come
+    out oldest-of-the-pair-first. Breaking ties by original manifest
+    position (append order), descending, fixes exactly that case."""
+    entries = list(enumerate(_read_manifest()))
+    entries.sort(key=lambda pair: (pair[1].saved_at, pair[0]), reverse=True)
+    return [entry for _, entry in entries]
 
 
 def load_library_payload(entry: LibraryEntry) -> bytes:

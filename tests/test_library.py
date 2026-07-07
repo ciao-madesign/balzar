@@ -57,11 +57,28 @@ class TestLibrary(unittest.TestCase):
         first = save_to_library(b"a", KIND_2D, "first")
         second = save_to_library(b"b", KIND_2D, "second")
         entries = list_library()
-        # saved_at has 1-second resolution -- force a distinguishable
-        # order instead of relying on real elapsed time in a fast test
-        if entries[0].id != second.id:
-            entries = sorted(entries, key=lambda e: e.saved_at)
-            self.assertEqual([e.id for e in entries], [first.id, second.id])
+        self.assertEqual([e.id for e in entries], [second.id, first.id])
+
+    def test_newest_first_breaks_same_second_ties_by_append_order(self):
+        # saved_at has 1-second resolution -- two scans completed within
+        # the same wall-clock second must still show the more recently
+        # saved one first. Regression test for a real bug: Python's sort
+        # is stable even under reverse=True (equal keys keep their
+        # original relative order, they are not reversed), so a naive
+        # `sorted(..., key=saved_at, reverse=True)` left the
+        # earlier-of-the-pair on top for same-second saves.
+        import balzar.library as library
+
+        original_strftime = library.time.strftime
+        library.time.strftime = lambda *a, **k: "2026-01-01T00:00:00Z"
+        try:
+            first = library.save_to_library(b"a", library.KIND_2D, "first")
+            second = library.save_to_library(b"b", library.KIND_2D, "second")
+        finally:
+            library.time.strftime = original_strftime
+        entries = library.list_library()
+        self.assertEqual(entries[0].saved_at, entries[1].saved_at)
+        self.assertEqual([e.id for e in entries], [second.id, first.id])
 
     def test_delete_removes_manifest_entry_and_file(self):
         from balzar.library import (library_dir, list_library,
