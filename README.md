@@ -471,12 +471,21 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   ricambio (vedi CLAUDE.md §9.14 per la scelta API dietro la cattura).
   Stessa funzione nella GUI desktop (`balzar/viewer3d.py`). Una **barra
   di ricerca** cerca per nome componente o, se carichi una tabella
-  allarmi (CSV a due colonne `codice_allarme,nome_componente`), per
-  codice allarme — un operatore che legge un codice sulla macchina lo
-  digita qui e vede subito il componente coinvolto, senza conoscerne
-  il nome CAD (un allarme può coinvolgere più componenti: tutti si
-  evidenziano insieme, "esporta scheda ricambio" resta disabilitato in
-  quel caso — una scheda è la foto di una parte sola). La ricerca
+  allarmi (CSV a due colonne `codice_allarme,nome_componente` — una
+  terza colonna, es. un documento di procedura, è accettata e
+  ignorata, mai incollata al nome), per codice allarme — un operatore
+  che legge un codice sulla macchina lo digita qui e vede subito il
+  componente coinvolto, senza conoscerne il nome CAD (un allarme può
+  coinvolgere più componenti: tutti si evidenziano insieme, "esporta
+  scheda ricambio" resta disabilitato in quel caso — una scheda è la
+  foto di una parte sola). Se `nome_componente` è il nome di un intero
+  **sotto-assieme** (es. `HEATER1`) invece di una parte singola, la BOM
+  lo mostra come **una sola riga collassata** invece di espanderlo in
+  ogni parte sottostante, ed evidenziarlo accende esattamente e solo le
+  sue parti (mai quelle di un sotto-assieme diverso che condivide per
+  caso un nome placeholder generico — verificato su un assieme reale,
+  vedi CLAUDE.md §9.21 per il bug di sovrapposizione trovato e
+  corretto). La ricerca
   supporta anche `?q=<codice>` nell'URL: sulla GUI desktop, dove la
   tabella allarmi può essere incorporata alla generazione della pagina
   (`open_glb_in_browser(..., alarm_rows=...)`), questo permette di

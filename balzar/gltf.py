@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import struct
 
-from .scene3d import Reference, Scene3D, effective_display_name
+from .scene3d import COLLAPSE_SEPARATOR, Reference, Scene3D, effective_display_name
 
 _IDENTITY_16 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
@@ -82,7 +82,9 @@ def _strip_to_triangles(strip: list[int]) -> list[int]:
 def _build_reference_node(scene: Scene3D, ref_index: int,
                           shape_accessors: list[tuple[int, int]],
                           meshes: list[dict], materials: list[dict],
-                          nodes: list[dict], parent: Reference | None = None) -> int:
+                          nodes: list[dict], parent: Reference | None = None,
+                          collapse_names: set[str] | None = None,
+                          collapse_context: str | None = None) -> int:
     """Recursively emit the node for `Reference[ref_index]`'s own content
     (mesh if it's a leaf, children if it's a group), wrapping every child
     instance in its own node carrying that instance's transform+name.
@@ -93,22 +95,37 @@ def _build_reference_node(scene: Scene3D, ref_index: int,
     ref_index -- see the module docstring on the DAG-vs-tree asymmetry)
     -- so two instances of the same repeated part end up as two
     distinct Material objects a click can tell apart, even though both
-    reference the SAME position/index accessors underneath."""
+    reference the SAME position/index accessors underneath.
+
+    `collapse_names`/`collapse_context`: mirrors generate_bom's own
+    collapse_names (scene3d.py) so a collapsed BOM row's
+    `material_names` match exactly what gets exported here. Once
+    recursion enters a Reference whose name is in `collapse_names`,
+    every leaf material/mesh underneath gets its display name suffixed
+    with `COLLAPSE_SEPARATOR + collapse_context` -- otherwise two
+    different collapsed groups sharing an ambiguous auto-generated leaf
+    name ("Object N") would highlight each other's parts (verified on a
+    real assembly, see CLAUDE.md)."""
     ref: Reference = scene.references[ref_index]
     node: dict = {}
     if ref.name:
         node["name"] = ref.name
+    if (collapse_context is None and collapse_names and ref.name in collapse_names
+            and ref.shape_index is None):
+        collapse_context = ref.name
     if ref.shape_index is not None:
         shape = scene.shapes[ref.shape_index]
         pos_accessor, idx_accessor = shape_accessors[ref.shape_index]
         display_name = effective_display_name(parent, ref)
+        material_name = (display_name if collapse_context is None
+                         else f"{display_name}{COLLAPSE_SEPARATOR}{collapse_context}")
         r, g, b = shape.color
         materials.append({
-            "name": display_name,
+            "name": material_name,
             "pbrMetallicRoughness": {"baseColorFactor": [r / 255.0, g / 255.0, b / 255.0, 1.0]},
             "alphaMode": "BLEND",
         })
-        mesh = {"name": display_name,
+        mesh = {"name": material_name,
                "primitives": [{"attributes": {"POSITION": pos_accessor},
                               "indices": idx_accessor,
                               "material": len(materials) - 1,
@@ -119,7 +136,9 @@ def _build_reference_node(scene: Scene3D, ref_index: int,
         child_indices = []
         for target, inst_name, matrix in ref.children:
             content_idx = _build_reference_node(scene, target, shape_accessors,
-                                                 meshes, materials, nodes, parent=ref)
+                                                 meshes, materials, nodes, parent=ref,
+                                                 collapse_names=collapse_names,
+                                                 collapse_context=collapse_context)
             instance_node: dict = {"children": [content_idx]}
             gm = _matrix_to_gltf(matrix)
             if gm != _IDENTITY_16:
@@ -133,7 +152,10 @@ def _build_reference_node(scene: Scene3D, ref_index: int,
     return len(nodes) - 1
 
 
-def scene3d_to_glb(scene: Scene3D) -> bytes:
+def scene3d_to_glb(scene: Scene3D, collapse_names: set[str] | None = None) -> bytes:
+    """`collapse_names` must be the SAME set passed to
+    scene3d.generate_bom(scene, collapse_names=...) for a consistent
+    result -- see _build_reference_node for what it changes."""
     buffer = bytearray()
     accessors: list[dict] = []
     buffer_views: list[dict] = []
@@ -180,7 +202,8 @@ def scene3d_to_glb(scene: Scene3D) -> bytes:
 
     nodes: list[dict] = []
     root_node_idx = _build_reference_node(scene, scene.root, shape_accessors,
-                                          meshes, materials, nodes)
+                                          meshes, materials, nodes,
+                                          collapse_names=collapse_names)
 
     gltf_json = {
         "asset": {"version": "2.0", "generator": "balzar scene3d"},

@@ -57,7 +57,7 @@ class Job:
         # "Visualizza in 3D" opens the system browser (balzar/viewer3d.py)
         self.is_3d = False
         self.glb = b""
-        self.bom_lines: list[tuple[str, int]] = []
+        self.bom_lines: list[tuple[str, int, list[str]]] = []
         # a multi-document bundle (balzar/bundle.py) is still a 3D job
         # (is_3d=True) but saves as .bzx instead of .b3d, and carries its
         # own alarm table -- distinct from BalzarApp.alarm_rows, which is
@@ -295,19 +295,26 @@ class BalzarApp:
         ])
 
     def _finish_3d_job(self, job: Job, payload: bytes, bom, extra_stats,
-                       stats_payload: bytes | None = None) -> None:
+                       stats_payload: bytes | None = None,
+                       collapse_names: set[str] | None = None) -> None:
         """stats_payload overrides which bytes the 'payload size'/'QR
         singolo' stats describe -- needed for a bundle job (_job_from_bundle),
         where the glb is built from the 3D sub-item's own BZM1 bytes but
         the size/QR-fit that matters to the user is the whole bundle
-        that actually gets saved/scanned, not just the sub-item."""
+        that actually gets saved/scanned, not just the sub-item.
+
+        `collapse_names`, if given, must be the same set `bom` was
+        already computed with (scene3d.generate_bom's collapse_names) --
+        threaded to scene3d_to_glb here so the GLB's material names stay
+        consistent with the BOM's own material_names."""
         from .gltf import scene3d_to_glb
         from .scene3d import decode_payload
 
         scene = decode_payload(payload)
         job.is_3d = True
-        job.glb = scene3d_to_glb(scene)
-        job.bom_lines = [(e.name, e.count) for e in sorted(bom, key=lambda e: -e.count)]
+        job.glb = scene3d_to_glb(scene, collapse_names=collapse_names)
+        job.bom_lines = [(e.name, e.count, e.material_names)
+                        for e in sorted(bom, key=lambda e: -e.count)]
         size_payload = payload if stats_payload is None else stats_payload
         job.stats = [
             ("sorgente", job.source_name),
@@ -340,15 +347,20 @@ class BalzarApp:
                 job.alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
         n_docs = sum(1 for it in items if it.kind != KIND_3D)
         bundle_stat = ("bundle", f"{len(items)} elementi ({', '.join(it.kind for it in items)})")
+        # an alarm component name collapses its own BOM/GLB entry into a
+        # single row/highlight group instead of expanding to every leaf
+        # part underneath -- see scene3d.generate_bom's collapse_names
+        collapse_names = {name for _code, name in job.alarm_rows} or None
 
         three_d_items = [it for it in items if it.kind == KIND_3D]
         if three_d_items:
             scene = decode_payload(three_d_items[0].data)
-            self._finish_3d_job(job, three_d_items[0].data, generate_bom(scene), extra_stats=[
+            self._finish_3d_job(job, three_d_items[0].data,
+                               generate_bom(scene, collapse_names), extra_stats=[
                 ("forme uniche", _fmt(len(scene.shapes))),
                 ("riferimenti", _fmt(len(scene.references))),
                 bundle_stat,
-            ], stats_payload=data)
+            ], stats_payload=data, collapse_names=collapse_names)
         else:
             # document-only bundle: no 3D scene to render, just an index
             job.is_3d = False

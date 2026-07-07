@@ -292,11 +292,20 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
 
     alarm_csv_b64 = body.get("alarm_csv")
     alarm_csv_text = None
+    alarm_rows: list[tuple[str, str]] = []
     if alarm_csv_b64:
+        from .viewer3d import parse_alarm_csv_text
         try:
             alarm_csv_text = _b64decode(alarm_csv_b64).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
             return 400, {"ok": False, "error": f"tabella allarmi non valida: {exc}"}
+        alarm_rows = parse_alarm_csv_text(alarm_csv_text)
+    # component names from the alarm table collapse their own BOM/GLB
+    # entry into a single row/highlight group instead of expanding to
+    # every individual leaf part underneath -- see scene3d.generate_bom's
+    # collapse_names for why (an alarm often names a whole sub-assembly,
+    # e.g. "HEATER1", not one physical part).
+    collapse_names = {name for _code, name in alarm_rows} or None
 
     # extra consultable documents to bundle alongside the model: each
     # {label, data (base64)}. Carried as raw KIND_DOC bytes, no parsing.
@@ -324,9 +333,14 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
             return 400, {"ok": False, "error": str(exc)}
 
     from .gltf import scene3d_to_glb
-    from .scene3d import decode_payload
+    from .scene3d import decode_payload, generate_bom
     scene = decode_payload(result.payload)
-    glb = scene3d_to_glb(scene)
+    # result.bom (from encode_3dxml_file) already has valid material_names
+    # (added to generate_bom unconditionally) but was computed with no
+    # alarm context -- recompute only when there's a collapse to apply,
+    # otherwise reuse it as-is (identical result, no need to redo the walk).
+    bom_for_response = result.bom if collapse_names is None else generate_bom(scene, collapse_names)
+    glb = scene3d_to_glb(scene, collapse_names=collapse_names)
     glb_b64 = base64.b64encode(glb).decode("ascii")
     glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
 
@@ -337,8 +351,8 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         "instance_count": result.instance_count,
         "vertex_count": result.vertex_count,
         "mean_vertex_error": result.mean_vertex_error,
-        "bom": [{"name": e.name, "count": e.count}
-               for e in sorted(result.bom, key=lambda e: -e.count)],
+        "bom": [{"name": e.name, "count": e.count, "material_names": e.material_names}
+               for e in sorted(bom_for_response, key=lambda e: -e.count)],
         "glb_omitted": glb_omitted,
         "glb_base64": "" if glb_omitted else glb_b64,
     }
@@ -350,13 +364,11 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
                              encode_bundle)
         from .payload import MAGIC as BZR1_MAGIC
         from .payload import encode_payload as encode_2d
-        from .viewer3d import _render_2d_item, parse_alarm_csv_text
+        from .viewer3d import _render_2d_item
 
         bundle_items = [BundleItem(KIND_3D, "assembly.b3d", result.payload)]
         response_docs = []
-        alarm_rows = []
         if alarm_csv_text is not None:
-            alarm_rows = parse_alarm_csv_text(alarm_csv_text)
             bundle_items.append(BundleItem(KIND_ALARM, "alarms.csv",
                                           alarm_csv_text.encode("utf-8")))
             response_docs.append({"role": "allarmi", "label": "alarms.csv",
@@ -807,20 +819,25 @@ def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
     return _handle_render_2d(raw, limits)
 
 
-def _scene3d_stats(scene) -> dict:
+def _scene3d_stats(scene, collapse_names: set[str] | None = None) -> dict:
     """Shape/reference/instance/vertex counts + BOM straight from an
     already-decoded Scene3D -- no `mean_vertex_error` here (unlike
     Scene3DEncodeResult): that field compares against the original,
     unquantized CAD source, which a re-opened BZM1/BZX1 payload no
-    longer carries -- only encode_3dxml_file can report it honestly."""
+    longer carries -- only encode_3dxml_file can report it honestly.
+
+    `collapse_names`: same alarm-table component names passed to
+    scene3d_to_glb by the caller, so the BOM this returns and the GLB
+    built alongside it stay consistent (see generate_bom)."""
     from .scene3d import generate_bom
-    bom = generate_bom(scene)
+    bom = generate_bom(scene, collapse_names)
     return {
         "shape_count": len(scene.shapes),
         "reference_count": len(scene.references),
         "instance_count": sum(len(r.children) for r in scene.references),
         "vertex_count": sum(len(s.vertices) for s in scene.shapes),
-        "bom": [{"name": e.name, "count": e.count} for e in sorted(bom, key=lambda e: -e.count)],
+        "bom": [{"name": e.name, "count": e.count, "material_names": e.material_names}
+               for e in sorted(bom, key=lambda e: -e.count)],
     }
 
 
@@ -869,20 +886,8 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
     three_d_items = [it for it in items if it.kind == KIND_3D]
     response = {"ok": True, "kind": "bundle", "bundled": True, "has_3d": bool(three_d_items)}
 
-    if three_d_items:
-        from .scene3d import Scene3DError, decode_payload
-        try:
-            scene = decode_payload(three_d_items[0].data)
-        except Scene3DError as exc:
-            return 400, {"ok": False, "error": f"assieme 3D nel bundle non valido: {exc}"}
-        from .gltf import scene3d_to_glb
-        glb = scene3d_to_glb(scene)
-        glb_b64 = base64.b64encode(glb).decode("ascii")
-        glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
-        response.update(_scene3d_stats(scene))
-        response["glb_omitted"] = glb_omitted
-        response["glb_base64"] = "" if glb_omitted else glb_b64
-
+    # parsed before the 3D block below so its component names can collapse
+    # the BOM/GLB the same way handle_encode_3d does -- see generate_bom
     try:
         alarm_rows = []
         for it in items:
@@ -891,6 +896,21 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
     except UnicodeDecodeError as exc:
         return 400, {"ok": False, "error": f"tabella allarmi nel bundle non e' UTF-8 valida: {exc}"}
     response["alarm_rows"] = [[code, name] for code, name in alarm_rows]
+    collapse_names = {name for _code, name in alarm_rows} or None
+
+    if three_d_items:
+        from .scene3d import Scene3DError, decode_payload
+        try:
+            scene = decode_payload(three_d_items[0].data)
+        except Scene3DError as exc:
+            return 400, {"ok": False, "error": f"assieme 3D nel bundle non valido: {exc}"}
+        from .gltf import scene3d_to_glb
+        glb = scene3d_to_glb(scene, collapse_names=collapse_names)
+        glb_b64 = base64.b64encode(glb).decode("ascii")
+        glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
+        response.update(_scene3d_stats(scene, collapse_names))
+        response["glb_omitted"] = glb_omitted
+        response["glb_base64"] = "" if glb_omitted else glb_b64
 
     try:
         response["documents"] = _documents_from_items(items)

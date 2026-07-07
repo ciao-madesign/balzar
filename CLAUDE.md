@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-270 test, tutti verdi (`python3 -m unittest discover -s tests`):
+280 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -2804,10 +2804,140 @@ cambio (già aprono `.b3d`/`.bzx` nativamente in `balzar/gui.py`/
 solo la demo web, che era rimasta indietro sull'unico punto (l'apritore
 generico) non ancora allineato.
 
+### 9.21 BOM collassata alla granularità del file allarmi (`generate_bom` collapse_names) + fix CSV a 3 colonne
+
+Seguito diretto di sessione: un file 3DXML reale caricato dall'utente
+(un impianto industriale, non incluso nel repository per lo stesso
+motivo di copyright già visto per gli altri assiemi reali) e una
+tabella allarmi CSV con nomi di **sotto-assiemi** (`HEATER1`,
+`RESERVOIR1`, `UV DEVICE`, ecc.) invece di parti singole hanno
+esposto due problemi reali, verificati sul file prima di scrivere
+codice, non ipotizzati:
+
+1. **Il meccanismo di evidenziazione oggi lavora solo a livello di
+   parte foglia**: `generate_bom`/`highlightNames` non hanno mai
+   avuto un concetto di "sotto-assieme" — cercare "HEATER1" (che
+   esiste nell'albero solo come nodo di raggruppamento, senza
+   geometria propria) restituiva "nessun componente trovato".
+2. **Rischio di sovra-evidenziazione se risolto ingenuamente per
+   nome**: analizzando il file reale, i nomi delle parti foglia sotto
+   `RESERVOIR1`/`RESERVOIR2`/`UV DEVICE`/`FLITRO CARBONE` si
+   sovrappongono per **7-12 nomi ciascuno** con parti fuori dal
+   gruppo (tutti nel pattern placeholder auto-generato `"Object N"`,
+   §2.6/§9.12) — evidenziare "RESERVOIR1" per solo nome testuale
+   avrebbe acceso anche pezzi di `RESERVOIR2`.
+
+**Fix, in `balzar/scene3d.py`**: `generate_bom(scene, collapse_names=None)`
+guadagna un parametro opzionale — un insieme di nomi di `Reference3D`
+(tipicamente le colonne `nome_componente` di una tabella allarmi) che,
+se corrispondono a un nodo di **gruppo** (non foglia) nella scena,
+fermano la ricorsione lì: quel sotto-assieme diventa **una singola
+riga di BOM** invece di espandersi in ogni parte sottostante. Un nome
+che corrisponde già a una parte foglia ordinaria non viene toccato
+(niente da collassare, è già atomico). Senza `collapse_names`
+(default), il comportamento è identico a prima — verificato dai 23
+test preesistenti, tutti verdi senza modifiche.
+
+**`BomEntry` guadagna `material_names: list[str]`** (e `shape_index`
+diventa `int | None`): per una riga ordinaria è un elenco di un solo
+elemento uguale al nome; per una riga collassata è l'insieme esatto
+dei nomi materiale glTF delle sue parti foglia discendenti, **con un
+suffisso** (`COLLAPSE_SEPARATOR = "§"`, mai presente in un nome CAD
+reale) che scopa il nome alla sola istanza di quel gruppo specifico —
+`_collect_leaf_material_names` cammina l'albero sotto il gruppo
+producendo `"{nome_foglia}§{nome_gruppo}"` per ognuna. Questo è
+esattamente ciò che elimina il rischio di sovra-evidenziazione:
+`"Object 112§RESERVOIR1"` e `"Object 112§RESERVOIR2"` non sono mai lo
+stesso materiale, anche se il nome-foglia grezzo coincide.
+
+**`balzar/gltf.py`**: `scene3d_to_glb(scene, collapse_names=None)`
+applica **esattamente la stessa regola** durante l'export (un
+`collapse_context` filettato nella ricorsione di
+`_build_reference_node`, impostato al primo nodo di gruppo il cui nome
+è in `collapse_names`): ogni materiale/mesh foglia sotto quel gruppo
+riceve lo stesso suffisso `§{nome_gruppo}`, garantendo che `generate_bom`
+e l'esportazione GLB restino sempre coerenti — verificato con un test
+che decodifica davvero il GLB prodotto e confronta i nomi materiale
+con `material_names` della BOM, non solo fidandosi che le due
+implementazioni concordino "a vista".
+
+**Frontend (entrambe le copie, `app.js` e `viewer3d.py`'s `_SELECT_JS`)**:
+`highlightNames(labels)` ora espande ogni etichetta (nome riga BOM)
+nel suo insieme di nomi materiale reali tramite una mappa
+`labelToMaterialNames` costruita dalla BOM stessa (dal campo
+`material_names`, o dagli attributi `data-material-names` nella
+pagina generata dal desktop), prima di toccare i materiali del
+modello — `setSelection`/il conteggio per la scheda ricambio
+continuano a lavorare sulle etichette di visualizzazione, invariati.
+Il click diretto sul modello 3D risolve il materiale cliccato alla sua
+etichetta proprietaria (`materialNameToLabel`, la mappa inversa) prima
+di evidenziare, cosicché cliccare una singola vite dentro un gruppo
+collassato seleziona l'intero gruppo (non ha più senso un'unità più
+piccola del gruppo, una volta collassato) e la riga BOM corretta si
+marca come selezionata.
+
+**Bug reale trovato scrivendo i test prima di dichiarare la funzione
+pronta** (non nell'implementazione principale, in un caso limite):
+`effective_display_name` preferisce il nome del wrapper quando la
+foglia ha il pattern auto-generato "Object N" **e** il wrapper ha
+esattamente un figlio — un gruppo collassato con un solo figlio
+placeholder produce quindi un nome materiale come `"HEATER1§HEATER1"`
+(il nome del gruppo usato sia come nome-foglia-preferito sia come
+suffisso) — ridondante ma **non un bug**: resta comunque univoco,
+nessuna collisione. Scoperto scrivendo un test con un gruppo a un solo
+figlio placeholder e correggendo l'aspettativa del test (non il
+codice, che si comporta correttamente), non il contrario.
+
+**Fix separato, stessa sessione — CSV a 3 colonne corrompeva il nome
+componente**: la tabella allarmi reale caricata dall'utente aveva
+anche una terza colonna (`documento_procedura`, la stessa idea già
+proposta in §9.19 per il Bridge). `parse_alarm_csv_text` (e i due
+parser JS gemelli in `app.js`/`_SELECT_JS`) costruivano il nome
+componente con `",".join(cells[1:])` — pensato per tollerare una
+virgola non quotata nel nome, ma che in presenza di una terza colonna
+**incolla il testo della procedura al nome del componente**
+(`"HEATER1,procedura_heater"` invece di `"HEATER1"`), rompendo
+silenziosamente ogni corrispondenza. Fix: `name = cells[1]` da solo
+(o `parts[1]` lato JS) — una terza colonna è ora accettata e ignorata
+correttamente, non più incollata. Un nome con una virgola reale deve
+essere tra virgolette nel CSV sorgente (`csv.reader` lo gestisce già
+bene); il side-effect è che la variante JS (senza supporto quoting,
+dichiarato esplicitamente da tempo) non tollera più neanche una
+virgola grezza non quotata nel nome — untrade-off onesto, non prima
+possibile avere entrambe le cose con un parser così semplice.
+
+**Template CSV corretto fornito in sessione** (non nel repository,
+consegnato all'utente): virgola come separatore (non punto e virgola
+— con `;` ogni riga diventa una singola cella e viene scartata in
+silenzio, zero righe caricate, nessun errore visibile), una riga per
+ogni singolo componente (i multi-componente vanno ripetuti su righe
+separate, mai con `/` in una cella), nomi verificati contro l'albero
+3DXML reale prima di consegnarli (trovato un refuso: `POMPA1` nel CSV
+originale contro `POMPA 1`, con spazio, nel file CAD).
+
+Verificato con Playwright contro un devserver locale reale (fixture
+sintetica: sotto-assieme `HEATER1` con due bulloni `BoltA`/`BoltB`,
+stesso principio di fixture minime già usato altrove — nessun file
+CAD reale nel repository): upload 3DXML + CSV con `HEATER1` come
+componente → BOM mostra una sola riga `HEATER1` (non `BoltA`/`BoltB`
+separate) → click sulla riga seleziona il gruppo (scheda ricambio
+abilitata) → ricerca per codice allarme (`A06`) evidenzia lo stesso
+gruppo → click diretto sul modello non va in crash. Test aggiunti:
+6 in `tests/test_scene3d.py` (`TestBomCollapse` — collasso a una riga,
+nome-già-foglia lasciato intatto, comportamento invariato senza
+collapse_names, conteggio corretto su un gruppo ripetuto, **il test
+di regressione diretto** sul bug reale di sovrapposizione tra due
+gruppi con nomi placeholder ambigui, coerenza BOM↔GLB via decodifica
+reale del GLB prodotto), 1 in `tests/test_viewer3d.py` (colonna
+extra non corrompe più il nome), 2 in `tests/test_webapi.py`
+(collasso end-to-end tramite `handle_encode_3d`, nessuna corrispondenza
+→ BOM resta espansa, onesto invece di un comportamento silenzioso
+diverso) — 280 test totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 270 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 280 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

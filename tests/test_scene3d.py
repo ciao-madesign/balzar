@@ -261,6 +261,167 @@ class TestBom(unittest.TestCase):
         self.assertEqual(len(bom), 1)
         self.assertEqual(bom[0].name, "PartB")
 
+    def test_ordinary_row_material_names_is_just_its_own_name(self):
+        # no collapse_names given: material_names is a single-item list
+        # equal to the row's own name -- unchanged from before this field
+        # existed, verified explicitly since it's the fallback everyone
+        # else's highlighting logic depends on
+        from balzar.scene3d import Reference, Scene3D, Shape, generate_bom
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        shape = Shape(name="S", color=(1, 2, 3),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        leaf = Reference(name="PartB", shape_index=0, children=[])
+        root = Reference(name="Root", shape_index=None, children=[(1, None, identity)])
+        scene = Scene3D(shapes=[shape], references=[root, leaf], root=0)
+
+        bom = generate_bom(scene)
+        self.assertEqual(bom[0].material_names, ["PartB"])
+        self.assertEqual(bom[0].shape_index, 0)  # shape_index stays set for an ordinary leaf
+
+
+class TestBomCollapse(unittest.TestCase):
+    """generate_bom's collapse_names: an alarm table can name a whole
+    sub-assembly ("HEATER1") rather than one physical part -- these
+    tests are built directly from the real bug found analyzing an
+    uploaded assembly (CLAUDE.md SS9.19-adjacent session notes): several
+    different sub-assemblies shared leaf parts with the CAD tool's
+    auto-generated placeholder name ("Object N"), so naive name-based
+    highlighting of one collapsed group would have lit up another
+    group's parts too."""
+
+    def _two_leaf_group_scene(self):
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        shape = Shape(name=None, color=(10, 20, 30),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        leaf_a = Reference(name="Screw", shape_index=0, children=[])
+        leaf_b = Reference(name="Washer", shape_index=0, children=[])
+        group = Reference(name="HEATER1", shape_index=None, children=[
+            (2, None, identity), (3, None, identity),
+        ])
+        root = Reference(name="Root", shape_index=None, children=[(1, None, identity)])
+        return Scene3D(shapes=[shape], references=[root, group, leaf_a, leaf_b], root=0)
+
+    def test_group_collapses_to_one_row_with_all_leaf_material_names(self):
+        from balzar.scene3d import generate_bom
+
+        scene = self._two_leaf_group_scene()
+        bom = generate_bom(scene, collapse_names={"HEATER1"})
+        self.assertEqual(len(bom), 1)
+        self.assertEqual(bom[0].name, "HEATER1")
+        self.assertEqual(bom[0].count, 1)
+        self.assertIsNone(bom[0].shape_index)
+        self.assertEqual(set(bom[0].material_names),
+                         {"Screw§HEATER1", "Washer§HEATER1"})
+
+    def test_collapse_name_matching_an_ordinary_leaf_is_left_alone(self):
+        # "Screw" is a real leaf part, not a group -- collapsing it makes
+        # no sense (nothing to collapse), so it must be untouched
+        from balzar.scene3d import generate_bom
+
+        scene = self._two_leaf_group_scene()
+        bom = generate_bom(scene, collapse_names={"Screw"})
+        names = {e.name for e in bom}
+        self.assertIn("Screw", names)
+        self.assertIn("Washer", names)
+        screw = next(e for e in bom if e.name == "Screw")
+        self.assertEqual(screw.material_names, ["Screw"])  # unsuffixed -- not collapsed
+
+    def test_no_collapse_names_expands_every_leaf_as_before(self):
+        from balzar.scene3d import generate_bom
+
+        scene = self._two_leaf_group_scene()
+        bom = generate_bom(scene)
+        self.assertEqual({e.name for e in bom}, {"Screw", "Washer"})
+
+    def test_repeated_group_placement_multiplies_count_shares_material_names(self):
+        # the same collapsed group placed twice (mirrors a repeated
+        # sub-assembly, already covered for leaves in TestBom) -- the
+        # BOM row's count reflects both placements, and (by design, same
+        # philosophy as an ordinary leaf row highlighting every instance
+        # of its type) both placements share the same material names
+        from balzar.scene3d import Reference, Scene3D, Shape, generate_bom
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        shape = Shape(name=None, color=(1, 2, 3),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        # a real (not auto-generated "Object N") leaf name, so
+        # effective_display_name's single-child-wrapper preference does
+        # not kick in and mask what this test is actually checking
+        leaf = Reference(name="Bolt-01", shape_index=0, children=[])
+        group = Reference(name="POMPA1", shape_index=None, children=[(2, None, identity)])
+        root = Reference(name="Root", shape_index=None, children=[
+            (1, "inst_1", identity), (1, "inst_2", identity),
+        ])
+        scene = Scene3D(shapes=[shape], references=[root, group, leaf], root=0)
+
+        bom = generate_bom(scene, collapse_names={"POMPA1"})
+        self.assertEqual(len(bom), 1)
+        self.assertEqual(bom[0].count, 2)
+        self.assertEqual(bom[0].material_names, ["Bolt-01§POMPA1"])
+
+    def test_two_sibling_groups_sharing_ambiguous_leaf_name_do_not_cross_contaminate(self):
+        # THE real bug, reproduced directly: two different sub-assemblies
+        # each contain a leaf carrying the exact same auto-generated
+        # placeholder name ("Object 1") -- verified on a real uploaded
+        # assembly where two different reservoir sub-assemblies shared
+        # several such names. Highlighting RESERVOIR1 must never light
+        # up a leaf that is actually inside RESERVOIR2. Each group also
+        # has a second, differently-named child so effective_display_name's
+        # single-child-wrapper preference (SS9.12) does NOT kick in and
+        # mask the "Object 1" name this test is specifically about.
+        from balzar.scene3d import Reference, Scene3D, Shape, generate_bom
+
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+        shape = Shape(name=None, color=(1, 2, 3),
+                     vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], strips=[[0, 1, 2]])
+        # references: 0 root, 1 group_a, 2 group_b, 3/4 group_a's children,
+        # 5/6 group_b's children
+        leaf_ambiguous_a = Reference(name="Object 1", shape_index=0, children=[])
+        leaf_other_a = Reference(name="BracketA", shape_index=0, children=[])
+        leaf_ambiguous_b = Reference(name="Object 1", shape_index=0, children=[])
+        leaf_other_b = Reference(name="BracketB", shape_index=0, children=[])
+        group_a = Reference(name="RESERVOIR1", shape_index=None,
+                            children=[(3, None, identity), (4, None, identity)])
+        group_b = Reference(name="RESERVOIR2", shape_index=None,
+                            children=[(5, None, identity), (6, None, identity)])
+        root = Reference(name="Root", shape_index=None, children=[
+            (1, None, identity), (2, None, identity),
+        ])
+        scene = Scene3D(shapes=[shape], references=[
+            root, group_a, group_b, leaf_ambiguous_a, leaf_other_a,
+            leaf_ambiguous_b, leaf_other_b,
+        ], root=0)
+
+        bom = generate_bom(scene, collapse_names={"RESERVOIR1", "RESERVOIR2"})
+        by_name = {e.name: e for e in bom}
+        r1_materials = set(by_name["RESERVOIR1"].material_names)
+        r2_materials = set(by_name["RESERVOIR2"].material_names)
+        self.assertEqual(r1_materials & r2_materials, set())
+        self.assertEqual(r1_materials, {"Object 1§RESERVOIR1", "BracketA§RESERVOIR1"})
+        self.assertEqual(r2_materials, {"Object 1§RESERVOIR2", "BracketB§RESERVOIR2"})
+
+    def test_glb_export_suffixes_leaf_materials_matching_bom_material_names(self):
+        # generate_bom and scene3d_to_glb must agree on the exact naming
+        # convention -- verified by actually decoding the exported GLB's
+        # materials, not just trusting both implementations independently
+        import json
+
+        from balzar.scene3d import generate_bom
+
+        scene = self._two_leaf_group_scene()
+        collapse = {"HEATER1"}
+        bom = generate_bom(scene, collapse)
+        glb = scene3d_to_glb(scene, collapse_names=collapse)
+        json_len, _ = struct.unpack_from("<II", glb, 12)
+        gltf = json.loads(glb[20:20 + json_len].decode("utf-8"))
+        glb_material_names = {m["name"] for m in gltf["materials"]}
+
+        heater_row = next(e for e in bom if e.name == "HEATER1")
+        self.assertTrue(set(heater_row.material_names) <= glb_material_names)
+
 
 class TestQuantizationAndCompactTransforms(unittest.TestCase):
     """The three size optimizations applied on top of the first working

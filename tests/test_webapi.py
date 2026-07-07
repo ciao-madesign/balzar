@@ -335,6 +335,64 @@ def _make_3dxml_bytes():
     return buf.getvalue()
 
 
+def _make_3dxml_with_group_bytes():
+    """A HEATER1 sub-assembly wrapping two distinct leaf parts (BoltA,
+    BoltB) -- unlike _make_3dxml_bytes's fixture (a single leaf placed
+    twice, no real group), this exercises collapse_names on a genuine
+    sub-assembly with several children."""
+    import zipfile
+    from io import BytesIO
+
+    manifest = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<Manifest xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+               'xsi:noNamespaceSchemaLocation="Manifest.xsd">'
+               '<Root>main.3dxml</Root></Manifest>')
+    main_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<Model_3dxml xmlns="http://www.3ds.com/xsd/3DXML" '
+               'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+               '<ProductStructure root="1">'
+               '<Reference3D id="1" name="Root"/>'
+               '<Instance3D id="2" name="inst_heater"><IsAggregatedBy>1</IsAggregatedBy>'
+               '<IsInstanceOf>3</IsInstanceOf>'
+               '<RelativeMatrix>1 0 0 0 1 0 0 0 1 0 0 0</RelativeMatrix></Instance3D>'
+               '<Reference3D id="3" name="HEATER1"/>'
+               '<Instance3D id="4" name="inst_a"><IsAggregatedBy>3</IsAggregatedBy>'
+               '<IsInstanceOf>5</IsInstanceOf>'
+               '<RelativeMatrix>1 0 0 0 1 0 0 0 1 0 0 0</RelativeMatrix></Instance3D>'
+               '<Reference3D id="5" name="BoltA"/>'
+               '<ReferenceRep id="6" name="RA" associatedFile="urn:3DXML:a.3DRep"/>'
+               '<InstanceRep id="7" name="IRA"><IsAggregatedBy>5</IsAggregatedBy>'
+               '<IsInstanceOf>6</IsInstanceOf></InstanceRep>'
+               '<Instance3D id="8" name="inst_b"><IsAggregatedBy>3</IsAggregatedBy>'
+               '<IsInstanceOf>9</IsInstanceOf>'
+               '<RelativeMatrix>1 0 0 0 1 0 0 0 1 5 0 0</RelativeMatrix></Instance3D>'
+               '<Reference3D id="9" name="BoltB"/>'
+               '<ReferenceRep id="10" name="RB" associatedFile="urn:3DXML:b.3DRep"/>'
+               '<InstanceRep id="11" name="IRB"><IsAggregatedBy>9</IsAggregatedBy>'
+               '<IsInstanceOf>10</IsInstanceOf></InstanceRep>'
+               '</ProductStructure></Model_3dxml>')
+
+    def shape_rep(fname):
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<XMLRepresentation xmlns="http://www.3ds.com/xsd/3DXML" '
+                'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+                '<Root xsi:type="BagRepType" id="1"><Rep xsi:type="PolygonalRepType" id="2">'
+                '<Faces><Face strips="0 1 2"><SurfaceAttributes>'
+                '<Color xsi:type="RGBAColorType" red="1" green="0" blue="0" alpha="1"/>'
+                '</SurfaceAttributes></Face></Faces>'
+                '<VertexBuffer><Positions>0 0 0 1 0 0 0 1 0</Positions>'
+                '<Normals>0 0 1 0 0 1 0 0 1</Normals></VertexBuffer></Rep></Root>'
+                '</XMLRepresentation>')
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("Manifest.xml", manifest)
+        zf.writestr("main.3dxml", main_xml)
+        zf.writestr("a.3DRep", shape_rep("a"))
+        zf.writestr("b.3DRep", shape_rep("b"))
+    return buf.getvalue()
+
+
 class TestHandleEncode3D(unittest.TestCase):
     def test_success(self):
         status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)
@@ -342,7 +400,8 @@ class TestHandleEncode3D(unittest.TestCase):
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["shape_count"], 1)
         self.assertEqual(resp["instance_count"], 2)
-        self.assertEqual(resp["bom"], [{"name": "Bullone-M6", "count": 2}])
+        self.assertEqual(resp["bom"],
+                        [{"name": "Bullone-M6", "count": 2, "material_names": ["Bullone-M6"]}])
         self.assertFalse(resp["glb_omitted"])
         self.assertGreater(len(resp["glb_base64"]), 0)
         self.assertIn("payload_base64", resp)
@@ -416,6 +475,46 @@ class TestHandleEncode3D(unittest.TestCase):
             {"data": _b64(_make_3dxml_bytes()), "alarm_csv": "not-valid-base64!!!"}, LOCAL_LIMITS)
         self.assertEqual(status, 400)
         self.assertFalse(resp["ok"])
+
+    def test_alarm_csv_naming_a_subassembly_collapses_its_bom_row(self):
+        # end-to-end: an alarm table naming a whole sub-assembly
+        # ("HEATER1") collapses it to one BOM row instead of expanding
+        # to BoltA/BoltB, and the GLB gets suffixed materials matching
+        # material_names -- wiring test for scene3d.generate_bom's
+        # collapse_names (unit-tested in depth in tests/test_scene3d.py)
+        import json
+        import struct
+
+        csv_text = "codice_allarme,nome_componente\nA06,HEATER1\n"
+        status, resp = handle_encode_3d(
+            {"data": _b64(_make_3dxml_with_group_bytes()), "alarm_csv": _b64(csv_text.encode())},
+            LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["bundled"])
+        self.assertEqual(len(resp["bom"]), 1)
+        entry = resp["bom"][0]
+        self.assertEqual(entry["name"], "HEATER1")
+        self.assertEqual(entry["count"], 1)
+        self.assertEqual(set(entry["material_names"]), {"BoltA§HEATER1", "BoltB§HEATER1"})
+
+        glb = base64.b64decode(resp["glb_base64"])
+        json_len, _ = struct.unpack_from("<II", glb, 12)
+        gltf = json.loads(glb[20:20 + json_len].decode("utf-8"))
+        glb_names = {m["name"] for m in gltf["materials"]}
+        self.assertEqual(glb_names, {"BoltA§HEATER1", "BoltB§HEATER1"})
+
+    def test_no_alarm_match_leaves_bom_uncollapsed(self):
+        # the alarm table's component name doesn't match anything in
+        # this scene -- collapse_names is still passed through, but
+        # since nothing matches, the BOM stays fully expanded (honest:
+        # no silent behavior change when a name is simply wrong/typo'd)
+        csv_text = "codice_allarme,nome_componente\nA01,DOES_NOT_EXIST\n"
+        status, resp = handle_encode_3d(
+            {"data": _b64(_make_3dxml_with_group_bytes()), "alarm_csv": _b64(csv_text.encode())},
+            LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        names = {e["name"] for e in resp["bom"]}
+        self.assertEqual(names, {"BoltA", "BoltB"})
 
     def test_bzr_document_is_rendered_into_png_and_svg(self):
         bzr_text = ("CANVAS w=40 h=40 bg=1\nPALETTE i=2 rgb=#FF0000\n"

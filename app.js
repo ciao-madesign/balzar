@@ -944,6 +944,15 @@ function createSceneViewerController(ids) {
     // alarm code (trimmed, uppercased) -> [component name, ...]; an alarm
     // can affect several components at once, hence an array per code
     alarmMap: new Map(),
+    // display label (BOM row name, e.g. "RESERVOIR1") -> exact glTF
+    // material names to highlight for it -- a single-item array equal to
+    // the label itself for an ordinary leaf row, or a whole collapsed
+    // sub-assembly's own descendant materials (scene3d.py generate_bom's
+    // collapse_names) -- built from r.bom's material_names field
+    // (renderScenePanel) so highlightNames/the click handler never
+    // reconstruct the naming convention (COLLAPSE_SEPARATOR) themselves.
+    labelToMaterialNames: new Map(),
+    materialNameToLabel: new Map(),
   };
 
   function cacheColors() {
@@ -968,18 +977,34 @@ function createSceneViewerController(ids) {
     setSelection([]);
   }
 
-  function highlightNames(names) {
+  function highlightNames(labels) {
+    // labels are display labels (BOM row names) -- expanded here to the
+    // exact glTF material names to recolor, so a collapsed sub-assembly
+    // highlights precisely its own descendants; setSelection below keeps
+    // working off display labels unchanged (BOM row .selected toggling,
+    // export-sheet count lookup, etc. are untouched).
     if (!state.originalColors) return;
-    const nameSet = new Set(names);
+    const materialTargets = new Set(
+      labels.flatMap(label => state.labelToMaterialNames.get(label) || [label]));
     viewer.model.materials.forEach(m => {
       const orig = state.originalColors.get(m);
-      if (nameSet.has(m.name)) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
+      if (materialTargets.has(m.name)) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
       else m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], THREED_DIM_ALPHA]);
     });
-    setSelection(names);
+    setSelection(labels);
   }
 
   function selectByName(name) { highlightNames([name]); }
+
+  function setBomMaterialMap(bomEntries) {
+    state.labelToMaterialNames = new Map();
+    state.materialNameToLabel = new Map();
+    (bomEntries || []).forEach(e => {
+      const names = e.material_names && e.material_names.length ? e.material_names : [e.name];
+      state.labelToMaterialNames.set(e.name, names);
+      names.forEach(n => state.materialNameToLabel.set(n, e.name));
+    });
+  }
 
   function setSelection(names) {
     const nameSet = new Set(names);
@@ -1084,7 +1109,12 @@ function createSceneViewerController(ids) {
   viewer.addEventListener("load", cacheColors);
   viewer.addEventListener("click", (ev) => {
     const material = viewer.materialFromPoint(ev.clientX, ev.clientY);
-    if (material) highlightNames([material.name]); else resetSelection();
+    // a direct click resolves the clicked material back to its owning
+    // label (the whole collapsed group, if it's inside one) so the
+    // corresponding BOM row gets selected too -- not just that one exact
+    // placement, once it's inside a collapsed group.
+    if (material) highlightNames([state.materialNameToLabel.get(material.name) || material.name]);
+    else resetSelection();
   });
   resetBtn.addEventListener("click", resetSelection);
   exportBtn.addEventListener("click", exportPartSheet);
@@ -1108,7 +1138,7 @@ function createSceneViewerController(ids) {
   return {
     viewer, statsTable, bomTable, searchNote,
     resetSelection, highlightNames, selectByName, setAlarmRows, renderDocsIndex,
-    clearSelectionState,
+    clearSelectionState, setBomMaterialMap,
   };
 }
 
@@ -1144,6 +1174,7 @@ function renderScenePanel(ctrl, r) {
   ctrl.bomTable.querySelectorAll("tr.part").forEach(row => {
     row.addEventListener("click", () => ctrl.selectByName(row.dataset.partName));
   });
+  ctrl.setBomMaterialMap(r.bom);
 
   ctrl.clearSelectionState(); // new model: colors/selection recached on its own 'load' event
 
@@ -1192,7 +1223,11 @@ threedAlarmCsvInput.addEventListener("change", () => {
     // simple two-column parser (codice_allarme,nome_componente), no
     // quoted-comma support -- a full RFC4180 parser is overkill for a
     // two-field lookup table, declared honestly rather than silently
-    // mishandling an edge case nobody asked for.
+    // mishandling an edge case nobody asked for. name is parts[1] alone
+    // (a third column -- e.g. a linked procedure document -- is accepted
+    // and ignored), not every trailing part joined: joining would glue a
+    // real third column onto the name instead, found on a real alarm
+    // table that has one.
     const rows = [];
     String(reader.result).split(/\r?\n/).forEach((line, i) => {
       if (!line.trim()) return;
@@ -1200,7 +1235,7 @@ threedAlarmCsvInput.addEventListener("change", () => {
       if (parts.length < 2) return;
       const code = parts[0].trim();
       if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
-      rows.push([code, parts.slice(1).join(",").trim()]);
+      rows.push([code, parts[1].trim()]);
     });
     threedCtrl.setAlarmRows(rows);
     threedCtrl.searchNote.textContent =
