@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-290 test, tutti verdi (`python3 -m unittest discover -s tests`):
+293 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -3145,10 +3145,85 @@ non aggiunti alla suite automatica, stesso principio già seguito per il
 resto della UI del progetto (l'interazione Tkinter si verifica
 manualmente sotto Xvfb, non in `unittest`).
 
+### 9.24 "Punto 3" ripreso: tempo di generazione QR parallelizzato per assiemi 3D grandi
+
+Ripresa la richiesta rimandata a inizio sessione (ridurre tempo di
+scansione/dimensione payload per assiemi 3D reali grandi — vedi §9.10
+per la pipeline già misurata, e la libreria di §9.22 che risolve già
+metà del problema: una volta scansionato, un assieme resta in cache
+locale, niente riscansione ad ogni rivisita). Prima di scrivere
+codice, misurato — non stimato — dove sta davvero il collo di
+bottiglia per un assieme *più grande* di quello già documentato:
+costruita una `Scene3D` sintetica apposta (150 forme uniche × 600
+vertici, nessun file 3DXML reale coinvolto — stessa ragione di
+copyright già vista per gli assiemi reali in §9.2/§9.10), **2,3× più
+grande** del payload più grande già misurato (555.922 B contro
+239.491 B), fatta passare per l'intera pipeline reale (encode →
+`payload_to_qr_frames` → `LiveScanner` → decode+GLB) con le stesse
+funzioni di produzione, non un mock.
+
+**Risultato prima del fix**: 137,29 s totali, ben oltre l'obiettivo di
+~60 s (§9.3) — e la sorpresa, verificata non assunta: **la generazione
+dei QR (79,9 s) pesa più della lettura (56,9 s)**, il passo su cui
+tutte le ottimizzazioni precedenti (§2.4b, tiled-crop) si erano
+concentrate. Isolata la causa esatta con un microbenchmark mirato:
+codificare un QR versione 40 vicino alla capacità massima (il caso
+comune, dato che `chunk_payload` dimensiona i pezzi apposta per
+riempirne uno) costa **~0,06 ms per carattere base64** nella libreria
+`qrcode` (puro Python) — misurato identico alle versioni 10, 20, 30 e
+40: il costo è proporzionale ai dati totali, **non** riducibile
+scegliendo un `grid_dim`/dimensione di chunk diversa (un chunk più
+piccolo richiede solo più QR, stesso totale di lavoro).
+
+**Fix**: la codifica di ogni chunk in un QR è indipendente da tutte le
+altre, quindi parallelizzabile sui core della CPU senza toccare un solo
+byte di output. Nuova `_generate_qr_images` in `balzar/qr.py`: usa
+`concurrent.futures.ProcessPoolExecutor`, con i worker che restituiscono
+byte PNG (non oggetti `PIL.Image` — evita di dipendere dal fatto che
+`Image` sia pickle-abile, mai verificato esplicitamente). Misurato:
+**3,84×** di accelerazione su 4 core per 64 codici (14,34 s → 3,74 s),
+byte PNG **identici** byte-per-byte rispetto al percorso sequenziale
+(verificato, non assunto). Sotto `_PARALLEL_MIN_IMAGES = 4` codici resta
+sequenziale (l'overhead di avvio di un process pool non conviene per una
+manciata di QR); qualunque fallimento del pool (un ambiente sandboxato
+senza spawn di processi, un limite di piattaforma non visto in questo
+ambiente) ricade **sempre** sul percorso sequenziale — un'ottimizzazione
+di velocità, mai un requisito di correttezza, stesso principio già
+seguito per l'hint `grid_dim` in lettura (§2.4b).
+
+**Risultato dopo il fix**, stessa scena sintetica: generazione
+79,9 s → **25,3 s** (3,16× reale, coerente col 3,84× isolato — la
+differenza è rumore di sistema in questo sandbox condiviso), totale
+pipeline 137,29 s → **67,62 s** (2,03× complessivo) — vicino
+all'obiettivo di 60 s ma ancora leggermente oltre. **Nessun'altra leva
+facile identificata per chiudere il gap residuo** senza toccare la
+dimensione del payload/fedeltà geometrica (una scelta di prodotto
+genuinamente lossy, deliberatamente non presa qui) o senza aggiungere
+una libreria di codifica QR non-Python (dipendenza nuova, fuori scope):
+la generazione è già parallelizzata al massimo dei core disponibili,
+la lettura non ha un'analoga leva di parallelizzazione nell'uso reale
+(scansione live foto-per-foto, non un lotto di immagini già pronte).
+
+**Onestà sul numero residuo**: il gap (~7,6 s, ~13%) è misurato su un
+sandbox condiviso con variabilità di sistema osservata direttamente
+(la sola lettura è passata da 56,9 s a 41,9 s tra due run identiche,
+nessun codice toccato in mezzo) — su una macchina reale dedicata
+questo stesso assieme sintetico potrebbe già stare nel budget. Se gli
+assiemi reali dell'utente sono ancora più grandi di questo benchmark
+(2,3× il caso più grande già documentato), la richiesta originale di
+punto 3 — semplificazione geometrica per le parti non legate ad
+allarmi — resta la prossima leva da valutare, ora con un punto di
+riferimento reale invece che solo teorico.
+
+Test aggiunti: `tests/test_qr.py::TestParallelQRGeneration` (3 test:
+percorso parallelo identico byte-per-byte al sequenziale, sotto soglia
+resta sequenziale anche con un pool rotto, fallback a sequenziale
+corretto quando il pool fallisce) — 293 test totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 290 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 293 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

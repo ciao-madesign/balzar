@@ -191,6 +191,18 @@ tempo di decodifica per frame ~15-18× peggiore a parità di codice —
 più frame invece di frame più densi (dettagli e numeri in `CLAUDE.md`
 §2.4b).
 
+**Generazione QR parallelizzata** per assiemi 3D grandi (`_generate_qr_images`
+in `balzar/qr.py`): la codifica di un QR versione 40 vicino alla
+capacità massima costa un tempo proporzionale ai dati totali nella
+libreria `qrcode` (puro Python), non riducibile scegliendo un
+`grid_dim` diverso — ma ogni chunk è indipendente dagli altri, quindi
+parallelizzabile sui core della CPU (`ProcessPoolExecutor`, fallback
+automatico e sicuro a sequenziale se il pool non è disponibile).
+Misurato **3,84×** più veloce su una macchina a 4 core, byte PNG
+identici al percorso sequenziale — vedi `CLAUDE.md` §9.24 per la
+misura completa su un assieme sintetico grande (137 s → 68 s di
+pipeline totale).
+
 ## Il linguaggio (DSL)
 
 Un'istruzione per riga, argomenti `chiave=valore`; parentesi e virgole sono
