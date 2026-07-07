@@ -403,5 +403,28 @@ class TestParallelTileDecoding(unittest.TestCase):
         self.assertEqual(len(real_chunks), 16)
 
 
+@unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
+class TestEstimateScanSeconds(unittest.TestCase):
+    """estimate_scan_seconds: an honestly-labelled ballpark, calibrated
+    from a real decode benchmark (CLAUDE.md §9.24), not a promise."""
+
+    def test_scales_with_frame_count(self):
+        from balzar.qr import estimate_scan_seconds
+        low1, high1 = estimate_scan_seconds(1)
+        low10, high10 = estimate_scan_seconds(10)
+        self.assertLess(low1, low10)
+        self.assertLess(high1, high10)
+
+    def test_high_is_at_least_low(self):
+        from balzar.qr import estimate_scan_seconds
+        for n in (0, 1, 7, 50):
+            low, high = estimate_scan_seconds(n)
+            self.assertLessEqual(low, high)
+
+    def test_zero_frames_is_zero(self):
+        from balzar.qr import estimate_scan_seconds
+        self.assertEqual(estimate_scan_seconds(0), (0.0, 0.0))
+
+
 if __name__ == "__main__":
     unittest.main()
