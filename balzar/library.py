@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, asdict
@@ -70,8 +71,24 @@ def _read_manifest() -> list[LibraryEntry]:
 
 
 def _write_manifest(entries: list[LibraryEntry]) -> None:
-    with open(_manifest_path(), "w", encoding="utf-8") as fh:
-        json.dump([asdict(e) for e in entries], fh, indent=2, ensure_ascii=False)
+    """Writes to a temp file in the same directory, then renames it over
+    the real manifest -- os.replace is atomic on both POSIX and Windows,
+    so a crash/disk-full/power-loss mid-write leaves either the old
+    manifest intact or the new one complete, never a truncated/corrupt
+    file in between (which would otherwise break every future
+    list_library()/save_to_library() call)."""
+    directory = library_dir()
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".manifest-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump([asdict(e) for e in entries], fh, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, _manifest_path())
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def save_to_library(payload: bytes, kind: str, source_name: str) -> LibraryEntry:

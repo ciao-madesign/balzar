@@ -108,3 +108,37 @@ class TestLibrary(unittest.TestCase):
         from balzar.library import list_library
 
         self.assertEqual(list_library(), [])
+
+    def test_write_failure_mid_manifest_write_leaves_old_manifest_intact(self):
+        # regression test for a real bug: _write_manifest used to write
+        # manifest.json in place, so a crash/disk-full partway through
+        # left a truncated/corrupt file that broke every future
+        # list_library()/save_to_library() call. It now writes to a
+        # temp file and os.replace()s atomically -- a failure before
+        # the replace must leave the previous manifest untouched.
+        import balzar.library as library
+
+        first = library.save_to_library(b"a", library.KIND_2D, "first")
+        manifest_path = library._manifest_path()
+        with open(manifest_path, encoding="utf-8") as fh:
+            before = fh.read()
+
+        original_dump = library.json.dump
+
+        def _boom(*a, **k):
+            raise RuntimeError("simulated crash mid-write")
+
+        library.json.dump = _boom
+        try:
+            with self.assertRaises(RuntimeError):
+                library.save_to_library(b"b", library.KIND_2D, "second")
+        finally:
+            library.json.dump = original_dump
+
+        with open(manifest_path, encoding="utf-8") as fh:
+            after = fh.read()
+        self.assertEqual(before, after)
+        self.assertEqual([e.id for e in library.list_library()], [first.id])
+        # no leftover temp file
+        leftovers = [f for f in os.listdir(library.library_dir()) if f.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
