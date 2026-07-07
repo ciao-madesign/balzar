@@ -948,7 +948,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-269 test, tutti verdi (`python3 -m unittest discover -s tests`):
+298 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -958,7 +958,9 @@ installati — dipendenze opzionali, non nel motore core),
 vedi §9.5), `test_viewer3d.py` (`parse_alarm_csv` per la barra di
 ricerca/tabella allarmi del viewer 3D — vedi §9.15), `test_bundle.py`
 (formato `BZX1`, dispatch per estensione, transito byte-identico
-attraverso il chunking QR — vedi §9.16). Copertura: round-trip
+attraverso il chunking QR — vedi §9.16), `test_library.py` (libreria
+locale persistente di Balzar Live: logica pura file/JSON, isolata via
+`BALZAR_LIBRARY_DIR` — vedi §9.22/§9.23). Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -2787,10 +2789,525 @@ separato (vedi §11) per il posizionamento di prodotto (Balzar Studio /
 Balzar Live) — questa sezione resta il riferimento tecnico su cosa
 esiste davvero e cosa mancherebbe.
 
+### 9.20 Demo web riorganizzata in Balzar Studio / Balzar Live; "Apri programma" diventa un apritore generico
+
+Seguito diretto di §9.19: una volta stabilita la coppia di prodotto
+Balzar Studio (crea) / Balzar Live (consulta), la demo web (`index.html`)
+aveva ancora sei schede appiattite senza quella distinzione visibile, e
+la sesta scheda ("Apri programma") apriva **solo** `BZR1` — un payload
+`.b3d` (`BZM1`, §9.5) o un bundle `.bzx` (`BZX1`, §9.16) scaricati dalle
+altre schede non potevano essere riaperti da lì, l'unico modo per
+rivederli era rigenerarli da capo con lo stesso upload sorgente. Due
+cambi, entrambi nella stessa direzione (rendere esplicito ciò che era
+già vero nell'architettura):
+
+**1) Riorganizzazione visiva, nessun cambio di funzionalità.** Le
+cinque schede di codifica (Comprimi immagine/Vettoriale/Video/Sequenza/
+Assemblee 3D) sono ora raggruppate sotto un'etichetta "Balzar Studio ·
+crea", la sesta sotto "Balzar Live · consulta" (`.tab-groups`/
+`.tab-group-name` in `style.css`) — stesso principio di `VISIONE.md` §2,
+reso visibile nella UI invece di restare solo nel documento di
+posizionamento.
+
+**2) `handle_render` (in `balzar/webapi.py`) diventa l'apritore
+generico di Balzar Live**: dispatch sui **magic byte** del payload
+decodificato (`BZR1`→2D, `BZM1`→3D, `BZX1`→bundle), non
+sull'estensione del file caricato — stesso principio già usato da
+`chunk_payload`/`qr.py` per trattare i byte come autodescrittivi. Tre
+funzioni interne nuove:
+- `_handle_render_2d` — il vecchio corpo di `handle_render`, invariato
+  a parte un campo `"kind": "2d"` aggiunto per uniformità con gli altri
+  due casi;
+- `_handle_render_3d` — un `.b3d` isolato: `scene3d.decode_payload` +
+  `gltf.scene3d_to_glb` + `generate_bom`, stessa forma di risposta di
+  `handle_encode_3d` (`shape_count`/`reference_count`/`instance_count`/
+  `vertex_count`/`bom`/`glb_base64`) **tranne** `mean_vertex_error`: quel
+  campo confronta contro la geometria originale non quantizzata, che un
+  payload già codificato non porta più con sé — omesso onestamente
+  invece di inventato, nuovo helper condiviso `_scene3d_stats(scene)`
+  usato da entrambi i path 3D/bundle;
+- `_handle_render_bundle` — stesso dispatch che `open_bundle_in_browser`
+  già fa per il viewer desktop (§9.16), riletto qui per produrre JSON
+  invece di HTML: al più un elemento 3D mostrato (il primo, bundle con
+  più di un 3D restano validi ma il viewer ne mostra uno), ogni
+  elemento allarme alimenta `alarm_rows`, `_documents_from_items`
+  (già scritta per la scheda "Assemblee 3D", §9.17/§9.18) produce
+  l'indice documenti — **zero codice nuovo per il rendering dei
+  documenti**, riusato esattamente com'è. Un bundle senza alcun 3D
+  (`has_3d: false`) è valido, risposta con solo `alarm_rows`/
+  `documents`.
+
+**Frontend (`app.js`): stesso principio, refactoring invece di
+duplicazione.** La scheda "Assemblee 3D" aveva ~250 righe di JS legate
+a doppio filo a id DOM fissi (`threedViewer`, `threedBomTable`, ecc.) —
+copiarle per la nuova sotto-vista 3D di "Apri programma" avrebbe
+significato una seconda copia quasi identica nello stesso file (a
+differenza della duplicazione JS server-HTML-vs-statico già accettata
+altrove nel progetto per motivi di ambiente diverso, qui l'ambiente è
+lo stesso file: nessuna scusa per duplicare). Estratta una fabbrica
+`createSceneViewerController(ids)` — click-to-select/isolamento,
+ricerca nome/allarme, export scheda ricambio, indice documenti — e una
+funzione `renderScenePanel(ctrl, r)` che popola tabella statistiche/BOM/
+ricerca/indice da una risposta `r` **il cui formato è già condiviso**
+tra `handle_encode_3d` e `_handle_render_3d`/`_handle_render_bundle`
+(stessa scelta di campo deliberata sopra). La scheda "Assemblee 3D" ora
+istanzia un controller (`threedCtrl`) sugli stessi id di sempre, "Apri
+programma" ne istanzia un secondo (`open3dCtrl`) sui nuovi id
+`open-3d-*` — stessa logica, zero copie. Tre sezioni di risultato ora
+mutuamente esclusive nel tab "Apri programma"
+(`open-result`/`open-3d-result`/`open-docs-result`), scelte da
+`json.kind`/`json.has_3d`.
+
+**Verificato con Playwright contro un devserver locale reale** (stessa
+metodologia già nota, route `handle_*` dirette non un mock — vedi nota
+di sessione su perché non contro Vercel): upload di un `.b3d` nudo →
+viewer 3D con BOM corretta; upload di un `.bzx` con 3D+tabella
+allarmi+documento → viewer 3D + indice documenti (`alarms.csv`,
+`nota.txt`) + ricerca per codice allarme funzionante
+("E100" → "Bullone-M6"); upload di un `.bzx` di soli documenti → solo
+il pannello indice, nessun viewer 3D montato; upload di un `.bzr`
+testuale semplice → percorso 2D invariato. **Verifica di
+non-regressione esplicita sulla scheda "Assemblee 3D"** dopo il
+refactoring del suo JS: stesso file 3DXML sintetico codificato da capo
+→ statistiche con `mean_vertex_error` (assente invece nel path
+"Apri programma", come atteso), click su una riga BOM → scheda ricambio
+abilitata, reset → di nuovo disabilitata, ricerca per nome → trovato.
+Generazione QR verificata anche sulla nuova sezione `open-3d-result`
+(stesso `setupQrButton` riusato con un terzo/quarto prefisso
+`open-3d`/`open-docs`). Nessuna regressione trovata. Suite Python
+invariata (nessuna riga JS è testata da `unittest`, per costruzione —
+stesso principio già seguito per il resto della UI 3D): 7 nuovi test in
+`tests/test_webapi.py::TestHandleRender` (discriminatore `kind` sul
+path 2D, apertura di un `.b3d` nudo, `.b3d` corrotto → 400 pulito,
+bundle con 3D+allarme → entrambi presenti, bundle di soli documenti →
+`has_3d: false`, bundle corrotto → 400 pulito).
+
+**Non ancora fatto**: CLI/GUI desktop non hanno bisogno di questo
+cambio (già aprono `.b3d`/`.bzx` nativamente in `balzar/gui.py`/
+`cli.py` da sessioni precedenti, §9.9/§9.16) — questo lavoro riguardava
+solo la demo web, che era rimasta indietro sull'unico punto (l'apritore
+generico) non ancora allineato.
+
+### 9.21 BOM collassata alla granularità del file allarmi (`generate_bom` collapse_names) + fix CSV a 3 colonne
+
+Seguito diretto di sessione: un file 3DXML reale caricato dall'utente
+(un impianto industriale, non incluso nel repository per lo stesso
+motivo di copyright già visto per gli altri assiemi reali) e una
+tabella allarmi CSV con nomi di **sotto-assiemi** (`HEATER1`,
+`RESERVOIR1`, `UV DEVICE`, ecc.) invece di parti singole hanno
+esposto due problemi reali, verificati sul file prima di scrivere
+codice, non ipotizzati:
+
+1. **Il meccanismo di evidenziazione oggi lavora solo a livello di
+   parte foglia**: `generate_bom`/`highlightNames` non hanno mai
+   avuto un concetto di "sotto-assieme" — cercare "HEATER1" (che
+   esiste nell'albero solo come nodo di raggruppamento, senza
+   geometria propria) restituiva "nessun componente trovato".
+2. **Rischio di sovra-evidenziazione se risolto ingenuamente per
+   nome**: analizzando il file reale, i nomi delle parti foglia sotto
+   `RESERVOIR1`/`RESERVOIR2`/`UV DEVICE`/`FLITRO CARBONE` si
+   sovrappongono per **7-12 nomi ciascuno** con parti fuori dal
+   gruppo (tutti nel pattern placeholder auto-generato `"Object N"`,
+   §2.6/§9.12) — evidenziare "RESERVOIR1" per solo nome testuale
+   avrebbe acceso anche pezzi di `RESERVOIR2`.
+
+**Fix, in `balzar/scene3d.py`**: `generate_bom(scene, collapse_names=None)`
+guadagna un parametro opzionale — un insieme di nomi di `Reference3D`
+(tipicamente le colonne `nome_componente` di una tabella allarmi) che,
+se corrispondono a un nodo di **gruppo** (non foglia) nella scena,
+fermano la ricorsione lì: quel sotto-assieme diventa **una singola
+riga di BOM** invece di espandersi in ogni parte sottostante. Un nome
+che corrisponde già a una parte foglia ordinaria non viene toccato
+(niente da collassare, è già atomico). Senza `collapse_names`
+(default), il comportamento è identico a prima — verificato dai 23
+test preesistenti, tutti verdi senza modifiche.
+
+**`BomEntry` guadagna `material_names: list[str]`** (e `shape_index`
+diventa `int | None`): per una riga ordinaria è un elenco di un solo
+elemento uguale al nome; per una riga collassata è l'insieme esatto
+dei nomi materiale glTF delle sue parti foglia discendenti, **con un
+suffisso** (`COLLAPSE_SEPARATOR = "§"`, mai presente in un nome CAD
+reale) che scopa il nome alla sola istanza di quel gruppo specifico —
+`_collect_leaf_material_names` cammina l'albero sotto il gruppo
+producendo `"{nome_foglia}§{nome_gruppo}"` per ognuna. Questo è
+esattamente ciò che elimina il rischio di sovra-evidenziazione:
+`"Object 112§RESERVOIR1"` e `"Object 112§RESERVOIR2"` non sono mai lo
+stesso materiale, anche se il nome-foglia grezzo coincide.
+
+**`balzar/gltf.py`**: `scene3d_to_glb(scene, collapse_names=None)`
+applica **esattamente la stessa regola** durante l'export (un
+`collapse_context` filettato nella ricorsione di
+`_build_reference_node`, impostato al primo nodo di gruppo il cui nome
+è in `collapse_names`): ogni materiale/mesh foglia sotto quel gruppo
+riceve lo stesso suffisso `§{nome_gruppo}`, garantendo che `generate_bom`
+e l'esportazione GLB restino sempre coerenti — verificato con un test
+che decodifica davvero il GLB prodotto e confronta i nomi materiale
+con `material_names` della BOM, non solo fidandosi che le due
+implementazioni concordino "a vista".
+
+**Frontend (entrambe le copie, `app.js` e `viewer3d.py`'s `_SELECT_JS`)**:
+`highlightNames(labels)` ora espande ogni etichetta (nome riga BOM)
+nel suo insieme di nomi materiale reali tramite una mappa
+`labelToMaterialNames` costruita dalla BOM stessa (dal campo
+`material_names`, o dagli attributi `data-material-names` nella
+pagina generata dal desktop), prima di toccare i materiali del
+modello — `setSelection`/il conteggio per la scheda ricambio
+continuano a lavorare sulle etichette di visualizzazione, invariati.
+Il click diretto sul modello 3D risolve il materiale cliccato alla sua
+etichetta proprietaria (`materialNameToLabel`, la mappa inversa) prima
+di evidenziare, cosicché cliccare una singola vite dentro un gruppo
+collassato seleziona l'intero gruppo (non ha più senso un'unità più
+piccola del gruppo, una volta collassato) e la riga BOM corretta si
+marca come selezionata.
+
+**Bug reale trovato scrivendo i test prima di dichiarare la funzione
+pronta** (non nell'implementazione principale, in un caso limite):
+`effective_display_name` preferisce il nome del wrapper quando la
+foglia ha il pattern auto-generato "Object N" **e** il wrapper ha
+esattamente un figlio — un gruppo collassato con un solo figlio
+placeholder produce quindi un nome materiale come `"HEATER1§HEATER1"`
+(il nome del gruppo usato sia come nome-foglia-preferito sia come
+suffisso) — ridondante ma **non un bug**: resta comunque univoco,
+nessuna collisione. Scoperto scrivendo un test con un gruppo a un solo
+figlio placeholder e correggendo l'aspettativa del test (non il
+codice, che si comporta correttamente), non il contrario.
+
+**Fix separato, stessa sessione — CSV a 3 colonne corrompeva il nome
+componente**: la tabella allarmi reale caricata dall'utente aveva
+anche una terza colonna (`documento_procedura`, la stessa idea già
+proposta in §9.19 per il Bridge). `parse_alarm_csv_text` (e i due
+parser JS gemelli in `app.js`/`_SELECT_JS`) costruivano il nome
+componente con `",".join(cells[1:])` — pensato per tollerare una
+virgola non quotata nel nome, ma che in presenza di una terza colonna
+**incolla il testo della procedura al nome del componente**
+(`"HEATER1,procedura_heater"` invece di `"HEATER1"`), rompendo
+silenziosamente ogni corrispondenza. Fix: `name = cells[1]` da solo
+(o `parts[1]` lato JS) — una terza colonna è ora accettata e ignorata
+correttamente, non più incollata. Un nome con una virgola reale deve
+essere tra virgolette nel CSV sorgente (`csv.reader` lo gestisce già
+bene); il side-effect è che la variante JS (senza supporto quoting,
+dichiarato esplicitamente da tempo) non tollera più neanche una
+virgola grezza non quotata nel nome — untrade-off onesto, non prima
+possibile avere entrambe le cose con un parser così semplice.
+
+**Template CSV corretto fornito in sessione** (non nel repository,
+consegnato all'utente): virgola come separatore (non punto e virgola
+— con `;` ogni riga diventa una singola cella e viene scartata in
+silenzio, zero righe caricate, nessun errore visibile), una riga per
+ogni singolo componente (i multi-componente vanno ripetuti su righe
+separate, mai con `/` in una cella), nomi verificati contro l'albero
+3DXML reale prima di consegnarli (trovato un refuso: `POMPA1` nel CSV
+originale contro `POMPA 1`, con spazio, nel file CAD).
+
+Verificato con Playwright contro un devserver locale reale (fixture
+sintetica: sotto-assieme `HEATER1` con due bulloni `BoltA`/`BoltB`,
+stesso principio di fixture minime già usato altrove — nessun file
+CAD reale nel repository): upload 3DXML + CSV con `HEATER1` come
+componente → BOM mostra una sola riga `HEATER1` (non `BoltA`/`BoltB`
+separate) → click sulla riga seleziona il gruppo (scheda ricambio
+abilitata) → ricerca per codice allarme (`A06`) evidenzia lo stesso
+gruppo → click diretto sul modello non va in crash. Test aggiunti:
+6 in `tests/test_scene3d.py` (`TestBomCollapse` — collasso a una riga,
+nome-già-foglia lasciato intatto, comportamento invariato senza
+collapse_names, conteggio corretto su un gruppo ripetuto, **il test
+di regressione diretto** sul bug reale di sovrapposizione tra due
+gruppi con nomi placeholder ambigui, coerenza BOM↔GLB via decodifica
+reale del GLB prodotto), 1 in `tests/test_viewer3d.py` (colonna
+extra non corrompe più il nome), 2 in `tests/test_webapi.py`
+(collasso end-to-end tramite `handle_encode_3d`, nessuna corrispondenza
+→ BOM resta espansa, onesto invece di un comportamento silenzioso
+diverso) — 280 test totali.
+
+### 9.22 Libreria locale persistente per Balzar Live (app desktop) + fix di un bug reale nello scan
+
+Seguito diretto di sessione: valutato dove finiscono i file dopo una
+scansione/apertura in Balzar Live (scenario concreto discusso: 3
+macchine, 3 QR scansionati, bisogno di scegliere quale visualizzare,
+chiuderlo, aprirne un altro). Decisione presa in sessione: la demo web
+resta a sola memoria di sessione (non serve altro, è solo vetrina); per
+l'app desktop ha senso salvare in memoria fisica del dispositivo di
+lettura — non un registro solo in RAM per la durata del processo.
+
+**Bug reale trovato progettando la feature, non ipotizzato**: `_scan_worker`
+instradava **sempre** il payload scansionato a `_job_from_payload`, che
+capisce solo `BZR1`/testo — scansionare un QR che porta un assieme 3D o
+un bundle **andava in crash** con un `UnicodeDecodeError` grezzo tentando
+di decodificare come UTF-8 dei byte binari `BZM1`/`BZX1`. Riprodotto
+prima di correggere (non solo letto il codice): payload BZM1 reale,
+`data.decode('utf-8')` solleva `'utf-8' codec can't decode byte 0x8c...`.
+Fix: nuovo `_dispatch_payload_bytes(job, data)` in `balzar/gui.py`, lo
+stesso controllo a tre vie sui magic byte (`BZX1`→bundle, `BZM1`→3D,
+altrimenti `BZR1`/testo) già usato da `_worker` per un file su disco, ma
+senza il fallback sull'estensione del percorso (una foto scansionata non
+ne ha uno) — stesso principio di `chunk_payload`/`qr.py`: il payload è
+autodescrivente, non serve un'estensione. `_worker` resta invariato (il
+suo fallback su estensione per un caso di magic corrotto è una difesa
+in più, non ridondante da rimuovere).
+
+**`balzar/library.py` (nuovo modulo)**: un registro locale persistente
+di ciò che è stato decodificato/scansionato — `save_to_library`/
+`list_library`/`load_library_payload`/`delete_from_library`, appoggiati
+a una cartella (`~/.balzar/library/`, sovrascrivibile con
+`BALZAR_LIBRARY_DIR` per i test) con un `manifest.json` e un file per
+voce (stessa estensione già usata ovunque nel progetto: `.bzp`/`.b3d`/
+`.bzx`). Dichiarato onestamente cosa **non** fa: "cloud" qui significa
+solo una cartella normale su disco — se l'utente la punta a una cartella
+sincronizzata da Dropbox/OneDrive/iCloud, è il sistema operativo del
+dispositivo a fare la parte "cloud", balzar non integra nessun
+provider specifico (sarebbe una feature diversa, autenticazione e
+gestione errori di rete incluse, non tentata qui).
+
+**Salvataggio automatico, non su richiesta**: `Job` guadagna
+`is_live_artifact` (vero solo per un job che ha decodificato/scansionato
+un artefatto **esistente** — aprire un `.b3d`/`.bzx`/`.bzp` o scansionare
+un QR — mai per un encode fresco lato Balzar Studio, che l'utente salva
+già esplicitamente se vuole tenerlo). `_poll_queue` chiama
+`_save_job_to_library` solo quando questo flag è vero, subito dopo aver
+mostrato il job — nessun blocco, nessuna domanda, ogni scansione si
+accumula e basta; l'operatore pota le voci vecchie dal pannello quando
+vuole, non ad ogni scansione.
+
+**Pannello "Libreria…"** (nuovo bottone in toolbar): una `Toplevel` con
+una lista di tutte le voci (etichetta, tipo, timestamp), doppio click o
+bottone "Apri" per riaprire una voce esattamente con lo stesso percorso
+di codice di un'apertura normale (`_dispatch_payload_bytes` via un nuovo
+`_open_library_worker`, senza fissare di nuovo `is_live_artifact` —
+altrimenti riaprire una voce già in libreria ne creerebbe una copia
+duplicata ogni volta). "Elimina dalla libreria" rimuove voce e file.
+
+**Bug di risorsa trovato e corretto nello stesso lavoro**: `view_3d()`
+apriva sempre un **nuovo** `http.server.HTTPServer` su una porta effimera
+ad ogni click, anche per lo stesso identico job — passare avanti e
+indietro tra 3 voci di libreria avrebbe lasciato un server in background
+per ogni click, per sempre, fino alla chiusura dell'app. Fix:
+`_render_viewer_page`/`open_glb_in_browser`/`open_bundle_in_browser`
+ora restituiscono il server (non più `None`) — `view_3d()` tiene un
+registro `entry_id -> server` (`self._open_viewers`) e, se un server per
+quella voce è già attivo, riapre solo una scheda del browser sulla stessa
+porta invece di crearne uno nuovo; "Chiudi visualizzazione" nel pannello
+chiama `server.shutdown()` + `server.server_close()` e libera la voce dal
+registro. Nessun cambiamento all'API pubblica per chi non ha bisogno del
+valore di ritorno (nessun altro chiamante nel progetto lo usava).
+
+Verificato con uno smoke test Xvfb dedicato (stessa tecnica già
+consolidata nel progetto: `filedialog`/`messagebox` monkeypatchati, nessun
+vero file picker), non solo scritto: scansione di un QR con payload 3D
+→ nessun crash (bug confermato risolto), auto-salvataggio in libreria
+confermato; apertura di 2 file `.b3d` aggiuntivi → 3 voci in libreria
+(lo scenario "3 macchine" esatto); pannello popolato con 3 righe; apertura
+di una voce dalla libreria → `job.library_entry_id` impostato; **due**
+click consecutivi su "Visualizza in 3D" sulla stessa voce → **una sola**
+`HTTPServer` nel registro, stessa porta entrambe le volte (bug di risorsa
+confermato risolto); chiusura della visualizzazione → registro svuotato;
+eliminazione di una voce → libreria passa da 3 a 2. Nessun bug rimasto.
+
+Test aggiunti: `tests/test_library.py` (8 test, logica pura file/JSON,
+isolata via `BALZAR_LIBRARY_DIR` — nessun Tkinter richiesto, coerente col
+principio già seguito nel progetto: l'interazione Tkinter/browser si
+verifica manualmente sotto Xvfb, non nella suite `unittest`) — 288 test
+totali.
+
+### 9.23 Audit del codice della libreria (§9.22): 10 bug reali trovati e corretti
+
+Subito dopo aver pushato la feature libreria (§9.22, commit `6d21920`),
+eseguito un audit dedicato (`code-review`, 8 angoli di ricerca in
+parallelo — correttezza riga-per-riga, comportamento rimosso, tracciante
+cross-file, riuso, semplificazione, efficienza, altitudine, convenzioni
+CLAUDE.md) sul diff di quel solo commit. Nessuna violazione di
+convenzioni trovata; tutti gli altri 7 angoli hanno prodotto candidati
+reali, verificati leggendo il codice attuale (non solo fidandosi del
+giudizio dei finder) prima di correggerli. Dieci bug/problemi confermati,
+corretti uno alla volta con test/verifica Xvfb dopo ciascuno, commit e
+push separati per ognuno:
+
+1. **Bug di selezione nel pannello libreria**: `_refresh_library_panel`
+   riassegnava `self._library_entries` alla lista appena ricaricata
+   *prima* di leggere l'indice di selezione corrente della listbox —
+   un salvataggio automatico in background mentre il pannello era
+   aperto poteva far evidenziare silenziosamente la voce sbagliata dopo
+   il refresh. Fix: catturare id della voce selezionata contro la
+   lista ancora a schermo, poi ricaricare.
+2. **Il fix anti-leak non copriva gli encode freschi di Balzar
+   Studio** — il più significativo dei dieci. `view_3d()` deduplicava
+   i server solo per `job.library_entry_id`, che resta `None` per un
+   job appena codificato (`.3dxml` fresco o un bundle appena creato,
+   mai salvato in libreria per design — `is_live_artifact` resta
+   `False`). Cliccare ripetutamente "Visualizza in 3D" su un file
+   appena codificato — un flusso comune quanto (o più di) riaprire
+   dalla libreria — perdeva ancora un `HTTPServer` per click, esatto
+   bug che il fix originale dell sessione precedente doveva chiudere,
+   solo sull'altro percorso. Fix: `Job` porta ora un id proprio stabile
+   (`uuid4` all'istanziazione, indipendente dalla libreria);
+   `view_3d()` usa `job.library_entry_id or job.id` come chiave — un
+   job mai salvato in libreria deduplica comunque i propri click
+   ripetuti, mentre codificare un file davvero nuovo (un nuovo `Job`,
+   una nuova chiave) ottiene correttamente un proprio server.
+3. **`_save_job_to_library` catturava solo `OSError`**: un
+   `ValueError` (kind sconosciuto, o `json.JSONDecodeError` da un
+   manifest corrotto — sottoclasse di `ValueError`) sfuggiva non
+   catturato attraverso `_poll_queue`, il cui riarmo ricorrente
+   `root.after(100, self._poll_queue)` sta subito dopo questa
+   chiamata — fermando permanentemente e silenziosamente il polling
+   della coda dei job finché l'app non veniva riavviata. Fix: catturare
+   `(OSError, ValueError)`.
+4. **Scrittura del manifest non atomica**: `_write_manifest` scriveva
+   `manifest.json` direttamente, quindi un crash/disco pieno a metà
+   scrittura lasciava un file troncato/corrotto per ogni sessione
+   futura. Fix: scrivere su un file temporaneo nella stessa cartella e
+   `os.replace()` atomico sopra il manifest reale.
+5. **Voce di libreria orfana dopo elimina-poi-visualizza**: una voce
+   salvata automaticamente ma mai visualizzata (mai in
+   `_open_viewers`) poteva essere eliminata dal pannello mentre il suo
+   `Job` restava quello mostrato nella finestra principale; un
+   successivo primo click su "Visualizza in 3D" per quel job ancora
+   visualizzato resuscitava l'id ormai eliminato dentro
+   `_open_viewers` — e poiché quell'id non poteva più comparire nella
+   listbox (più corta), quel server non poteva più essere chiuso dal
+   pannello. Fix: `_delete_library_selected` azzera
+   `self.job.library_entry_id` se coincide con la voce eliminata, così
+   una vista successiva ricade sull'id proprio del job (punto 2) invece
+   di resuscitare quello eliminato.
+6. **Ordinamento "più recente in cima" non garantito per salvataggi
+   nello stesso secondo**: `list_library()` ordinava per `saved_at`
+   (risoluzione 1 secondo) con `reverse=True`, ma l'ordinamento di
+   Python è stabile anche in modalità inversa (le chiavi uguali
+   mantengono il loro ordine relativo originale, non vengono
+   invertite) — due scansioni completate nello stesso secondo
+   mostravano quindi la più vecchia delle due in cima, contraddicendo
+   l'ordine documentato/atteso. Fix: spareggio per posizione originale
+   di append nel manifest, discendente.
+7. **Logica di dispatch per magic byte duplicata**: `_dispatch_payload_bytes`
+   (usata da scansione QR e riapertura da libreria) e il dispatch
+   inline di `_worker` (usato aprendo un file da disco) erano due copie
+   quasi identiche dello stesso controllo a tre vie BZX1/BZM1/BZR1, con
+   piccole varianti (fallback su estensione, branch immagine) —
+   rischio di divergenza silenziosa se una viene aggiornata e l'altra
+   no. Fix: unificate in un solo metodo con un parametro `path`
+   opzionale, che restituisce quale ramo è stato preso (usato da
+   `_worker` per derivare `job.is_live_artifact` invece di impostarlo
+   inline per ramo).
+8. **Sequenza di chiusura server duplicata**: `_close_library_viewer_selected`
+   e `_delete_library_selected` ripetevano lo stesso pop+shutdown+
+   server_close identico. Fix: estratto un helper condiviso
+   `_shutdown_viewer`.
+9. **Cartella temporanea del viewer mai ripulita**: il `work_dir` di
+   `tempfile.mkdtemp()` creato da `view_3d()` (copia di
+   `model-viewer.min.js` + `model.glb`, ~1 MB) non veniva mai rimosso
+   nemmeno dopo aver chiuso esplicitamente quel visualizzatore —
+   accumulo su disco in una sessione lunga. Fix: `_open_viewers` ora
+   traccia `(server, work_dir)`; `_shutdown_viewer` chiama
+   `shutil.rmtree` sul work_dir dopo aver fermato il server.
+10. **`server.shutdown()` bloccava il thread principale di Tkinter**:
+    `http.server`'s `shutdown()` attende che il loop `serve_forever()`
+    (in un altro thread) se ne accorga al prossimo tick del suo
+    poll-interval (~0,5s di default) — chiamarlo direttamente sul
+    thread principale congelava l'intera GUI per quel tempo ad ogni
+    click su "Chiudi visualizzazione"/"Elimina dalla libreria". Fix:
+    lo shutdown/rmtree ora girano in un thread di background; il pop
+    dal registro resta sincrono (così l'UI riflette subito la
+    chiusura).
+
+**Metodologia di verifica, non solo lettura del diff**: per ogni bug
+strutturale (2, 3, 5, 9, 10) scritto uno smoke test Xvfb dedicato che
+riproduce concretamente lo scenario prima del fix (dove tecnicamente
+possibile senza modificare il codice — es. forzare `save_to_library` a
+sollevare un `ValueError` per il punto 3) e ne conferma la risoluzione
+dopo; per i bug di logica pura (1, 4, 6) letto il codice sorgente
+attuale riga per riga per confermare ogni candidato del finder prima di
+correggere, non fidandosi del solo giudizio dell'agente di revisione.
+Ogni fix è stato verificato con l'intera suite `unittest` **e** con
+tutti gli smoke test Xvfb rilevanti prima di committare, uno alla
+volta, con push separato dopo ciascuno (10 commit, ognuno seguito da
+`git push` sia sul branch di feature sia su `main`).
+
+Test aggiunti in questo audit: 2 in `tests/test_library.py`
+(`test_newest_first_breaks_same_second_ties_by_append_order`,
+`test_write_failure_mid_manifest_write_leaves_old_manifest_intact`) —
+290 test totali. Gli altri fix (2, 3, 5, 9, 10) riguardano interazione
+Tkinter/thread/browser pura — verificati con smoke test Xvfb one-off,
+non aggiunti alla suite automatica, stesso principio già seguito per il
+resto della UI del progetto (l'interazione Tkinter si verifica
+manualmente sotto Xvfb, non in `unittest`).
+
+### 9.24 "Punto 3" ripreso: tempo di generazione QR parallelizzato per assiemi 3D grandi
+
+Ripresa la richiesta rimandata a inizio sessione (ridurre tempo di
+scansione/dimensione payload per assiemi 3D reali grandi — vedi §9.10
+per la pipeline già misurata, e la libreria di §9.22 che risolve già
+metà del problema: una volta scansionato, un assieme resta in cache
+locale, niente riscansione ad ogni rivisita). Prima di scrivere
+codice, misurato — non stimato — dove sta davvero il collo di
+bottiglia per un assieme *più grande* di quello già documentato:
+costruita una `Scene3D` sintetica apposta (150 forme uniche × 600
+vertici, nessun file 3DXML reale coinvolto — stessa ragione di
+copyright già vista per gli assiemi reali in §9.2/§9.10), **2,3× più
+grande** del payload più grande già misurato (555.922 B contro
+239.491 B), fatta passare per l'intera pipeline reale (encode →
+`payload_to_qr_frames` → `LiveScanner` → decode+GLB) con le stesse
+funzioni di produzione, non un mock.
+
+**Risultato prima del fix**: 137,29 s totali, ben oltre l'obiettivo di
+~60 s (§9.3) — e la sorpresa, verificata non assunta: **la generazione
+dei QR (79,9 s) pesa più della lettura (56,9 s)**, il passo su cui
+tutte le ottimizzazioni precedenti (§2.4b, tiled-crop) si erano
+concentrate. Isolata la causa esatta con un microbenchmark mirato:
+codificare un QR versione 40 vicino alla capacità massima (il caso
+comune, dato che `chunk_payload` dimensiona i pezzi apposta per
+riempirne uno) costa **~0,06 ms per carattere base64** nella libreria
+`qrcode` (puro Python) — misurato identico alle versioni 10, 20, 30 e
+40: il costo è proporzionale ai dati totali, **non** riducibile
+scegliendo un `grid_dim`/dimensione di chunk diversa (un chunk più
+piccolo richiede solo più QR, stesso totale di lavoro).
+
+**Fix**: la codifica di ogni chunk in un QR è indipendente da tutte le
+altre, quindi parallelizzabile sui core della CPU senza toccare un solo
+byte di output. Nuova `_generate_qr_images` in `balzar/qr.py`: usa
+`concurrent.futures.ProcessPoolExecutor`, con i worker che restituiscono
+byte PNG (non oggetti `PIL.Image` — evita di dipendere dal fatto che
+`Image` sia pickle-abile, mai verificato esplicitamente). Misurato:
+**3,84×** di accelerazione su 4 core per 64 codici (14,34 s → 3,74 s),
+byte PNG **identici** byte-per-byte rispetto al percorso sequenziale
+(verificato, non assunto). Sotto `_PARALLEL_MIN_IMAGES = 4` codici resta
+sequenziale (l'overhead di avvio di un process pool non conviene per una
+manciata di QR); qualunque fallimento del pool (un ambiente sandboxato
+senza spawn di processi, un limite di piattaforma non visto in questo
+ambiente) ricade **sempre** sul percorso sequenziale — un'ottimizzazione
+di velocità, mai un requisito di correttezza, stesso principio già
+seguito per l'hint `grid_dim` in lettura (§2.4b).
+
+**Risultato dopo il fix**, stessa scena sintetica: generazione
+79,9 s → **25,3 s** (3,16× reale, coerente col 3,84× isolato — la
+differenza è rumore di sistema in questo sandbox condiviso), totale
+pipeline 137,29 s → **67,62 s** (2,03× complessivo) — vicino
+all'obiettivo di 60 s ma ancora leggermente oltre. **Nessun'altra leva
+facile identificata per chiudere il gap residuo** senza toccare la
+dimensione del payload/fedeltà geometrica (una scelta di prodotto
+genuinamente lossy, deliberatamente non presa qui) o senza aggiungere
+una libreria di codifica QR non-Python (dipendenza nuova, fuori scope):
+la generazione è già parallelizzata al massimo dei core disponibili,
+la lettura non ha un'analoga leva di parallelizzazione nell'uso reale
+(scansione live foto-per-foto, non un lotto di immagini già pronte).
+
+**Onestà sul numero residuo**: il gap (~7,6 s, ~13%) è misurato su un
+sandbox condiviso con variabilità di sistema osservata direttamente
+(la sola lettura è passata da 56,9 s a 41,9 s tra due run identiche,
+nessun codice toccato in mezzo) — su una macchina reale dedicata
+questo stesso assieme sintetico potrebbe già stare nel budget. Se gli
+assiemi reali dell'utente sono ancora più grandi di questo benchmark
+(2,3× il caso più grande già documentato), la richiesta originale di
+punto 3 — semplificazione geometrica per le parti non legate ad
+allarmi — resta la prossima leva da valutare, ora con un punto di
+riferimento reale invece che solo teorico.
+
+Test aggiunti: `tests/test_qr.py::TestParallelQRGeneration` (3 test:
+percorso parallelo identico byte-per-byte al sequenziale, sotto soglia
+resta sequenziale anche con un pool rotto, fallback a sequenziale
+corretto quando il pool fallisce) — 293 test totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 269 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 298 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d

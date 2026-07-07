@@ -24,6 +24,7 @@ import os
 import queue
 import threading
 import tkinter as tk
+import uuid
 from tkinter import filedialog, messagebox, ttk
 
 from .imageio import load_frames, save_gif
@@ -43,6 +44,11 @@ class Job:
     """Everything produced by one encode/decode, consumed by the UI."""
 
     def __init__(self):
+        # stable per-instance id, independent of the library (see
+        # library_entry_id below) -- lets view_3d() dedup repeat clicks
+        # on a job that was never saved to the library at all (a fresh
+        # Balzar Studio encode), not only on library-backed ones
+        self.id = uuid.uuid4().hex[:12]
         self.source_name = ""
         self.width = 0
         self.height = 0
@@ -57,7 +63,7 @@ class Job:
         # "Visualizza in 3D" opens the system browser (balzar/viewer3d.py)
         self.is_3d = False
         self.glb = b""
-        self.bom_lines: list[tuple[str, int]] = []
+        self.bom_lines: list[tuple[str, int, list[str]]] = []
         # a multi-document bundle (balzar/bundle.py) is still a 3D job
         # (is_3d=True) but saves as .bzx instead of .b3d, and carries its
         # own alarm table -- distinct from BalzarApp.alarm_rows, which is
@@ -65,6 +71,18 @@ class Job:
         # whichever job is open
         self.is_bundle = False
         self.alarm_rows: list[tuple[str, str]] = []
+        # True only for a job that decoded/scanned an EXISTING artifact
+        # (Balzar Live's consumption side) -- opening a .b3d/.bzx/.bzp or
+        # scanning a QR photo -- never for a fresh encode (Balzar Studio:
+        # a .3dxml or raster image), which the user already saves
+        # explicitly if they want to keep it. Gates the library
+        # auto-save in _poll_queue.
+        self.is_live_artifact = False
+        # set once this job has a library entry (auto-saved, or opened
+        # FROM the library panel) -- lets view_3d() reuse an already-
+        # running viewer server for the same entry instead of leaking a
+        # new one on every click
+        self.library_entry_id: str | None = None
 
 
 class BalzarApp:
@@ -85,6 +103,17 @@ class BalzarApp:
         # technician can load this once and reuse it across several 3D
         # files, so it lives on the app, not on Job.
         self.alarm_rows: list[tuple[str, str]] = []
+        # library entry id (or a job's own fallback id) -> (the running
+        # http.server.HTTPServer already serving it, its temp work_dir)
+        # (balzar/library.py) -- avoids spawning a second
+        # HTTPServer+browser-tab pair for content already open when the
+        # operator switches away and back via the library panel, and
+        # lets "Chiudi visualizzazione" shut the right one down and
+        # remove its temp directory
+        self._open_viewers: dict = {}  # key -> (HTTPServer, work_dir)
+        self._library_window: tk.Toplevel | None = None
+        self._library_listbox: tk.Listbox | None = None
+        self._library_entries: list = []  # parallel to _library_listbox rows
 
         self._build_ui()
         root.after(100, self._poll_queue)
@@ -98,6 +127,8 @@ class BalzarApp:
         ttk.Button(top, text="Apri file…", command=self.open_file).pack(side="left")
         ttk.Button(top, text="Scansiona foto QR…",
                   command=self.open_qr_photo).pack(side="left", padx=(6, 0))
+        ttk.Button(top, text="Libreria…",
+                  command=self.open_library).pack(side="left", padx=(6, 0))
         ttk.Label(top, text="  risoluzione di analisi:").pack(side="left")
         self.max_dim = tk.StringVar(value="400")
         ttk.Combobox(top, textvariable=self.max_dim, width=6, state="readonly",
@@ -211,11 +242,55 @@ class BalzarApp:
         try:
             from .qr import scan_image_file
             payload = scan_image_file(path)
-            self._job_from_payload(job, path, payload)
+            self._dispatch_payload_bytes(job, payload)
+            job.is_live_artifact = True  # a scan is always a Live consumption action
             job.stats.insert(0, ("scansionato da", os.path.basename(path)))
         except Exception as exc:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)
+
+    def _dispatch_payload_bytes(self, job: Job, data: bytes, path: str | None = None) -> str:
+        """Dispatch a decoded/reassembled payload by its own magic header
+        -- BZX1 bundle, BZM1 3D scene, or BZR1/plain-text 2D program --
+        the single shared implementation for both a file already on disk
+        (`path` given, so a mismatched/missing magic still gets an
+        extension-based fallback, and a completely unrecognized file
+        falls back to a fresh raster encode via _job_from_image) and a
+        QR scan or library reopen (`path=None`: no filename to fall back
+        on, the bytes are all there is -- same principle
+        chunk_payload/qr.py already use, the payload is self-describing,
+        so an unrecognized-but-not-BZR1 scan still tries _job_from_payload
+        as a last resort rather than misreading it as a raster image).
+
+        Returns which kind of EXISTING artifact was recognized ("bundle"/
+        "3d"/"2d"), or "image" for the image-fallback branch (a FRESH
+        raster encode, not an existing artifact) -- callers use this to
+        decide job.is_live_artifact.
+
+        Fixes a real bug found while designing the library feature:
+        scanning a QR that carries a 3D assembly or a bundle used to
+        always go through _job_from_payload, which only understands
+        BZR1/text, so it crashed with a raw UnicodeDecodeError trying to
+        utf-8-decode binary BZM1/BZX1 bytes instead of failing (or
+        succeeding) honestly. Previously duplicated (with slight
+        variations) between this method and _worker; unified so the
+        two entry points can't silently drift apart."""
+        from .bundle import MAGIC as BZX1_MAGIC
+        from .scene3d import MAGIC as BZM1_MAGIC
+        if data[:4] == BZX1_MAGIC or (path is not None and path.endswith(".bzx")):
+            self._job_from_bundle(job, data)
+            return "bundle"
+        if data[:4] == BZM1_MAGIC or (path is not None and path.endswith(".b3d")):
+            self._job_from_3d_payload(job, data)
+            return "3d"
+        if data[:4] == MAGIC or (path is not None and path.endswith(".bzr")):
+            self._job_from_payload(job, path or job.source_name, data)
+            return "2d"
+        if path is not None:
+            self._job_from_image(job, data, len(data))
+            return "image"
+        self._job_from_payload(job, job.source_name, data)
+        return "2d"
 
     def _worker(self, path: str) -> None:
         job = Job()
@@ -226,16 +301,8 @@ class BalzarApp:
             else:
                 with open(path, "rb") as fh:
                     data = fh.read()
-                from .bundle import MAGIC as BZX1_MAGIC
-                from .scene3d import MAGIC as BZM1_MAGIC
-                if data[:4] == BZX1_MAGIC or path.endswith(".bzx"):
-                    self._job_from_bundle(job, data)
-                elif data[:4] == BZM1_MAGIC or path.endswith(".b3d"):
-                    self._job_from_3d_payload(job, data)
-                elif data[:4] == MAGIC or path.endswith(".bzr"):
-                    self._job_from_payload(job, path, data)
-                else:
-                    self._job_from_image(job, data, len(data))
+                kind = self._dispatch_payload_bytes(job, data, path=path)
+                job.is_live_artifact = kind != "image"  # opening an EXISTING artifact, not creating one
         except Exception as exc:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)
@@ -295,19 +362,26 @@ class BalzarApp:
         ])
 
     def _finish_3d_job(self, job: Job, payload: bytes, bom, extra_stats,
-                       stats_payload: bytes | None = None) -> None:
+                       stats_payload: bytes | None = None,
+                       collapse_names: set[str] | None = None) -> None:
         """stats_payload overrides which bytes the 'payload size'/'QR
         singolo' stats describe -- needed for a bundle job (_job_from_bundle),
         where the glb is built from the 3D sub-item's own BZM1 bytes but
         the size/QR-fit that matters to the user is the whole bundle
-        that actually gets saved/scanned, not just the sub-item."""
+        that actually gets saved/scanned, not just the sub-item.
+
+        `collapse_names`, if given, must be the same set `bom` was
+        already computed with (scene3d.generate_bom's collapse_names) --
+        threaded to scene3d_to_glb here so the GLB's material names stay
+        consistent with the BOM's own material_names."""
         from .gltf import scene3d_to_glb
         from .scene3d import decode_payload
 
         scene = decode_payload(payload)
         job.is_3d = True
-        job.glb = scene3d_to_glb(scene)
-        job.bom_lines = [(e.name, e.count) for e in sorted(bom, key=lambda e: -e.count)]
+        job.glb = scene3d_to_glb(scene, collapse_names=collapse_names)
+        job.bom_lines = [(e.name, e.count, e.material_names)
+                        for e in sorted(bom, key=lambda e: -e.count)]
         size_payload = payload if stats_payload is None else stats_payload
         job.stats = [
             ("sorgente", job.source_name),
@@ -340,15 +414,20 @@ class BalzarApp:
                 job.alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
         n_docs = sum(1 for it in items if it.kind != KIND_3D)
         bundle_stat = ("bundle", f"{len(items)} elementi ({', '.join(it.kind for it in items)})")
+        # an alarm component name collapses its own BOM/GLB entry into a
+        # single row/highlight group instead of expanding to every leaf
+        # part underneath -- see scene3d.generate_bom's collapse_names
+        collapse_names = {name for _code, name in job.alarm_rows} or None
 
         three_d_items = [it for it in items if it.kind == KIND_3D]
         if three_d_items:
             scene = decode_payload(three_d_items[0].data)
-            self._finish_3d_job(job, three_d_items[0].data, generate_bom(scene), extra_stats=[
+            self._finish_3d_job(job, three_d_items[0].data,
+                               generate_bom(scene, collapse_names), extra_stats=[
                 ("forme uniche", _fmt(len(scene.shapes))),
                 ("riferimenti", _fmt(len(scene.references))),
                 bundle_stat,
-            ], stats_payload=data)
+            ], stats_payload=data, collapse_names=collapse_names)
         else:
             # document-only bundle: no 3D scene to render, just an index
             job.is_3d = False
@@ -438,20 +517,202 @@ class BalzarApp:
         A bundle goes through open_bundle_in_browser straight from its
         raw payload (which builds the 3D view, wires the alarm search,
         AND the document index in one place, including the document-only
-        case). A plain 3D job uses open_glb_in_browser as before."""
+        case). A plain 3D job uses open_glb_in_browser as before.
+
+        If this job has a library entry (balzar/library.py) already
+        being served from a previous "Visualizza in 3D" click, reopens
+        a browser tab at that same port instead of spawning a second
+        HTTPServer+thread for content that's already up -- otherwise
+        clicking back and forth between library entries would leak one
+        background server per click, forever, until the app closes.
+
+        The same caching applies to a job that was never saved to the
+        library at all (a fresh Balzar Studio encode, which never gets
+        a library_entry_id -- see Job.is_live_artifact): job.id is a
+        stable per-instance fallback key, so repeatedly clicking
+        'Visualizza in 3D' on the very same just-encoded job also
+        reuses one server instead of leaking one per click. Encoding a
+        genuinely new file creates a new Job (a new key), which
+        correctly gets its own server."""
         job = self.job
         if not job or not (job.is_3d or job.is_bundle):
+            return
+        key = job.library_entry_id or job.id
+        if key in self._open_viewers:
+            import webbrowser
+            server, _work_dir = self._open_viewers[key]
+            webbrowser.open(f"http://127.0.0.1:{server.server_address[1]}/viewer.html")
+            self.status.set("Riaperto nel browser (visualizzatore già attivo)")
             return
         import tempfile
         work_dir = tempfile.mkdtemp(prefix="balzar_view3d_")
         if job.is_bundle:
             from .viewer3d import open_bundle_in_browser
-            open_bundle_in_browser(job.payload, work_dir)
+            server = open_bundle_in_browser(job.payload, work_dir)
         else:
             from .viewer3d import open_glb_in_browser
-            open_glb_in_browser(job.glb, job.bom_lines, work_dir,
-                                alarm_rows=self.alarm_rows or None)
+            server = open_glb_in_browser(job.glb, job.bom_lines, work_dir,
+                                         alarm_rows=self.alarm_rows or None)
+        self._open_viewers[key] = (server, work_dir)
         self.status.set("Aperto nel browser predefinito")
+
+    # --------------------------------------------------------------- library
+
+    def open_library(self) -> None:
+        """Open (or raise + refresh) the library panel: every artifact
+        decoded/scanned this run AND in past runs (balzar/library.py
+        persists to disk on this device, not just in-memory for the
+        current session) -- the concrete need behind this panel: scan 3
+        machines' QR codes one after another, then pick which of the 3
+        to look at, close it, look at another, all without rescanning."""
+        if self._library_window is not None and self._library_window.winfo_exists():
+            self._refresh_library_panel()
+            self._library_window.deiconify()
+            self._library_window.lift()
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Libreria — file decodificati/scansionati")
+        win.geometry("620x360")
+        self._library_window = win
+
+        ttk.Label(win, text="Doppio click per aprire una voce.",
+                 padding=(8, 6, 8, 0)).pack(anchor="w")
+        self._library_listbox = tk.Listbox(win, font=("TkFixedFont", 9))
+        self._library_listbox.pack(fill="both", expand=True, padx=8, pady=8)
+        self._library_listbox.bind("<Double-Button-1>",
+                                   lambda _ev: self._open_library_selected())
+
+        btns = ttk.Frame(win)
+        btns.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(btns, text="Apri", command=self._open_library_selected).pack(side="left")
+        ttk.Button(btns, text="Chiudi visualizzazione",
+                  command=self._close_library_viewer_selected).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Elimina dalla libreria",
+                  command=self._delete_library_selected).pack(side="left", padx=(6, 0))
+
+        self._refresh_library_panel()
+
+    def _selected_library_entry(self):
+        if self._library_listbox is None:
+            return None
+        sel = self._library_listbox.curselection()
+        if not sel:
+            return None
+        return self._library_entries[sel[0]]
+
+    def _refresh_library_panel(self) -> None:
+        """Re-reads the manifest from disk and redraws the list -- called
+        after every auto-save, open, or delete, so the panel (if open)
+        never shows stale entries.
+
+        Selection must be captured against the list that is CURRENTLY on
+        screen, before it's replaced -- looking the old listbox index up
+        in the freshly-loaded (possibly reordered, e.g. a background
+        auto-save just added a newer entry in front) list would silently
+        select the wrong row."""
+        if self._library_listbox is None or not self._library_listbox.winfo_exists():
+            return
+        selected_id = None
+        sel = self._library_listbox.curselection()
+        if sel and sel[0] < len(self._library_entries):
+            selected_id = self._library_entries[sel[0]].id
+        from .library import list_library
+        self._library_entries = list_library()
+        kind_label = {"2d": "2D", "3d": "3D", "bundle": "bundle"}
+        self._library_listbox.delete(0, "end")
+        for e in self._library_entries:
+            open_marker = "  [aperto]" if e.id in self._open_viewers else ""
+            self._library_listbox.insert(
+                "end", f"{e.saved_at}  [{kind_label.get(e.kind, e.kind)}]  "
+                       f"{e.source_name}{open_marker}")
+        if selected_id:
+            for i, e in enumerate(self._library_entries):
+                if e.id == selected_id:
+                    self._library_listbox.selection_set(i)
+                    break
+
+    def _open_library_selected(self) -> None:
+        entry = self._selected_library_entry()
+        if entry is None:
+            return
+        self.status.set(f"Apertura di {entry.source_name} dalla libreria…")
+        self._set_buttons(False)
+        threading.Thread(target=self._open_library_worker, args=(entry,), daemon=True).start()
+
+    def _open_library_worker(self, entry) -> None:
+        from .library import load_library_payload
+        job = Job()
+        job.source_name = entry.source_name
+        # reuse this entry's already-running viewer (if any) instead of
+        # re-saving a duplicate entry for content that's already in the
+        # library -- is_live_artifact stays False on purpose
+        job.library_entry_id = entry.id
+        try:
+            data = load_library_payload(entry)
+            self._dispatch_payload_bytes(job, data)
+        except Exception as exc:
+            job.error = f"{type(exc).__name__}: {exc}"
+        self.queue.put(job)
+
+    def _shutdown_viewer(self, key: str) -> None:
+        """Pops the running server registered under `key` (a library
+        entry id, or a job's own fallback id) and tears it down in a
+        background thread -- shared by both places that can close a
+        viewer, so the teardown sequence only needs to be right in one
+        place.
+
+        The pop happens here, synchronously, so the UI immediately
+        reflects the close (e.g. a following _refresh_library_panel()
+        call no longer shows it as "aperto"). The actual shutdown()
+        does not: http.server's shutdown() blocks the caller until the
+        OTHER thread's serve_forever() loop notices, on its next
+        poll-interval tick (~0.5s by default) -- doing that on the
+        Tkinter main thread would freeze the whole GUI for that long on
+        every close/delete click."""
+        server, work_dir = self._open_viewers.pop(key)
+
+        def _teardown() -> None:
+            import shutil
+            server.shutdown()
+            server.server_close()
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+        threading.Thread(target=_teardown, daemon=True).start()
+
+    def _close_library_viewer_selected(self) -> None:
+        """Shuts down the ephemeral local server for the selected entry
+        (if one is running) and frees its port -- without this, every
+        'Visualizza in 3D' click across a long session leaks one
+        background HTTPServer thread, forever, until the app quits."""
+        entry = self._selected_library_entry()
+        if entry is None or entry.id not in self._open_viewers:
+            return
+        self._shutdown_viewer(entry.id)
+        self._refresh_library_panel()
+        self.status.set(f"Visualizzazione di {entry.source_name} chiusa")
+
+    def _delete_library_selected(self) -> None:
+        entry = self._selected_library_entry()
+        if entry is None:
+            return
+        if not messagebox.askyesno(
+                "balzar", f"Eliminare '{entry.source_name}' dalla libreria?\n"
+                "Il file scompare dalla libreria, non solo dalla vista."):
+            return
+        if entry.id in self._open_viewers:
+            self._shutdown_viewer(entry.id)
+        # if the currently-displayed job still points at this entry (it
+        # was auto-saved but never actually viewed, so it was never in
+        # _open_viewers above), clear the reference -- otherwise a later
+        # first click on "Visualizza in 3D" for that still-displayed job
+        # would resurrect this now-deleted id into _open_viewers, and
+        # since it can never appear in the library listbox again, that
+        # server could never be closed from this panel again either
+        if self.job is not None and self.job.library_entry_id == entry.id:
+            self.job.library_entry_id = None
+        from .library import delete_from_library
+        delete_from_library(entry)
+        self._refresh_library_panel()
 
     def create_bundle(self) -> None:
         """Combine a 3D assembly, an alarm CSV, and any extra consultable
@@ -611,7 +872,35 @@ class BalzarApp:
         else:
             self.job = job
             self._show_job(job)
+            if job.is_live_artifact:
+                self._save_job_to_library(job)
         self.root.after(100, self._poll_queue)
+
+    def _save_job_to_library(self, job: Job) -> None:
+        """Auto-save a scanned/opened artifact to the local library
+        (balzar/library.py) -- the concrete need this answers: scan 3
+        machines' QR codes one after another, come back to any of the 3
+        later without rescanning, even after closing and reopening the
+        app. Never blocks/asks -- every Live decode just accumulates,
+        the operator prunes old entries from the library panel
+        whenever they want, not on every scan."""
+        from .library import KIND_2D, KIND_3D, KIND_BUNDLE, save_to_library
+        kind = KIND_BUNDLE if job.is_bundle else (KIND_3D if job.is_3d else KIND_2D)
+        try:
+            entry = save_to_library(job.payload, kind, job.source_name)
+            job.library_entry_id = entry.id
+        except (OSError, ValueError) as exc:
+            # a full disk or a locked-down home directory (OSError), or
+            # a corrupt manifest.json / an unrecognized kind (ValueError,
+            # incl. json.JSONDecodeError which subclasses it) shouldn't
+            # take down the job the operator just successfully
+            # opened/scanned -- the artifact is still shown, only the
+            # library save failed. This is called from _poll_queue,
+            # whose own `after` reschedule runs right after this method
+            # returns -- letting anything but these two escape here would
+            # permanently stop the GUI's job-queue polling loop.
+            self.status.set(f"{self.status.get()} (libreria non salvata: {exc})")
+        self._refresh_library_panel()
 
     def _set_buttons(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"

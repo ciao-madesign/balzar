@@ -88,11 +88,19 @@ class Scene3D:
 
 @dataclass
 class BomEntry:
-    """One line of the bill of materials: a named leaf part and how many
-    times it's actually placed in the assembled scene."""
+    """One line of the bill of materials: a named leaf part (or, when
+    collapsed -- see generate_bom's collapse_names -- a whole named
+    sub-assembly) and how many times it's actually placed in the
+    assembled scene. `shape_index` is None for a collapsed sub-assembly
+    row (it has no single shape of its own). `material_names` is the
+    exact set of glTF material names (balzar/gltf.py) this row should
+    highlight -- a single-item list equal to `name` for an ordinary leaf
+    row (today's behaviour, unchanged), or the full set of that specific
+    sub-assembly's own descendant leaf materials for a collapsed row."""
     name: str
-    shape_index: int
+    shape_index: int | None
     count: int
+    material_names: list[str]
 
 
 @dataclass
@@ -523,7 +531,39 @@ def effective_display_name(parent: Reference | None, ref: Reference) -> str:
     return bom_display_name(ref)
 
 
-def generate_bom(scene: Scene3D) -> list[BomEntry]:
+COLLAPSE_SEPARATOR = "§"  # "S" -- essentially never appears in a CAD part
+# name, used to scope a leaf's glTF material name to the collapsed
+# sub-assembly it was gathered under (balzar/gltf.py). Needed because a
+# leaf can carry the CAD export tool's auto-generated placeholder name
+# ("Object N", see effective_display_name), and the SAME placeholder can
+# recur under a different, unrelated sub-assembly -- verified on a real
+# assembly (not a hypothetical): two different reservoir sub-assemblies
+# shared several "Object N" leaf names. Without this suffix, resolving
+# a collapsed group's `material_names` (below) would highlight parts of
+# a sibling group too.
+
+
+def _collect_leaf_material_names(scene: Scene3D, ref_index: int, group_name: str) -> set[str]:
+    """Every distinct glTF material name a leaf reachable under
+    `ref_index` will carry once `group_name` is its collapse context
+    (balzar/gltf.py suffixes leaf material names the same way) -- used
+    to populate a collapsed BomEntry.material_names so it can highlight
+    exactly its own descendants, never a sibling group's."""
+    names: set[str] = set()
+
+    def walk(idx: int, parent: Reference | None) -> None:
+        ref = scene.references[idx]
+        if ref.shape_index is not None:
+            names.add(f"{effective_display_name(parent, ref)}{COLLAPSE_SEPARATOR}{group_name}")
+            return
+        for target, _inst_name, _matrix in ref.children:
+            walk(target, ref)
+
+    walk(ref_index, None)
+    return names
+
+
+def generate_bom(scene: Scene3D, collapse_names: set[str] | None = None) -> list[BomEntry]:
     """Flat bill of materials: every named leaf part and how many times
     it's actually placed, walking the full DAG with multiplicity (the
     same reachability walk already used for instance_count/mean_vertex_error
@@ -538,23 +578,47 @@ def generate_bom(scene: Scene3D) -> list[BomEntry]:
     identically-unnamed references to the same geometry collapse into
     one line, since there's nothing else to tell them apart as distinct
     part types. A reference with no name is labelled explicitly rather
-    than silently merged into an unrelated bucket."""
-    counts: dict[tuple[str, int], int] = {}
-    order: list[tuple[str, int]] = []
+    than silently merged into an unrelated bucket.
+
+    `collapse_names`, if given, is a set of Reference3D names -- e.g. an
+    alarm table's component column, which may name a whole sub-assembly
+    ("HEATER1") rather than one physical part -- that should each become
+    a SINGLE BOM row instead of expanding down to their individual leaf
+    parts. Only names that are actually non-leaf group references in
+    this scene are collapsed; a name that happens to already be an
+    ordinary leaf part is left alone (nothing to collapse, it's already
+    atomic). Without collapse_names (the default), behaves exactly as
+    before -- every leaf part expanded, one row each."""
+    counts: dict[tuple[str, int | None], int] = {}
+    order: list[tuple[str, int | None]] = []
+    materials: dict[tuple[str, int | None], set[str]] = {}
+    names_to_collapse = collapse_names or ()
 
     def walk(ref_index: int, parent: Reference | None) -> None:
         ref = scene.references[ref_index]
-        if ref.shape_index is not None:
-            key = (effective_display_name(parent, ref), ref.shape_index)
+        if ref.name in names_to_collapse and ref.shape_index is None:
+            key = (ref.name, None)
             if key not in counts:
                 counts[key] = 0
                 order.append(key)
+                materials[key] = set()
+            counts[key] += 1
+            materials[key] |= _collect_leaf_material_names(scene, ref_index, ref.name)
+            return  # the whole group is one BOM row -- do not descend further
+        if ref.shape_index is not None:
+            name = effective_display_name(parent, ref)
+            key = (name, ref.shape_index)
+            if key not in counts:
+                counts[key] = 0
+                order.append(key)
+                materials[key] = {name}
             counts[key] += 1
         for target, _inst_name, _matrix in ref.children:
             walk(target, ref)
 
     walk(scene.root, None)
-    return [BomEntry(name=name, shape_index=shape_idx, count=counts[(name, shape_idx)])
+    return [BomEntry(name=name, shape_index=shape_idx, count=counts[(name, shape_idx)],
+                     material_names=sorted(materials[(name, shape_idx)]))
            for name, shape_idx in order]
 
 

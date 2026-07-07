@@ -61,6 +61,7 @@ instead of approximating it (see _tile_boxes).
 
 from __future__ import annotations
 
+import io
 import math
 import struct
 
@@ -70,6 +71,13 @@ from .payload import (CHUNK_MAGIC, QR_V40_BINARY_CAPACITY, _CHUNK_HEADER,
 # base64 expands 3 raw bytes -> 4 text chars; leave a small safety margin
 # under the QR's binary capacity for the text-mode overhead
 CHUNK_RAW_BYTES = (QR_V40_BINARY_CAPACITY * 3 // 4) - 8
+
+# Below this many codes, don't bother spinning up a process pool -- its
+# startup cost (cheap on Linux's fork, measured non-trivial on Windows/
+# macOS's spawn, which re-imports the whole module tree per worker,
+# not verified in this environment) isn't worth it for a handful of QR
+# codes that would encode in well under a second anyway.
+_PARALLEL_MIN_IMAGES = 4
 
 
 def _qr_image(text: str, box_size: int = 6, border: int = 2):
@@ -83,6 +91,49 @@ def _qr_image(text: str, box_size: int = 6, border: int = 2):
     qr.add_data(text)
     qr.make(fit=True)
     return qr.make_image(fill_color="black", back_color="white").convert("RGB")
+
+
+def _qr_image_png_bytes(text: str) -> bytes:
+    """_qr_image, serialized to PNG bytes -- the picklable unit of work
+    for _generate_qr_images's process pool (a PIL Image itself round-
+    trips through pickle on most Pillow versions, but going through PNG
+    bytes explicitly sidesteps ever depending on that, and is lossless
+    for this content, same reasoning as frames_to_gif above)."""
+    buf = io.BytesIO()
+    _qr_image(text).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _generate_qr_images(texts: list[str]):
+    """Encode each text into its own QR image. Measured (not assumed):
+    generating a near-max-capacity version-40 QR (the common case here,
+    since chunk_payload sizes chunks to fill one) costs ~0.06ms per
+    base64 character regardless of QR version -- i.e. proportional to
+    total data, not shrinkable by picking a different grid_dim/chunk
+    size. On a real 555,922 B payload (190 chunks) this dominated the
+    whole pipeline: 79.9s of QR generation alone, more than the 56.9s
+    spent reading the same frames back. But every chunk's QR encoding is
+    completely independent of every other's, so it parallelizes across
+    CPU cores for a real wall-clock win with zero change to the output
+    bytes: measured 3.84x on a 4-core machine for 64 codes (14.34s ->
+    3.74s), identical PNG bytes confirmed byte-for-byte against the
+    sequential path.
+
+    Falls back to sequential unconditionally on any error (a sandboxed
+    environment without process-spawn support, a platform quirk not
+    seen here) -- this is a speed optimization only, and a payload with
+    too few codes to justify pool startup overhead (_PARALLEL_MIN_IMAGES)
+    always stays sequential."""
+    if len(texts) < _PARALLEL_MIN_IMAGES:
+        return [_qr_image(t) for t in texts]
+    try:
+        import concurrent.futures
+        from PIL import Image
+        with concurrent.futures.ProcessPoolExecutor() as ex:
+            png_bytes = list(ex.map(_qr_image_png_bytes, texts))
+        return [Image.open(io.BytesIO(b)).convert("RGB") for b in png_bytes]
+    except Exception:
+        return [_qr_image(t) for t in texts]
 
 
 def _compose_grid(images, labels, frame_label=None):
@@ -110,7 +161,16 @@ def _compose_grid(images, labels, frame_label=None):
     for i, im in enumerate(images):
         r, c = divmod(i, cols)
         x, y = pad + c * (cell + pad), top + pad + r * (cell + pad + label_h)
-        grid.paste(im.resize((cell, cell)), (x, y))
+        # NEAREST, not the default (bicubic): a shorter final chunk
+        # produces a smaller QR (fewer modules -> a lower QR version),
+        # so it's the one usually needing this resize up to `cell` --
+        # bicubic interpolation blurs the sharp module edges into ~256
+        # distinct gray levels (measured), turning a pure black/white
+        # code into a noisier one to binarize under exactly the
+        # non-ideal conditions (handheld camera, autofocus, real
+        # lighting) this format is meant to tolerate. NEAREST preserves
+        # the original 2 colors exactly, just at a different pixel size.
+        grid.paste(im.resize((cell, cell), Image.NEAREST), (x, y))
         draw.text((x, y + cell + 2), labels[i], fill="black")
     return grid
 
@@ -181,23 +241,49 @@ def _tile_boxes(width: int, height: int, grid_dim: int):
     return boxes
 
 
+def _decode_crops(crops: list):
+    """Decode each cropped tile independently. pyzbar calls into native
+    libzbar via ctypes, which releases the GIL for the duration of that
+    call -- verified, not assumed: measured 3.72x speedup running these
+    in threads on a real 16-tile frame (2146ms -> 577ms). Unlike QR
+    *generation* (pure-Python computation, needs real OS processes for
+    parallelism -- see _generate_qr_images), reading benefits from plain
+    threads here: no pickling, no process-pool startup cost.
+
+    Falls back to sequential unconditionally on any error (same safety
+    principle as _generate_qr_images) -- this only ever affects speed,
+    never whether a code gets decoded."""
+    from pyzbar.pyzbar import decode as zbar_decode
+
+    if len(crops) < _PARALLEL_MIN_IMAGES:
+        return [zbar_decode(c) for c in crops]
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            return list(ex.map(zbar_decode, crops))
+    except Exception:
+        return [zbar_decode(c) for c in crops]
+
+
 def _decode_tiled(img, grid_dim: int):
     """Decode a _compose_grid image by cropping it into grid_dim*grid_dim
     regions (see _tile_boxes) and running ZBar on each small crop
     instead of the whole canvas -- measured 3.03s vs 5.84s whole-image
-    for a real 16-code frame, all 16 recovered. This is a speed
-    optimization only, never a correctness requirement: callers must
-    still fall back to a whole-image decode when this doesn't recover a
-    full grid_dim*grid_dim frame (see LiveScanner.add/scan_image_bytes:
-    only used when the caller already knows grid_dim because they
-    generated the grid themselves)."""
-    from pyzbar.pyzbar import decode as zbar_decode
+    for a real 16-code frame, all 16 recovered (further cut to well
+    under 1s by decoding the crops in parallel, see _decode_crops). This
+    is a speed optimization only, never a correctness requirement:
+    callers must still fall back to a whole-image decode when this
+    doesn't recover a full grid_dim*grid_dim frame (see
+    LiveScanner.add/scan_image_bytes: only used when the caller already
+    knows grid_dim because they generated the grid themselves)."""
+    boxes = _tile_boxes(img.size[0], img.size[1], grid_dim)
+    crops = [img.crop(box) for box in boxes]
+    per_crop_results = _decode_crops(crops)
 
     results = []
     seen_data = set()
-    for box in _tile_boxes(img.size[0], img.size[1], grid_dim):
-        crop = img.crop(box)
-        for r in zbar_decode(crop):
+    for crop_results in per_crop_results:
+        for r in crop_results:
             # de-dup: overlapping tile margins can find the same
             # physical code in two adjacent crops
             if r.data not in seen_data:
@@ -210,7 +296,7 @@ def payload_to_qr_image(payload: bytes):
     """One payload -> one printable image (single QR, or an auto-sized
     grid of QR codes if the payload doesn't fit in one)."""
     chunks = chunk_payload(payload, chunk_size=CHUNK_RAW_BYTES)
-    images = [_qr_image(to_base64(c)) for c in chunks]
+    images = _generate_qr_images([to_base64(c) for c in chunks])
     labels = [f"{i + 1}/{len(images)}" for i in range(len(images))]
     return _compose_grid(images, labels)
 
@@ -232,10 +318,13 @@ def payload_to_qr_frames(payload: bytes, grid_dim: int = 4) -> list:
     total = len(chunks)
     per_frame = grid_dim * grid_dim
     n_frames = math.ceil(total / per_frame)
+    # generate every QR image across ALL frames in one pass, not one
+    # process pool per frame -- pool startup only happens once instead
+    # of once per frame, and there's more work to spread across cores
+    all_images = _generate_qr_images([to_base64(c) for c in chunks])
     frames = []
     for f in range(n_frames):
-        batch = chunks[f * per_frame:(f + 1) * per_frame]
-        images = [_qr_image(to_base64(c)) for c in batch]
+        images = all_images[f * per_frame:(f + 1) * per_frame]
         start = f * per_frame
         labels = [f"{start + i + 1}/{total}" for i in range(len(images))]
         frame_label = f"Frame {f + 1}/{n_frames}" if n_frames > 1 else None

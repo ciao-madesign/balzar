@@ -63,10 +63,26 @@ h1 {
   margin-bottom: 0.6rem;
 }
 
+.tab-groups {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+  flex-wrap: wrap;
+}
+.tab-group { flex: 1 1 auto; min-width: 260px; }
+.tab-group-name {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
 .tabs {
   display: flex;
   gap: 0.4rem;
-  margin-top: 1.25rem;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
 }
 .tab {

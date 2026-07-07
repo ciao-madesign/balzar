@@ -53,6 +53,34 @@ class TestQRCarrier(unittest.TestCase):
         with self.assertRaises(ValueError):
             scan_image_bytes(buf.getvalue())
 
+    def test_partial_last_chunk_stays_pure_black_and_white_in_the_grid(self):
+        # regression test for a real bug: _compose_grid resized every QR
+        # image up to the frame's cell size with the default (bicubic)
+        # filter. A payload whose last chunk is shorter than the rest
+        # produces a smaller QR (fewer modules), which is exactly the
+        # one that then gets resized -- bicubic interpolation blurs the
+        # sharp module edges into ~256 distinct gray levels instead of
+        # the 2 (pure black/white) a QR code should have, which is
+        # harder to binarize under non-ideal scanning conditions.
+        from balzar.qr import CHUNK_RAW_BYTES, _compose_grid, _qr_image
+        from balzar.payload import to_base64
+
+        small = _qr_image(to_base64(b"x" * 50))
+        big = _qr_image(to_base64(b"x" * (CHUNK_RAW_BYTES - 8)))
+        self.assertLess(small.size[0], big.size[0])
+
+        grid = _compose_grid([big, small], labels=["1/2", "2/2"])
+        cell = big.size[0]
+        pad = max(12, cell // 15)
+        # the second image (small) lands at column 1, row 0 in a 2-wide grid
+        x = pad + 1 * (cell + pad)
+        resized_region = grid.crop((x, pad, x + cell, pad + cell))
+        colors = resized_region.getcolors(maxcolors=100000)
+        self.assertIsNotNone(colors)
+        self.assertLessEqual(len(colors), 2,
+                             "resized QR must stay pure black/white (NEAREST), not "
+                             "gain interpolation gray levels (bicubic)")
+
 
 def _big_payload(n_lines=28000):
     lines = ["CANVAS w=64 h=64 bg=0"]
@@ -209,6 +237,170 @@ class TestQRFrameSequence(unittest.TestCase):
             self.assertEqual(scanner.result(), payload)
         finally:
             shutil.rmtree(out_dir)
+
+
+@unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
+class TestParallelQRGeneration(unittest.TestCase):
+    """balzar/qr.py's _generate_qr_images: QR encoding at near-max
+    capacity is CPU-bound and proportional to total data regardless of
+    grid_dim (measured in session: ~0.06ms per base64 char at every QR
+    version tried, 10 through 40) -- every chunk's encoding is
+    independent of every other's, so this parallelizes across a process
+    pool for a real wall-clock win (measured 3.84x on a 4-core machine
+    for 64 codes) with zero change to the output bytes. These tests
+    check correctness of that parallel path and its fallback, not the
+    speedup itself (timing assertions would be flaky across CI
+    hardware)."""
+
+    def test_parallel_path_matches_sequential_byte_for_byte(self):
+        from balzar.qr import _PARALLEL_MIN_IMAGES, _generate_qr_images, _qr_image
+
+        texts = [f"payload-chunk-{i}" for i in range(_PARALLEL_MIN_IMAGES + 4)]
+        sequential = [_qr_image(t) for t in texts]
+        parallel = _generate_qr_images(texts)
+        self.assertEqual(len(parallel), len(sequential))
+        for seq_img, par_img in zip(sequential, parallel):
+            buf_seq, buf_par = io.BytesIO(), io.BytesIO()
+            seq_img.save(buf_seq, format="PNG")
+            par_img.save(buf_par, format="PNG")
+            self.assertEqual(buf_seq.getvalue(), buf_par.getvalue())
+
+    def test_below_threshold_stays_sequential_even_if_pool_is_broken(self):
+        import concurrent.futures
+
+        import balzar.qr as qr_mod
+
+        texts = ["only-one-chunk"]
+        self.assertLess(len(texts), qr_mod._PARALLEL_MIN_IMAGES)
+
+        class _BoomPool:
+            def __init__(self, *a, **k):
+                raise RuntimeError("process pool should never be created below threshold")
+
+        original = concurrent.futures.ProcessPoolExecutor
+        concurrent.futures.ProcessPoolExecutor = _BoomPool
+        try:
+            images = qr_mod._generate_qr_images(texts)
+        finally:
+            concurrent.futures.ProcessPoolExecutor = original
+        self.assertEqual(len(images), 1)
+
+    def test_falls_back_to_sequential_when_the_process_pool_fails(self):
+        # a sandboxed environment without process-spawn support, or any
+        # other platform quirk not seen in this session's testing --
+        # this must never crash the whole encode, only forgo the speedup
+        import concurrent.futures
+
+        import balzar.qr as qr_mod
+
+        class _BoomPool:
+            def __init__(self, *a, **k):
+                raise RuntimeError("simulated: this platform can't spawn a process pool")
+
+        original = concurrent.futures.ProcessPoolExecutor
+        concurrent.futures.ProcessPoolExecutor = _BoomPool
+        try:
+            texts = [f"payload-chunk-{i}" for i in range(qr_mod._PARALLEL_MIN_IMAGES + 2)]
+            images = qr_mod._generate_qr_images(texts)
+        finally:
+            concurrent.futures.ProcessPoolExecutor = original
+        self.assertEqual(len(images), len(texts))
+        expected = [qr_mod._qr_image(t) for t in texts]
+        for img, exp in zip(images, expected):
+            buf_img, buf_exp = io.BytesIO(), io.BytesIO()
+            img.save(buf_img, format="PNG")
+            exp.save(buf_exp, format="PNG")
+            self.assertEqual(buf_img.getvalue(), buf_exp.getvalue())
+
+
+@unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
+class TestParallelTileDecoding(unittest.TestCase):
+    """balzar/qr.py's _decode_crops: pyzbar calls into native libzbar via
+    ctypes, which releases the GIL for the call -- verified (not
+    assumed) to give a real wall-clock win from plain threads (measured
+    3.72x on a real 16-tile frame), cheaper than the process pool
+    generation needs since pure-Python QR encoding never releases the
+    GIL. These tests check correctness of the parallel path and its
+    fallback, not the speedup itself (timing assertions would be flaky
+    across CI hardware)."""
+
+    def _real_crops(self, grid_dim=4):
+        from balzar.qr import _tile_boxes, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=grid_dim)
+        img = frames[0]
+        boxes = _tile_boxes(img.size[0], img.size[1], grid_dim)
+        return [img.crop(box) for box in boxes]
+
+    def test_parallel_path_matches_sequential_decoded_data(self):
+        from pyzbar.pyzbar import decode as zbar_decode
+
+        import balzar.qr as qr_mod
+
+        crops = self._real_crops()
+        self.assertGreaterEqual(len(crops), qr_mod._PARALLEL_MIN_IMAGES)
+        sequential = [{r.data for r in zbar_decode(c)} for c in crops]
+        parallel = [{r.data for r in results} for results in qr_mod._decode_crops(crops)]
+        self.assertEqual(parallel, sequential)
+
+    def test_below_threshold_stays_sequential_even_if_pool_is_broken(self):
+        import concurrent.futures
+
+        import balzar.qr as qr_mod
+
+        crops = self._real_crops()[:qr_mod._PARALLEL_MIN_IMAGES - 1]
+
+        class _BoomPool:
+            def __init__(self, *a, **k):
+                raise RuntimeError("thread pool should never be created below threshold")
+
+        original = concurrent.futures.ThreadPoolExecutor
+        concurrent.futures.ThreadPoolExecutor = _BoomPool
+        try:
+            results = qr_mod._decode_crops(crops)
+        finally:
+            concurrent.futures.ThreadPoolExecutor = original
+        self.assertEqual(len(results), len(crops))
+
+    def test_falls_back_to_sequential_when_the_thread_pool_fails(self):
+        import concurrent.futures
+
+        from pyzbar.pyzbar import decode as zbar_decode
+
+        import balzar.qr as qr_mod
+
+        crops = self._real_crops()
+        self.assertGreaterEqual(len(crops), qr_mod._PARALLEL_MIN_IMAGES)
+
+        class _BoomPool:
+            def __init__(self, *a, **k):
+                raise RuntimeError("simulated: this platform can't spawn a thread pool")
+
+        original = concurrent.futures.ThreadPoolExecutor
+        concurrent.futures.ThreadPoolExecutor = _BoomPool
+        try:
+            results = qr_mod._decode_crops(crops)
+        finally:
+            concurrent.futures.ThreadPoolExecutor = original
+        expected = [{r.data for r in zbar_decode(c)} for c in crops]
+        self.assertEqual([{r.data for r in res} for res in results], expected)
+
+    def test_decode_tiled_end_to_end_still_recovers_full_frame(self):
+        # only count actual BZC1 chunks -- zbar can occasionally
+        # misdetect an unrelated barcode symbology in the label-text
+        # region of the image (observed: a spurious non-QR read), which
+        # is harmless because LiveScanner/scan_image_bytes already
+        # filter for the CHUNK_MAGIC prefix downstream; this test cares
+        # that every real chunk is still recovered, not that nothing
+        # else was ever (spuriously) read
+        from balzar.payload import CHUNK_MAGIC, from_base64
+        from balzar.qr import _decode_tiled, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        results = _decode_tiled(frames[0], grid_dim=4)
+        real_chunks = [r for r in results
+                      if from_base64(r.data.decode("ascii"))[:4] == CHUNK_MAGIC]
+        self.assertEqual(len(real_chunks), 16)
 
 
 if __name__ == "__main__":

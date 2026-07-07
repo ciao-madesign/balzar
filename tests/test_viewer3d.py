@@ -43,6 +43,16 @@ class TestParseAlarmCsv(unittest.TestCase):
                          [("E204", "Bullone-M6"), ("E204", "Object-13")])
         Path(path).unlink()
 
+    def test_third_column_is_accepted_and_does_not_corrupt_the_name(self):
+        # regression: an earlier version built name as ",".join(cells[1:]),
+        # which glued a third column (e.g. a linked procedure document,
+        # CLAUDE.md SS9.19) onto the component name instead of ignoring it
+        path = _write_csv("codice_allarme,nome_componente,documento_procedura\n"
+                          "A06,HEATER1,procedura_heater\nA07,RESERVOIR1,procedura_reservoir\n")
+        self.assertEqual(parse_alarm_csv(path),
+                         [("A06", "HEATER1"), ("A07", "RESERVOIR1")])
+        Path(path).unlink()
+
     def test_component_name_containing_a_comma_is_preserved(self):
         # csv.reader handles quoting properly, unlike the browser-side
         # plain split() -- this is exactly the case that parser can't do

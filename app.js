@@ -833,39 +833,6 @@ setupQrButton("sequence", () => (lastSequenceResult && !lastSequenceResult.paylo
 // di trasporto compatto; il GLB è solo per questa vista, esattamente come
 // PNG non è mai il formato che viaggia nel QR.
 
-const threedDrop = document.getElementById("threed-drop");
-const threedFileInput = document.getElementById("threed-file-input");
-const threedBrowseBtn = document.getElementById("threed-browse-btn");
-const threedBundleCsvInput = document.getElementById("threed-bundle-csv-input");
-const threedBundleCsvClearBtn = document.getElementById("threed-bundle-csv-clear-btn");
-const threedStatusEl = document.getElementById("threed-status");
-const threedResultEl = document.getElementById("threed-result");
-const threedViewer = document.getElementById("threed-viewer");
-const threedStatsTable = document.getElementById("threed-stats-table");
-const threedBomTable = document.getElementById("threed-bom-table");
-const threedDlPayload = document.getElementById("threed-dl-payload");
-const threedDlGlb = document.getElementById("threed-dl-glb");
-const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
-const threedResetBtn = document.getElementById("threed-reset-btn");
-const threedExportBtn = document.getElementById("threed-export-btn");
-const threedSearchInput = document.getElementById("threed-search-input");
-const threedSearchBtn = document.getElementById("threed-search-btn");
-const threedSearchNote = document.getElementById("threed-search-note");
-const threedAlarmCsvInput = document.getElementById("threed-alarm-csv-input");
-const threedBundleDocsInput = document.getElementById("threed-bundle-docs-input");
-const threedBundleDocsClearBtn = document.getElementById("threed-bundle-docs-clear-btn");
-const threedDocsBlock = document.getElementById("threed-docs-block");
-const threedDocsIndex = document.getElementById("threed-docs-index");
-
-let lastThreedResult = null;
-let lastThreedGlbUrl = null;
-let threedOriginalColors = null; // Map<Material, [r,g,b,a]>, cached on model load
-let threedSelectedNames = [];    // names currently highlighted -- 0, 1 or many
-let threedSelectedCount = null; // BOM count, only meaningful for exactly 1 name
-// alarm code (trimmed, uppercased) -> [component name, ...]; an alarm can
-// affect several components at once, hence an array of names per code
-let threedAlarmMap = new Map();
-
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -874,158 +841,405 @@ function escapeHtml(s) {
 
 const THREED_HIGHLIGHT = [1.0, 0.55, 0.05, 1.0];
 const THREED_DIM_ALPHA = 0.12;
+const THREED_TEXT_EXT = ["txt", "md", "log"];
+const THREED_IMG_MIME = {
+  png: "image/png", gif: "image/gif", svg: "image/svg+xml",
+  jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp",
+};
 
-function threedCacheColors() {
-  threedOriginalColors = new Map();
-  threedViewer.model.materials.forEach(m => {
-    threedOriginalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
-  });
-  // automation hook: a page that deep-links here with ?q=<code> after a
-  // model is loaded runs the search with no typing -- see CLAUDE.md for
-  // why this is only a convenience here (the web demo always needs a
-  // fresh upload first, unlike the desktop viewer which can bake an
-  // alarm table into a page that gets reopened later with no upload).
-  const q = new URLSearchParams(location.search).get("q");
-  if (q) { threedSearchInput.value = q; threedRunSearch(q); }
+function docExt(label) {
+  const m = /\.([^.]+)$/.exec(label.toLowerCase());
+  return m ? m[1] : "";
 }
 
-function threedResetSelection() {
-  if (!threedOriginalColors) return;
-  threedViewer.model.materials.forEach(m => {
-    m.pbrMetallicRoughness.setBaseColorFactor(threedOriginalColors.get(m));
+// Navigable index of a set of consultable documents (a bundle's 2d/
+// alarm/doc items). Same rule as the desktop viewer's index
+// (viewer3d.py _DOC_JS): inline preview for browser-native simple
+// formats, download for structured ones. Standalone (not tied to a
+// model-viewer instance) since a doc-only bundle -- no 3D at all -- gets
+// the exact same index with nothing else around it.
+function renderDocList(listEl, documents) {
+  listEl.innerHTML = "";
+  documents.forEach(doc => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="role">${escapeHtml(doc.role)}</span>` +
+      `<span>${escapeHtml(doc.label)}</span>`;
+    li.addEventListener("click", () => openDoc(doc, li));
+    listEl.appendChild(li);
   });
-  threedSetSelection([]);
 }
 
-function threedHighlightNames(names) {
-  if (!threedOriginalColors) return;
-  const nameSet = new Set(names);
-  threedViewer.model.materials.forEach(m => {
-    const orig = threedOriginalColors.get(m);
-    if (nameSet.has(m.name)) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
-    else m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], THREED_DIM_ALPHA]);
-  });
-  threedSetSelection(names);
-}
+function openDoc(doc, li) {
+  const existing = document.querySelector(".doc-preview");
+  if (existing) existing.remove();
+  const e = docExt(doc.label);
+  const bytes = base64ToBytes(doc.b64);
 
-function threedSelectMaterial(material) { threedHighlightNames([material.name]); }
-function threedSelectByName(name) { threedHighlightNames([name]); }
-
-function threedSetSelection(names) {
-  const nameSet = new Set(names);
-  threedBomTable.querySelectorAll("tr.part").forEach(row => {
-    row.classList.toggle("selected", nameSet.has(row.dataset.partName));
-  });
-  threedSelectedNames = names;
-  if (names.length === 1) {
-    const row = threedBomTable.querySelector(`tr.part[data-part-name="${CSS.escape(names[0])}"]`);
-    threedSelectedCount = row ? row.dataset.partCount : null;
-  } else {
-    threedSelectedCount = null;
-  }
-  // a part sheet is a picture of ONE part -- stays disabled for zero or
-  // multiple matches (an alarm affecting several components has no
-  // single "the" part to print a sheet for)
-  threedExportBtn.disabled = (threedSelectedNames.length !== 1);
-}
-
-function threedParseCsvText(text) {
-  // Simple two-column CSV (codice_allarme,nome_componente), no quoted-
-  // comma support -- a full RFC4180 parser is overkill for a two-field
-  // lookup table, declared honestly rather than silently mishandling an
-  // edge case nobody asked for.
-  const map = new Map();
-  text.split(/\r?\n/).forEach((line, i) => {
-    if (!line.trim()) return;
-    const parts = line.split(",");
-    if (parts.length < 2) return;
-    const code = parts[0].trim();
-    if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
-    const name = parts.slice(1).join(",").trim();
-    const key = code.toUpperCase();
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(name);
-  });
-  return map;
-}
-
-function threedRunSearch(query) {
-  query = (query || "").trim();
-  if (!query) { threedResetSelection(); return; }
-  const key = query.toUpperCase();
-  if (threedAlarmMap.has(key)) {
-    const names = threedAlarmMap.get(key);
-    threedHighlightNames(names);
-    threedSearchNote.textContent =
-      `Allarme ${query}: ${names.length} componente/i evidenziato/i (${names.join(", ")}).`;
+  if (e !== "csv" && THREED_TEXT_EXT.indexOf(e) < 0 && !THREED_IMG_MIME[e]) {
+    // structured/binary: honest download, no fake inline preview
+    downloadBlob(bytes, doc.label, "application/octet-stream");
     return;
   }
-  const allNames = Array.from(threedBomTable.querySelectorAll("tr.part"))
-    .map(row => row.dataset.partName);
-  const qLower = query.toLowerCase();
-  const exact = allNames.filter(n => n.toLowerCase() === qLower);
-  const matches = exact.length ? exact : allNames.filter(n => n.toLowerCase().includes(qLower));
-  if (matches.length) {
-    threedHighlightNames(matches);
-    threedSearchNote.textContent = `${matches.length} componente/i trovato/i per "${query}".`;
+
+  const box = document.createElement("div");
+  box.className = "doc-preview";
+  const head = document.createElement("div");
+  head.className = "doc-preview-head";
+  head.innerHTML = `<span class="doc-preview-title">${escapeHtml(doc.label)}</span>`;
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.textContent = "Chiudi";
+  closeBtn.addEventListener("click", () => box.remove());
+  head.appendChild(closeBtn);
+  box.appendChild(head);
+
+  if (e === "csv") {
+    const table = document.createElement("table");
+    new TextDecoder("utf-8").decode(bytes).split(/\r?\n/).forEach(line => {
+      if (!line.length) return;
+      const tr = document.createElement("tr");
+      line.split(",").forEach(cell => {
+        const td = document.createElement("td");
+        td.textContent = cell;
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+  } else if (THREED_IMG_MIME[e]) {
+    const img = document.createElement("img");
+    img.src = `data:${THREED_IMG_MIME[e]};base64,${doc.b64}`;
+    box.appendChild(img);
   } else {
-    threedResetSelection();
-    threedSearchNote.textContent = `Nessun componente o codice allarme trovato per "${query}".`;
+    const pre = document.createElement("pre");
+    pre.textContent = new TextDecoder("utf-8").decode(bytes);
+    box.appendChild(pre);
   }
+  li.parentElement.parentElement.appendChild(box);
 }
 
-async function threedExportPartSheet() {
-  // threedViewer.toDataURL() (no options, straight to
-  // displayCanvas().toDataURL()) instead of toBlob({idealAspect:true}):
-  // the latter routes through an internal offscreen-canvas resize+crop
-  // step that was measured to return a fully transparent capture in this
-  // exact layout -- consistent, same byte size every time, so not a
-  // timing race (no amount of waiting or retrying fixed it). Losing the
-  // idealAspect crop is a cosmetic trade for a capture that actually
-  // contains the model.
-  if (threedSelectedNames.length !== 1) return;
-  const selectedName = threedSelectedNames[0];
-  const dataUrl = threedViewer.toDataURL("image/png");
-  const img = new Image();
-  await new Promise(resolve => { img.onload = resolve; img.src = dataUrl; });
+// One controller per <model-viewer> instance on the page (the "Assemblee
+// 3D" tab has one, the generalized "Apri programma" tab gets its own --
+// see createSceneViewerController below) -- click-to-select/isolate,
+// name/alarm search, part-sheet export and the document index are the
+// same interaction regardless of which tab produced the model, so this
+// factory is the single implementation both tabs share instead of two
+// copies of the same ~200 lines.
+function createSceneViewerController(ids) {
+  const viewer = document.getElementById(ids.viewer);
+  const statsTable = document.getElementById(ids.statsTable);
+  const bomTable = document.getElementById(ids.bomTable);
+  const resetBtn = document.getElementById(ids.resetBtn);
+  const exportBtn = document.getElementById(ids.exportBtn);
+  const searchInput = document.getElementById(ids.searchInput);
+  const searchBtn = document.getElementById(ids.searchBtn);
+  const searchNote = document.getElementById(ids.searchNote);
+  const docsBlock = document.getElementById(ids.docsBlock);
+  const docsIndex = document.getElementById(ids.docsIndex);
 
-  const headerH = 64;
-  const canvas = document.createElement("canvas");
-  canvas.width = img.width;
-  canvas.height = img.height + headerH;
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(img, 0, headerH);
-  ctx.fillStyle = "#000000";
-  ctx.font = "bold 22px sans-serif";
-  ctx.fillText(selectedName, 12, 28);
-  ctx.font = "16px sans-serif";
-  ctx.fillText(`Quantita' nell'assieme: ${threedSelectedCount ?? "?"}`, 12, 50);
+  const state = {
+    originalColors: null, // Map<Material, [r,g,b,a]>, cached on model load
+    selectedNames: [],    // names currently highlighted -- 0, 1 or many
+    selectedCount: null,  // BOM count, only meaningful for exactly 1 name
+    // alarm code (trimmed, uppercased) -> [component name, ...]; an alarm
+    // can affect several components at once, hence an array per code
+    alarmMap: new Map(),
+    // display label (BOM row name, e.g. "RESERVOIR1") -> exact glTF
+    // material names to highlight for it -- a single-item array equal to
+    // the label itself for an ordinary leaf row, or a whole collapsed
+    // sub-assembly's own descendant materials (scene3d.py generate_bom's
+    // collapse_names) -- built from r.bom's material_names field
+    // (renderScenePanel) so highlightNames/the click handler never
+    // reconstruct the naming convention (COLLAPSE_SEPARATOR) themselves.
+    labelToMaterialNames: new Map(),
+    materialNameToLabel: new Map(),
+  };
 
-  canvas.toBlob(sheetBlob => {
-    downloadBlob(sheetBlob, `scheda_${selectedName.replace(/[^a-z0-9]+/gi, "_")}.png`, "image/png");
-  }, "image/png");
+  function cacheColors() {
+    state.originalColors = new Map();
+    viewer.model.materials.forEach(m => {
+      state.originalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
+    });
+    // automation hook: a page that deep-links here with ?q=<code> after a
+    // model is loaded runs the search with no typing -- see CLAUDE.md for
+    // why this is only a convenience here (the web demo always needs a
+    // fresh upload first, unlike the desktop viewer which can bake an
+    // alarm table into a page that gets reopened later with no upload).
+    const q = new URLSearchParams(location.search).get("q");
+    if (q) { searchInput.value = q; runSearch(q); }
+  }
+
+  function resetSelection() {
+    if (!state.originalColors) return;
+    viewer.model.materials.forEach(m => {
+      m.pbrMetallicRoughness.setBaseColorFactor(state.originalColors.get(m));
+    });
+    setSelection([]);
+  }
+
+  function highlightNames(labels) {
+    // labels are display labels (BOM row names) -- expanded here to the
+    // exact glTF material names to recolor, so a collapsed sub-assembly
+    // highlights precisely its own descendants; setSelection below keeps
+    // working off display labels unchanged (BOM row .selected toggling,
+    // export-sheet count lookup, etc. are untouched).
+    if (!state.originalColors) return;
+    const materialTargets = new Set(
+      labels.flatMap(label => state.labelToMaterialNames.get(label) || [label]));
+    viewer.model.materials.forEach(m => {
+      const orig = state.originalColors.get(m);
+      if (materialTargets.has(m.name)) m.pbrMetallicRoughness.setBaseColorFactor(THREED_HIGHLIGHT);
+      else m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], THREED_DIM_ALPHA]);
+    });
+    setSelection(labels);
+  }
+
+  function selectByName(name) { highlightNames([name]); }
+
+  function setBomMaterialMap(bomEntries) {
+    state.labelToMaterialNames = new Map();
+    state.materialNameToLabel = new Map();
+    (bomEntries || []).forEach(e => {
+      const names = e.material_names && e.material_names.length ? e.material_names : [e.name];
+      state.labelToMaterialNames.set(e.name, names);
+      names.forEach(n => state.materialNameToLabel.set(n, e.name));
+    });
+  }
+
+  function setSelection(names) {
+    const nameSet = new Set(names);
+    bomTable.querySelectorAll("tr.part").forEach(row => {
+      row.classList.toggle("selected", nameSet.has(row.dataset.partName));
+    });
+    state.selectedNames = names;
+    if (names.length === 1) {
+      const row = bomTable.querySelector(`tr.part[data-part-name="${CSS.escape(names[0])}"]`);
+      state.selectedCount = row ? row.dataset.partCount : null;
+    } else {
+      state.selectedCount = null;
+    }
+    // a part sheet is a picture of ONE part -- stays disabled for zero or
+    // multiple matches (an alarm affecting several components has no
+    // single "the" part to print a sheet for)
+    exportBtn.disabled = (state.selectedNames.length !== 1);
+  }
+
+  function setAlarmRows(rows) {
+    state.alarmMap = new Map();
+    (rows || []).forEach(([code, name]) => {
+      const key = code.trim().toUpperCase();
+      if (!state.alarmMap.has(key)) state.alarmMap.set(key, []);
+      state.alarmMap.get(key).push(name);
+    });
+  }
+
+  function runSearch(query) {
+    query = (query || "").trim();
+    if (!query) { resetSelection(); return; }
+    const key = query.toUpperCase();
+    if (state.alarmMap.has(key)) {
+      const names = state.alarmMap.get(key);
+      highlightNames(names);
+      searchNote.textContent =
+        `Allarme ${query}: ${names.length} componente/i evidenziato/i (${names.join(", ")}).`;
+      return;
+    }
+    const allNames = Array.from(bomTable.querySelectorAll("tr.part"))
+      .map(row => row.dataset.partName);
+    const qLower = query.toLowerCase();
+    const exact = allNames.filter(n => n.toLowerCase() === qLower);
+    const matches = exact.length ? exact : allNames.filter(n => n.toLowerCase().includes(qLower));
+    if (matches.length) {
+      highlightNames(matches);
+      searchNote.textContent = `${matches.length} componente/i trovato/i per "${query}".`;
+    } else {
+      resetSelection();
+      searchNote.textContent = `Nessun componente o codice allarme trovato per "${query}".`;
+    }
+  }
+
+  async function exportPartSheet() {
+    // viewer.toDataURL() (no options, straight to
+    // displayCanvas().toDataURL()) instead of toBlob({idealAspect:true}):
+    // the latter routes through an internal offscreen-canvas resize+crop
+    // step that was measured to return a fully transparent capture in
+    // this exact layout -- consistent, same byte size every time, so not
+    // a timing race (no amount of waiting or retrying fixed it). Losing
+    // the idealAspect crop is a cosmetic trade for a capture that
+    // actually contains the model.
+    if (state.selectedNames.length !== 1) return;
+    const selectedName = state.selectedNames[0];
+    const dataUrl = viewer.toDataURL("image/png");
+    const img = new Image();
+    await new Promise(resolve => { img.onload = resolve; img.src = dataUrl; });
+
+    const headerH = 64;
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width;
+    canvas.height = img.height + headerH;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, headerH);
+    ctx.fillStyle = "#000000";
+    ctx.font = "bold 22px sans-serif";
+    ctx.fillText(selectedName, 12, 28);
+    ctx.font = "16px sans-serif";
+    ctx.fillText(`Quantita' nell'assieme: ${state.selectedCount ?? "?"}`, 12, 50);
+
+    canvas.toBlob(sheetBlob => {
+      downloadBlob(sheetBlob, `scheda_${selectedName.replace(/[^a-z0-9]+/gi, "_")}.png`, "image/png");
+    }, "image/png");
+  }
+
+  // Navigable index of a bundle's consultable documents -- the actual
+  // list rendering/inline-preview logic is shared (renderDocList/openDoc
+  // below, top-level, no dependency on this controller) since a doc-only
+  // bundle (no 3D at all) needs the exact same index with no viewer
+  // around it (see the "Apri programma" tab's docs-only path).
+  function renderDocsIndex(documents) {
+    if (!documents || !documents.length) {
+      docsBlock.hidden = true;
+      return;
+    }
+    docsBlock.hidden = false;
+    renderDocList(docsIndex, documents);
+  }
+
+  viewer.addEventListener("load", cacheColors);
+  viewer.addEventListener("click", (ev) => {
+    const material = viewer.materialFromPoint(ev.clientX, ev.clientY);
+    // a direct click resolves the clicked material back to its owning
+    // label (the whole collapsed group, if it's inside one) so the
+    // corresponding BOM row gets selected too -- not just that one exact
+    // placement, once it's inside a collapsed group.
+    if (material) highlightNames([state.materialNameToLabel.get(material.name) || material.name]);
+    else resetSelection();
+  });
+  resetBtn.addEventListener("click", resetSelection);
+  exportBtn.addEventListener("click", exportPartSheet);
+  searchBtn.addEventListener("click", () => runSearch(searchInput.value));
+  searchInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") runSearch(searchInput.value);
+  });
+
+  function clearSelectionState() {
+    // called right before a NEW model's GLB is assigned to .src -- the
+    // old model's materials are about to disappear, so this must NOT go
+    // through resetSelection()/highlightNames() (those touch the old
+    // model's materials); the new model's own 'load' event calls
+    // cacheColors() and repopulates state.originalColors fresh.
+    state.originalColors = null;
+    state.selectedNames = [];
+    state.selectedCount = null;
+    exportBtn.disabled = true;
+  }
+
+  return {
+    viewer, statsTable, bomTable, searchNote,
+    resetSelection, highlightNames, selectByName, setAlarmRows, renderDocsIndex,
+    clearSelectionState, setBomMaterialMap,
+  };
 }
 
-threedViewer.addEventListener("load", threedCacheColors);
-threedViewer.addEventListener("click", (ev) => {
-  const material = threedViewer.materialFromPoint(ev.clientX, ev.clientY);
-  if (material) threedSelectMaterial(material); else threedResetSelection();
+// Fills in the stats table, BOM (with click-to-select wiring), alarm map
+// and document index for a controller from a scene response `r` --
+// shared by both the "Assemblee 3D" tab (handle_encode_3d) and the
+// generalized "Apri programma" tab (handle_render on a BZM1/BZX1
+// upload), whose responses are deliberately shaped alike (see
+// balzar/webapi.py). `r.mean_vertex_error` is only present when `r`
+// comes from an actual *encode* (it compares against the original,
+// unquantized CAD source) -- omitted honestly, not faked, when reopening
+// an already-encoded payload.
+function renderScenePanel(ctrl, r) {
+  const rows = [
+    ["forme uniche", r.shape_count],
+    ["riferimenti", r.reference_count],
+    ["istanze (posizionamenti)", r.instance_count],
+    ["vertici", r.vertex_count.toLocaleString("it-IT")],
+  ];
+  if (r.mean_vertex_error !== undefined) {
+    rows.push(["errore medio vertici (quantizzazione int16)", r.mean_vertex_error]);
+  }
+  rows.push(["payload", fmtBytes(r.payload_bytes)]);
+  rows.push(["entra in un QR code", r.fits_qr ? "sì" : "no"]);
+  ctrl.statsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+  ctrl.bomTable.innerHTML = r.bom.length
+    ? r.bom.map(e =>
+        `<tr class="part" data-part-name="${escapeHtml(e.name)}" data-part-count="${e.count}">` +
+        `<td>${escapeHtml(e.name)}</td><td>x${e.count}</td></tr>`
+      ).join("")
+    : "<tr><td>(nessuna parte)</td></tr>";
+  ctrl.bomTable.querySelectorAll("tr.part").forEach(row => {
+    row.addEventListener("click", () => ctrl.selectByName(row.dataset.partName));
+  });
+  ctrl.setBomMaterialMap(r.bom);
+
+  ctrl.clearSelectionState(); // new model: colors/selection recached on its own 'load' event
+
+  ctrl.setAlarmRows(r.alarm_rows);
+  if (r.alarm_rows && r.alarm_rows.length) {
+    ctrl.searchNote.textContent =
+      `Tabella allarmi disponibile (${r.alarm_rows.length} riga/e, ` +
+      `${new Set(r.alarm_rows.map(x => x[0])).size} codici) -- cerca subito per nome o codice.`;
+  } else {
+    ctrl.searchNote.textContent = "";
+  }
+
+  ctrl.renderDocsIndex(r.documents || []);
+}
+
+const threedDrop = document.getElementById("threed-drop");
+const threedFileInput = document.getElementById("threed-file-input");
+const threedBrowseBtn = document.getElementById("threed-browse-btn");
+const threedBundleCsvInput = document.getElementById("threed-bundle-csv-input");
+const threedBundleCsvClearBtn = document.getElementById("threed-bundle-csv-clear-btn");
+const threedStatusEl = document.getElementById("threed-status");
+const threedResultEl = document.getElementById("threed-result");
+const threedDlPayload = document.getElementById("threed-dl-payload");
+const threedDlGlb = document.getElementById("threed-dl-glb");
+const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
+const threedAlarmCsvInput = document.getElementById("threed-alarm-csv-input");
+const threedBundleDocsInput = document.getElementById("threed-bundle-docs-input");
+const threedBundleDocsClearBtn = document.getElementById("threed-bundle-docs-clear-btn");
+
+const threedCtrl = createSceneViewerController({
+  viewer: "threed-viewer", statsTable: "threed-stats-table", bomTable: "threed-bom-table",
+  resetBtn: "threed-reset-btn", exportBtn: "threed-export-btn",
+  searchInput: "threed-search-input", searchBtn: "threed-search-btn", searchNote: "threed-search-note",
+  docsBlock: "threed-docs-block", docsIndex: "threed-docs-index",
 });
-threedResetBtn.addEventListener("click", threedResetSelection);
-threedExportBtn.addEventListener("click", threedExportPartSheet);
-threedSearchBtn.addEventListener("click", () => threedRunSearch(threedSearchInput.value));
-threedSearchInput.addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter") threedRunSearch(threedSearchInput.value);
-});
+
+let lastThreedResult = null;
+let lastThreedGlbUrl = null;
+
 threedAlarmCsvInput.addEventListener("change", () => {
   const file = threedAlarmCsvInput.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    threedAlarmMap = threedParseCsvText(String(reader.result));
-    threedSearchNote.textContent = `Tabella allarmi caricata: ${threedAlarmMap.size} codici allarme.`;
+    // manual CSV upload path (client-side only, not from a bundle): same
+    // simple two-column parser (codice_allarme,nome_componente), no
+    // quoted-comma support -- a full RFC4180 parser is overkill for a
+    // two-field lookup table, declared honestly rather than silently
+    // mishandling an edge case nobody asked for. name is parts[1] alone
+    // (a third column -- e.g. a linked procedure document -- is accepted
+    // and ignored), not every trailing part joined: joining would glue a
+    // real third column onto the name instead, found on a real alarm
+    // table that has one.
+    const rows = [];
+    String(reader.result).split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return;
+      const parts = line.split(",");
+      if (parts.length < 2) return;
+      const code = parts[0].trim();
+      if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
+      rows.push([code, parts[1].trim()]);
+    });
+    threedCtrl.setAlarmRows(rows);
+    threedCtrl.searchNote.textContent =
+      `Tabella allarmi caricata: ${new Set(rows.map(x => x[0].trim().toUpperCase())).size} codici allarme.`;
   };
   reader.readAsText(file);
 });
@@ -1113,7 +1327,7 @@ function renderThreedResult(r) {
   if (!r.glb_omitted) {
     const blob = new Blob([base64ToBytes(r.glb_base64)], { type: "model/gltf-binary" });
     lastThreedGlbUrl = URL.createObjectURL(blob);
-    threedViewer.src = lastThreedGlbUrl;
+    threedCtrl.viewer.src = lastThreedGlbUrl;
   }
 
   threedDlPayload.disabled = !!r.payload_omitted;
@@ -1123,131 +1337,16 @@ function renderThreedResult(r) {
   threedDlPayload.textContent = r.bundled ? "scarica bundle (.bzx)" : "scarica payload (.b3d)";
   threedDlGlb.disabled = !!r.glb_omitted;
 
-  const rows = [
-    ["forme uniche", r.shape_count],
-    ["riferimenti", r.reference_count],
-    ["istanze (posizionamenti)", r.instance_count],
-    ["vertici", r.vertex_count.toLocaleString("it-IT")],
-    ["errore medio vertici (quantizzazione int16)", r.mean_vertex_error],
-    ["payload (BZM1)", fmtBytes(r.payload_bytes)],
-    ["entra in un QR code", r.fits_qr ? "sì" : "no"],
-  ];
-  threedStatsTable.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
-
-  threedBomTable.innerHTML = r.bom.length
-    ? r.bom.map(e =>
-        `<tr class="part" data-part-name="${escapeHtml(e.name)}" data-part-count="${e.count}">` +
-        `<td>${escapeHtml(e.name)}</td><td>x${e.count}</td></tr>`
-      ).join("")
-    : "<tr><td>(nessuna parte)</td></tr>";
-  threedBomTable.querySelectorAll("tr.part").forEach(row => {
-    row.addEventListener("click", () => threedSelectByName(row.dataset.partName));
-  });
-
-  threedOriginalColors = null; // new model: cached again on its own 'load' event
-  threedSelectedNames = [];
-  threedSelectedCount = null;
-  threedExportBtn.disabled = true;
-
   // a bundled response (r.bundled) already carries its parsed alarm
-  // table -- wire it in directly, no separate CSV upload needed; a
-  // non-bundled response clears any table from a previous bundle upload
-  // in this same session, so search doesn't silently use stale data
-  // from an unrelated model
-  threedAlarmMap = new Map();
+  // table -- wired in by renderScenePanel directly, no separate CSV
+  // upload needed; a non-bundled response clears any table from a
+  // previous bundle upload in this same session, so search doesn't
+  // silently use stale data from an unrelated model
+  renderScenePanel(threedCtrl, r);
   if (r.bundled && r.alarm_rows && r.alarm_rows.length) {
-    r.alarm_rows.forEach(([code, name]) => {
-      const key = code.trim().toUpperCase();
-      if (!threedAlarmMap.has(key)) threedAlarmMap.set(key, []);
-      threedAlarmMap.get(key).push(name);
-    });
-    threedSearchNote.textContent =
-      `Bundle: tabella allarmi già inclusa (${threedAlarmMap.size} codici) -- cerca subito per nome o codice.`;
-  } else {
-    threedSearchNote.textContent = "";
+    threedCtrl.searchNote.textContent =
+      `Bundle: tabella allarmi già inclusa -- cerca subito per nome o codice.`;
   }
-
-  renderThreedDocsIndex(r.documents || []);
-}
-
-// Navigable index of the bundle's consultable documents (web demo).
-// Same rule as the desktop viewer's index (viewer3d.py _DOC_JS): inline
-// preview for browser-native simple formats, download for structured.
-const THREED_TEXT_EXT = ["txt", "md", "log"];
-const THREED_IMG_MIME = {
-  png: "image/png", gif: "image/gif", svg: "image/svg+xml",
-  jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp",
-};
-
-function docExt(label) {
-  const m = /\.([^.]+)$/.exec(label.toLowerCase());
-  return m ? m[1] : "";
-}
-
-function renderThreedDocsIndex(documents) {
-  threedDocsIndex.innerHTML = "";
-  if (!documents.length) {
-    threedDocsBlock.hidden = true;
-    return;
-  }
-  threedDocsBlock.hidden = false;
-  documents.forEach(doc => {
-    const li = document.createElement("li");
-    li.innerHTML = `<span class="role">${escapeHtml(doc.role)}</span>` +
-      `<span>${escapeHtml(doc.label)}</span>`;
-    li.addEventListener("click", () => openThreedDoc(doc, li));
-    threedDocsIndex.appendChild(li);
-  });
-}
-
-function openThreedDoc(doc, li) {
-  // remove any existing preview
-  const existing = document.querySelector(".doc-preview");
-  if (existing) existing.remove();
-  const e = docExt(doc.label);
-  const bytes = base64ToBytes(doc.b64);
-
-  if (e !== "csv" && THREED_TEXT_EXT.indexOf(e) < 0 && !THREED_IMG_MIME[e]) {
-    // structured/binary: honest download, no fake inline preview
-    downloadBlob(bytes, doc.label, "application/octet-stream");
-    return;
-  }
-
-  const box = document.createElement("div");
-  box.className = "doc-preview";
-  const head = document.createElement("div");
-  head.className = "doc-preview-head";
-  head.innerHTML = `<span class="doc-preview-title">${escapeHtml(doc.label)}</span>`;
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.textContent = "Chiudi";
-  closeBtn.addEventListener("click", () => box.remove());
-  head.appendChild(closeBtn);
-  box.appendChild(head);
-
-  if (e === "csv") {
-    const table = document.createElement("table");
-    new TextDecoder("utf-8").decode(bytes).split(/\r?\n/).forEach(line => {
-      if (!line.length) return;
-      const tr = document.createElement("tr");
-      line.split(",").forEach(cell => {
-        const td = document.createElement("td");
-        td.textContent = cell;
-        tr.appendChild(td);
-      });
-      table.appendChild(tr);
-    });
-    box.appendChild(table);
-  } else if (THREED_IMG_MIME[e]) {
-    const img = document.createElement("img");
-    img.src = `data:${THREED_IMG_MIME[e]};base64,${doc.b64}`;
-    box.appendChild(img);
-  } else {
-    const pre = document.createElement("pre");
-    pre.textContent = new TextDecoder("utf-8").decode(bytes);
-    box.appendChild(pre);
-  }
-  li.parentElement.parentElement.appendChild(box);
 }
 
 threedDlPayload.addEventListener("click", () => {
@@ -1263,7 +1362,11 @@ threedDlGlb.addEventListener("click", () => {
 
 setupQrButton("threed", () => (lastThreedResult && !lastThreedResult.payload_omitted) ? lastThreedResult.payload_base64 : null);
 
-// ------------------------------------------------- apri programma (.bzr/.bzp)
+// ------------------------------------------------- apri programma (Balzar Live)
+// Generic opener: the response's `kind` field (2d / 3d / bundle -- see
+// balzar/webapi.py handle_render) decides which of the three result
+// sections below is shown. Only one of open-result / open-3d-result /
+// open-docs-result is ever visible at a time.
 
 const openDrop = document.getElementById("open-drop");
 const openFileInput = document.getElementById("open-file-input");
@@ -1278,6 +1381,21 @@ const openDlGif = document.getElementById("open-dl-gif");
 const openDlSvg = document.getElementById("open-dl-svg");
 const openDlPayload = document.getElementById("open-dl-payload");
 const openSvgReason = document.getElementById("open-svg-reason");
+
+const open3dResultEl = document.getElementById("open-3d-result");
+const open3dDlPayload = document.getElementById("open-3d-dl-payload");
+const open3dDlGlb = document.getElementById("open-3d-dl-glb");
+const open3dCtrl = createSceneViewerController({
+  viewer: "open-3d-viewer", statsTable: "open-3d-stats-table", bomTable: "open-3d-bom-table",
+  resetBtn: "open-3d-reset-btn", exportBtn: "open-3d-export-btn",
+  searchInput: "open-3d-search-input", searchBtn: "open-3d-search-btn", searchNote: "open-3d-search-note",
+  docsBlock: "open-3d-docs-block", docsIndex: "open-3d-docs-index",
+});
+let lastOpen3dGlbUrl = null;
+
+const openDocsResultEl = document.getElementById("open-docs-result");
+const openDocsIndexEl = document.getElementById("open-docs-index");
+const openDocsDlPayload = document.getElementById("open-docs-dl-payload");
 
 let lastOpenResult = null;
 
@@ -1304,6 +1422,8 @@ function setOpenStatus(msg, isError) {
 
 async function handleOpenFile(file) {
   openResultEl.hidden = true;
+  open3dResultEl.hidden = true;
+  openDocsResultEl.hidden = true;
   setOpenStatus(`Apertura di "${file.name}" in corso…`);
   try {
     const dataUrl = await new Promise((resolve, reject) => {
@@ -1322,8 +1442,18 @@ async function handleOpenFile(file) {
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || "errore sconosciuto");
 
-    lastOpenResult = json;
-    renderOpenResult(json);
+    lastOpenResult = null;
+    lastOpen3dResult = null;
+    lastOpenDocsResult = null;
+    if (json.kind === "3d") {
+      renderOpen3dResult(json);
+    } else if (json.kind === "bundle") {
+      if (json.has_3d) renderOpen3dResult(json);
+      else renderOpenDocsResult(json);
+    } else {
+      lastOpenResult = json;
+      renderOpenResult(json);
+    }
     setOpenStatus(`Fatto: ${file.name}`);
   } catch (err) {
     setOpenStatus("Errore: " + err.message, true);
@@ -1365,6 +1495,50 @@ function renderOpenResult(r) {
   openResultEl.hidden = false;
 }
 
+// A bare .b3d (kind "3d") or a .bzx bundle that includes a 3D item
+// (kind "bundle", has_3d true) -- same response shape as the "Assemblee
+// 3D" tab (balzar/webapi.py keeps them deliberately alike), so the same
+// controller/renderScenePanel from that tab does the rendering here too.
+let lastOpen3dResult = null;
+
+function renderOpen3dResult(r) {
+  open3dResultEl.hidden = false;
+
+  if (lastOpen3dGlbUrl) URL.revokeObjectURL(lastOpen3dGlbUrl);
+  const blob = new Blob([base64ToBytes(r.glb_base64)], { type: "model/gltf-binary" });
+  lastOpen3dGlbUrl = URL.createObjectURL(blob);
+  open3dCtrl.viewer.src = lastOpen3dGlbUrl;
+
+  lastOpen3dResult = r;
+  renderScenePanel(open3dCtrl, r);
+}
+
+open3dDlGlb.addEventListener("click", () => {
+  if (!lastOpen3dResult) return;
+  downloadBlob(base64ToBytes(lastOpen3dResult.glb_base64), "output.glb", "model/gltf-binary");
+});
+open3dDlPayload.addEventListener("click", () => {
+  if (!lastOpen3dResult || !lastOpen3dResult.payload_base64) return;
+  const filename = lastOpen3dResult.kind === "bundle" ? "rigenerato.bzx" : "rigenerato.b3d";
+  downloadBlob(base64ToBytes(lastOpen3dResult.payload_base64), filename, "application/octet-stream");
+});
+
+// A .bzx bundle with no 3D item at all (kind "bundle", has_3d false):
+// just the navigable document index, same list rendering as the
+// "Assemblee 3D" tab's bundle documents (renderDocList, shared).
+let lastOpenDocsResult = null;
+
+function renderOpenDocsResult(r) {
+  openDocsResultEl.hidden = false;
+  lastOpenDocsResult = r;
+  renderDocList(openDocsIndexEl, r.documents || []);
+}
+
+openDocsDlPayload.addEventListener("click", () => {
+  if (!lastOpenDocsResult || !lastOpenDocsResult.payload_base64) return;
+  downloadBlob(base64ToBytes(lastOpenDocsResult.payload_base64), "rigenerato.bzx", "application/octet-stream");
+});
+
 openDlPng.addEventListener("click", () => {
   if (!lastOpenResult || !lastOpenResult.png_base64) return;
   downloadBlob(base64ToBytes(lastOpenResult.png_base64), "rigenerato.png", "image/png");
@@ -1383,3 +1557,5 @@ openDlSvg.addEventListener("click", () => {
 });
 
 setupQrButton("open", () => (lastOpenResult && !lastOpenResult.payload_omitted) ? lastOpenResult.payload_base64 : null);
+setupQrButton("open-3d", () => (lastOpen3dResult && !lastOpen3dResult.payload_omitted) ? lastOpen3dResult.payload_base64 : null);
+setupQrButton("open-docs", () => (lastOpenDocsResult && !lastOpenDocsResult.payload_omitted) ? lastOpenDocsResult.payload_base64 : null);

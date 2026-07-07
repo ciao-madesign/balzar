@@ -186,6 +186,20 @@ _SELECT_JS = """
   var alarmMap = new Map();
   var allPartNames = Array.prototype.map.call(
       document.querySelectorAll('#bom tr.part'), function(row){ return row.dataset.partName; });
+  // display label (BOM row name, e.g. "RESERVOIR1") -> exact glTF
+  // material names to highlight for it -- a single-item array equal to
+  // the label itself for an ordinary leaf row, or a whole collapsed
+  // sub-assembly's own descendant materials (scene3d.py generate_bom's
+  // collapse_names) -- built once from data-material-names so neither
+  // highlightNames nor the click handler ever reconstruct the naming
+  // convention (COLLAPSE_SEPARATOR) themselves.
+  var labelToMaterialNames = new Map();
+  var materialNameToLabel = new Map();
+  document.querySelectorAll('#bom tr.part').forEach(function(row){
+    var names = JSON.parse(row.dataset.materialNames || '[]');
+    labelToMaterialNames.set(row.dataset.partName, names);
+    names.forEach(function(n){ materialNameToLabel.set(n, row.dataset.partName); });
+  });
 
   function loadAlarmRows(rows){
     (rows || []).forEach(function(pair){
@@ -211,20 +225,34 @@ _SELECT_JS = """
     });
     setSelection([]);
   }
-  function highlightNames(names){
+  function highlightNames(labels){
+    // labels are display labels (BOM row names) -- expanded here to the
+    // exact glTF material names to recolor, so a collapsed sub-assembly
+    // highlights precisely its own descendants and setSelection below
+    // keeps working off display labels unchanged (BOM row .selected
+    // toggling, export-sheet count lookup, etc. are untouched).
     if (!originalColors) return;
-    var nameSet = new Set(names);
+    var materialTargets = new Set();
+    labels.forEach(function(label){
+      (labelToMaterialNames.get(label) || [label]).forEach(function(n){ materialTargets.add(n); });
+    });
     mv.model.materials.forEach(function(m){
       var orig = originalColors.get(m);
-      if (nameSet.has(m.name)){
+      if (materialTargets.has(m.name)){
         m.pbrMetallicRoughness.setBaseColorFactor(HIGHLIGHT);
       } else {
         m.pbrMetallicRoughness.setBaseColorFactor([orig[0], orig[1], orig[2], DIM_ALPHA]);
       }
     });
-    setSelection(names);
+    setSelection(labels);
   }
-  function selectMaterial(material){ highlightNames([material.name]); }
+  function selectMaterial(material){
+    // a direct click on the 3D model resolves the clicked material back
+    // to its owning label (the whole collapsed group, if it's inside
+    // one) so the corresponding BOM row gets selected too -- not just
+    // that one exact placement, once it's inside a collapsed group.
+    highlightNames([materialNameToLabel.get(material.name) || material.name]);
+  }
   function selectByName(name){ highlightNames([name]); }
   function setSelection(names){
     var nameSet = new Set(names);
@@ -248,7 +276,13 @@ _SELECT_JS = """
     // Simple two-column CSV (codice_allarme,nome_componente), no quoted-
     // comma support -- a full RFC4180 parser is overkill for a two-field
     // lookup table, declared honestly rather than silently mishandling
-    // an edge case nobody asked for.
+    // an edge case nobody asked for. name is parts[1] alone (a third
+    // column -- e.g. a linked procedure document, CLAUDE.md SS9.19 --
+    // is accepted and ignored), not every trailing part joined: joining
+    // would glue a real third column onto the name instead of just
+    // tolerating a raw unquoted comma inside it -- it can't tell the two
+    // apart, and a real alarm table with a third column showed this
+    // corrupting the name.
     var map = new Map();
     text.split(/\\r?\\n/).forEach(function(line, i){
       if (!line.trim()) return;
@@ -256,7 +290,7 @@ _SELECT_JS = """
       if (parts.length < 2) return;
       var code = parts[0].trim();
       if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
-      var name = parts.slice(1).join(',').trim();
+      var name = parts[1].trim();
       var key = code.toUpperCase();
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(name);
@@ -354,13 +388,20 @@ _SELECT_JS = """
 """
 
 
-def _bom_html(bom_lines: list[tuple[str, int]] | None) -> str:
+def _bom_html(bom_lines: list[tuple[str, int, list[str]]] | None) -> str:
+    """`material_names` (third element, one entry per row) is the exact
+    set of glTF material names this row should highlight -- a single-
+    item list matching `name` for an ordinary leaf row, or a whole
+    collapsed sub-assembly's own descendant materials (scene3d.py's
+    generate_bom collapse_names) -- embedded as JSON in a data attribute
+    so _SELECT_JS never has to reconstruct the naming convention itself."""
     if not bom_lines:
         return ""
     rows = "".join(
-        f'<tr class="part" data-part-name="{html.escape(name)}" data-part-count="{count}">'
+        f'<tr class="part" data-part-name="{html.escape(name)}" data-part-count="{count}" '
+        f'data-material-names=\'{html.escape(json.dumps(material_names))}\'>'
         f'<td>{html.escape(name)}</td><td class="qty">x{count}</td></tr>'
-        for name, count in bom_lines
+        for name, count, material_names in bom_lines
     )
     return f'<div id="bom"><h3>Distinta base</h3><table>{rows}</table></div>'
 
@@ -484,7 +525,20 @@ def parse_alarm_csv_text(text: str) -> list[tuple[str, str]]:
     quoted commas correctly, so no need to declare the same limitation
     twice). Takes text directly (not a path) so it works equally on a
     CSV loaded from disk or one unpacked from a bundle (balzar/bundle.py)
-    in memory."""
+    in memory.
+
+    A third (or later) column -- e.g. a linked procedure document, see
+    CLAUDE.md SS9.19's Bridge scoping -- is accepted and ignored here:
+    `name` is `cells[1]` alone, not every trailing cell joined together.
+    An earlier version joined `cells[1:]` (meant to tolerate an
+    unquoted comma inside the name), which silently glued a third
+    column's content onto the component name instead -- a real
+    corruption on any file that actually uses a third column, found
+    reviewing a real alarm table with one. A name containing a comma
+    must be quoted in the source CSV (csv.reader already handles that
+    correctly); joining trailing cells is not the right way to support
+    it, since it can't tell "one name with a raw comma" apart from "two
+    genuinely different columns"."""
     import io as _io
 
     rows: list[tuple[str, str]] = []
@@ -494,7 +548,7 @@ def parse_alarm_csv_text(text: str) -> list[tuple[str, str]]:
         code = cells[0].strip()
         if i == 0 and any(w in code.lower() for w in ("code", "codice", "allarme", "alarm")):
             continue
-        rows.append((code, ",".join(cells[1:]).strip()))
+        rows.append((code, cells[1].strip()))
     return rows
 
 
@@ -505,7 +559,7 @@ def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
 
 
 def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
-                        work_dir: str) -> None:
+                        work_dir: str) -> http.server.HTTPServer:
     """Write model.glb (if any) + viewer.html + a copy of
     model-viewer.min.js, then serve `work_dir` on an ephemeral localhost
     port and open the default browser. The single page builder behind
@@ -513,7 +567,11 @@ def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
     (model-viewer + controls + BOM + search) is present only when there
     is a GLB, and the document index is present only when there are
     documents, so a document-only bundle renders an index-only page and
-    a plain assembly renders exactly the old 3D page."""
+    a plain assembly renders exactly the old 3D page. Returns the
+    running server (`.server_address[1]` is the port), so a caller that
+    wants to avoid spawning a second server for content it already has
+    open (gui.py's library panel) can reopen a browser tab at the same
+    port instead, and can `.shutdown()` it explicitly when done."""
     if glb is not None:
         with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
             fh.write(glb)
@@ -543,12 +601,13 @@ def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
     thread.start()
 
     webbrowser.open(f"http://127.0.0.1:{port}/viewer.html")
+    return server
 
 
-def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
+def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] | None,
                         work_dir: str,
                         alarm_rows: list[tuple[str, str]] | None = None,
-                        documents: list[dict] | None = None) -> None:
+                        documents: list[dict] | None = None) -> "http.server.HTTPServer":
     """Write model.glb + viewer.html + a copy of model-viewer.min.js into
     `work_dir`, serve it on an ephemeral localhost port, open the default
     browser. `work_dir` is the caller's responsibility (a TemporaryDirectory
@@ -565,8 +624,10 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
 
     `documents` (optional, each {role, label, b64}) adds a navigable
     index of consultable documents alongside the model -- see
-    open_bundle_in_browser, which builds it from a bundle's doc items."""
-    _render_viewer_page(glb, bom_lines, alarm_rows, documents, work_dir)
+    open_bundle_in_browser, which builds it from a bundle's doc items.
+
+    Returns the running server (see _render_viewer_page)."""
+    return _render_viewer_page(glb, bom_lines, alarm_rows, documents, work_dir)
 
 
 def _render_2d_item(item) -> list[dict]:
@@ -643,7 +704,7 @@ def _documents_from_items(items) -> list[dict]:
     return docs
 
 
-def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
+def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HTTPServer":
     """Open a multi-document bundle (balzar/bundle.py): the "3d" item
     (if any) becomes the model.glb + BOM this module already shows, any
     alarm item wires the search bar with no manual upload, and every
@@ -655,7 +716,9 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
     Deliberately local imports (scene3d.py/gltf.py, not used by the rest
     of this module) so the plain GLB+BOM path stays as decoupled from the
     3D encoding stack as before -- this function is the only place in
-    viewer3d.py that needs to know a bundle exists."""
+    viewer3d.py that needs to know a bundle exists.
+
+    Returns the running server (see _render_viewer_page)."""
     from .bundle import BundleError, decode_bundle, is_alarm_kind
     from .bundle import KIND_3D
     from .gltf import scene3d_to_glb
@@ -672,14 +735,17 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
     for it in items:
         if is_alarm_kind(it.kind):
             alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
+    # an alarm component name collapses its own BOM/GLB entry into a
+    # single row/highlight group instead of expanding to every leaf part
+    # underneath -- see scene3d.generate_bom's collapse_names
+    collapse_names = {name for _code, name in alarm_rows} or None
 
     three_d_items = [it for it in items if it.kind == KIND_3D]
     if not three_d_items:
         # a document-only bundle: no model, just the navigable index
         if not documents:
             raise ValueError("il bundle e' vuoto: niente da mostrare")
-        _render_viewer_page(None, None, None, documents, work_dir)
-        return
+        return _render_viewer_page(None, None, None, documents, work_dir)
 
     # a bundle with more than one 3D item is valid (the format doesn't
     # forbid it) but this viewer shows exactly one model -- the first one,
@@ -689,7 +755,8 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
     except Scene3DError as exc:
         raise ValueError(f"assieme 3D nel bundle non valido: {exc}") from None
 
-    glb = scene3d_to_glb(scene)
-    bom_lines = [(e.name, e.count) for e in generate_bom(scene)]
-    open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None,
-                        documents=documents or None)
+    glb = scene3d_to_glb(scene, collapse_names=collapse_names)
+    bom_lines = [(e.name, e.count, e.material_names)
+                for e in generate_bom(scene, collapse_names)]
+    return open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None,
+                               documents=documents or None)
