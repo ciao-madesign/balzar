@@ -298,6 +298,18 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         except (ValueError, UnicodeDecodeError) as exc:
             return 400, {"ok": False, "error": f"tabella allarmi non valida: {exc}"}
 
+    # extra consultable documents to bundle alongside the model: each
+    # {label, data (base64)}. Carried as raw KIND_DOC bytes, no parsing.
+    raw_docs = body.get("documents") or []
+    doc_items = []
+    for d in raw_docs:
+        label = d.get("label") or "documento"
+        try:
+            doc_bytes = _b64decode(d.get("data", ""))
+        except ValueError as exc:
+            return 400, {"ok": False, "error": f"documento '{label}' non valido: {exc}"}
+        doc_items.append((label, doc_bytes))
+
     from .scene3d import Scene3DError, encode_3dxml_file
 
     import os
@@ -331,21 +343,35 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         "glb_base64": "" if glb_omitted else glb_b64,
     }
 
-    if alarm_csv_text is not None:
-        from .bundle import KIND_3D, KIND_CSV, BundleItem, encode_bundle
+    if alarm_csv_text is not None or doc_items:
+        from .bundle import (KIND_3D, KIND_ALARM, KIND_DOC, BundleItem,
+                             encode_bundle)
         from .viewer3d import parse_alarm_csv_text
-        alarm_rows = parse_alarm_csv_text(alarm_csv_text)
-        bundle_bytes = encode_bundle([
-            BundleItem(KIND_3D, "assembly.b3d", result.payload),
-            BundleItem(KIND_CSV, "alarms.csv", alarm_csv_text.encode("utf-8")),
-        ])
+
+        bundle_items = [BundleItem(KIND_3D, "assembly.b3d", result.payload)]
+        response_docs = []
+        alarm_rows = []
+        if alarm_csv_text is not None:
+            alarm_rows = parse_alarm_csv_text(alarm_csv_text)
+            bundle_items.append(BundleItem(KIND_ALARM, "alarms.csv",
+                                          alarm_csv_text.encode("utf-8")))
+            response_docs.append({"role": "allarmi", "label": "alarms.csv",
+                                 "b64": base64.b64encode(alarm_csv_text.encode("utf-8")).decode("ascii")})
+        for label, doc_bytes in doc_items:
+            bundle_items.append(BundleItem(KIND_DOC, label, doc_bytes))
+            response_docs.append({"role": "doc", "label": label,
+                                 "b64": base64.b64encode(doc_bytes).decode("ascii")})
+
+        bundle_bytes = encode_bundle(bundle_items)
         response.update(_payload_response_fields(bundle_bytes, limits))
         response["bundled"] = True
         response["alarm_rows"] = [[code, name] for code, name in alarm_rows]
+        response["documents"] = response_docs
     else:
         response.update(_payload_response_fields(result.payload, limits))
         response["bundled"] = False
         response["alarm_rows"] = []
+        response["documents"] = []
 
     return 200, response
 

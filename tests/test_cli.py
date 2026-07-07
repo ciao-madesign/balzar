@@ -303,24 +303,38 @@ class TestCli(unittest.TestCase):
 
     # ----------------------------------------------------- encode-bundle
 
-    def test_encode_bundle_3dxml_plus_csv(self):
+    def test_encode_bundle_3dxml_plus_marked_alarm(self):
         xml_path = self._write_minimal_3dxml("assembly.3dxml")
         csv_path = self._write("alarms.csv", "E100,PartA\nE200,PartA\n")
         out_path = self._path("assembly.bzx")
-        code, out, err = _run(["encode-bundle", xml_path, csv_path, "-o", out_path])
+        code, out, err = _run(["encode-bundle", xml_path, csv_path,
+                               "--alarm", csv_path, "-o", out_path])
         self.assertEqual(code, 0)
         self.assertIn("2 elementi", out)
-        self.assertTrue(os.path.exists(out_path))
+        self.assertIn("alarm", out)
         with open(out_path, "rb") as fh:
             self.assertEqual(fh.read(4), b"BZX1")
 
-    def test_encode_bundle_unsupported_extension_gives_clean_error(self):
-        xml_path = self._write_minimal_3dxml("assembly.3dxml")
+    def test_encode_bundle_carries_arbitrary_doc_and_supports_no_3d(self):
+        # a doc-only bundle (no 3D) with an arbitrary format is valid:
+        # the format is carried as a generic consultable document, not
+        # rejected -- the viewer offers it for download
+        txt_path = self._write("manual.txt", "istruzioni")
         pdf_path = self._write("drawing.pdf", "%PDF-1.4 fake")
-        code, out, err = _run(["encode-bundle", xml_path, pdf_path])
+        out_path = self._path("docs.bzx")
+        code, out, err = _run(["encode-bundle", txt_path, pdf_path, "-o", out_path])
+        self.assertEqual(code, 0)
+        self.assertIn("2 elementi", out)
+        self.assertIn("doc", out)
+        with open(out_path, "rb") as fh:
+            self.assertEqual(fh.read(4), b"BZX1")
+
+    def test_encode_bundle_alarm_not_in_inputs_gives_clean_error(self):
+        xml_path = self._write_minimal_3dxml("assembly.3dxml")
+        stray = self._write("stray.csv", "E1,X\n")
+        code, out, err = _run(["encode-bundle", xml_path, "--alarm", stray])
         self.assertEqual(code, 1)
         self.assertIn("errore:", err)
-        self.assertIn("drawing.pdf", err)
         self.assertNotIn("Traceback", err)
 
     # ------------------------------------------------------ encode-video

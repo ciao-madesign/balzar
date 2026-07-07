@@ -322,30 +322,44 @@ class BalzarApp:
     def _job_from_bundle(self, job: Job, data: bytes) -> None:
         """Re-open (or receive freshly built by create_bundle) a
         multi-document bundle (.bzx, balzar/bundle.py): unpack the 3D
-        item into the usual glb/BOM view, and any CSV item(s) straight
-        into job.alarm_rows -- the whole point being that a bundle's
-        alarm search works immediately, no separate 'Carica tabella
-        allarmi' step needed."""
-        from .bundle import KIND_3D, KIND_CSV, decode_bundle
+        item (if any) into the usual glb/BOM view, any alarm item into
+        job.alarm_rows, and every alarm/doc item into job.documents for
+        the navigable index. A bundle with NO 3D item is valid -- it
+        stays is_bundle but not is_3d, and 'Visualizza documenti' opens
+        an index-only page."""
+        from .bundle import KIND_3D, decode_bundle, is_alarm_kind
         from .scene3d import decode_payload, generate_bom
         from .viewer3d import parse_alarm_csv_text
 
         items = decode_bundle(data)
-        three_d_items = [it for it in items if it.kind == KIND_3D]
-        if not three_d_items:
-            kinds = ", ".join(sorted({it.kind for it in items})) or "nessuno"
-            raise ValueError(f"il bundle non contiene un assieme 3D (trovato: {kinds})")
-        scene = decode_payload(three_d_items[0].data)
         job.is_bundle = True
         job.payload = data
-        self._finish_3d_job(job, three_d_items[0].data, generate_bom(scene), extra_stats=[
-            ("forme uniche", _fmt(len(scene.shapes))),
-            ("riferimenti", _fmt(len(scene.references))),
-            ("bundle", f"{len(items)} elementi ({', '.join(it.kind for it in items)})"),
-        ], stats_payload=data)
         job.alarm_rows = []
-        for csv_item in (it for it in items if it.kind == KIND_CSV):
-            job.alarm_rows.extend(parse_alarm_csv_text(csv_item.data.decode("utf-8")))
+        for it in items:
+            if is_alarm_kind(it.kind):
+                job.alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
+        n_docs = sum(1 for it in items if it.kind != KIND_3D)
+        bundle_stat = ("bundle", f"{len(items)} elementi ({', '.join(it.kind for it in items)})")
+
+        three_d_items = [it for it in items if it.kind == KIND_3D]
+        if three_d_items:
+            scene = decode_payload(three_d_items[0].data)
+            self._finish_3d_job(job, three_d_items[0].data, generate_bom(scene), extra_stats=[
+                ("forme uniche", _fmt(len(scene.shapes))),
+                ("riferimenti", _fmt(len(scene.references))),
+                bundle_stat,
+            ], stats_payload=data)
+        else:
+            # document-only bundle: no 3D scene to render, just an index
+            job.is_3d = False
+            job.stats = [
+                ("sorgente", job.source_name),
+                bundle_stat,
+                ("documenti", _fmt(n_docs)),
+                ("payload", f"{_fmt(len(data))} B"),
+                ("QR singolo", "sì" if fits_in_qr(data) else
+                 f"no ({_fmt(len(chunk_payload(data)))} capitoli)"),
+            ]
 
     def _job_from_image(self, job: Job, data: bytes, upload_size: int) -> None:
         """Encode an image or animation: the 'zip'."""
@@ -416,50 +430,62 @@ class BalzarApp:
                             f"({_fmt(len(self.job.payload))} B)")
 
     def view_3d(self) -> None:
-        """Open the regenerated assembly (+ BOM overlay) in the system's
-        default browser via balzar/viewer3d.py -- Tkinter itself cannot
+        """Open the regenerated assembly and/or document index in the
+        system's default browser via balzar/viewer3d.py -- Tkinter cannot
         show a GLB, so this delegates to model-viewer the same way
-        gltf.py delegates rendering instead of writing a 3D engine here."""
+        gltf.py delegates rendering instead of writing a 3D engine here.
+
+        A bundle goes through open_bundle_in_browser straight from its
+        raw payload (which builds the 3D view, wires the alarm search,
+        AND the document index in one place, including the document-only
+        case). A plain 3D job uses open_glb_in_browser as before."""
         job = self.job
-        if not job or not job.is_3d:
+        if not job or not (job.is_3d or job.is_bundle):
             return
         import tempfile
-
-        from .viewer3d import open_glb_in_browser
         work_dir = tempfile.mkdtemp(prefix="balzar_view3d_")
-        # a bundle's own alarm table (job.alarm_rows) takes priority over
-        # whatever was loaded separately via "Carica tabella allarmi" --
-        # the whole point of a bundle is not needing that separate step
-        alarm_rows = job.alarm_rows or self.alarm_rows or None
-        open_glb_in_browser(job.glb, job.bom_lines, work_dir, alarm_rows=alarm_rows)
+        if job.is_bundle:
+            from .viewer3d import open_bundle_in_browser
+            open_bundle_in_browser(job.payload, work_dir)
+        else:
+            from .viewer3d import open_glb_in_browser
+            open_glb_in_browser(job.glb, job.bom_lines, work_dir,
+                                alarm_rows=self.alarm_rows or None)
         self.status.set("Aperto nel browser predefinito")
 
     def create_bundle(self) -> None:
-        """Combine a 3D assembly and an alarm CSV into one .bzx bundle
-        (balzar/bundle.py): one file, one future QR/scan, and 'Visualizza
-        in 3D' opens with the alarm search already wired -- no separate
-        CSV upload step. The CSV is optional: cancelling that second
-        dialog still produces a valid bundle, just without the search
-        shortcut (add it later with 'Carica tabella allarmi')."""
+        """Combine a 3D assembly, an alarm CSV, and any extra consultable
+        documents into one .bzx bundle (balzar/bundle.py): one file, one
+        future QR/scan, opening straight into the 3D view + alarm search +
+        document index with no separate upload steps. Every part is
+        optional except that the bundle can't be empty: a 3D-only bundle,
+        a 3D + alarm bundle, or a documents-only bundle (no 3D at all) are
+        all valid. Three dialogs, each cancellable."""
         threed_path = filedialog.askopenfilename(
-            title="Assieme 3D da includere nel bundle (.3dxml o .b3d)",
+            title="Assieme 3D (opzionale -- Annulla per un bundle di soli documenti)",
             filetypes=[("Assieme 3D", "*.3dxml *.b3d"), ("Tutti i file", "*.*")])
-        if not threed_path:
-            return
-        csv_path = filedialog.askopenfilename(
-            title="Tabella allarmi da includere (opzionale -- Annulla per saltare)",
+        alarm_path = filedialog.askopenfilename(
+            title="Tabella allarmi CSV (opzionale -- Annulla per saltare)",
             filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
-        paths = [threed_path] + ([csv_path] if csv_path else [])
+        doc_paths = filedialog.askopenfilenames(
+            title="Documenti aggiuntivi da consultare (opzionale, selezione multipla)",
+            filetypes=[("Tutti i file", "*.*")])
+        paths = ([threed_path] if threed_path else []) \
+            + ([alarm_path] if alarm_path else []) + list(doc_paths)
+        if not paths:
+            self.status.set("Bundle annullato (nessun file scelto)")
+            return
         self.status.set("Creazione bundle in corso…")
         self._set_buttons(False)
-        threading.Thread(target=self._bundle_worker, args=(paths,), daemon=True).start()
+        threading.Thread(target=self._bundle_worker,
+                         args=(paths, alarm_path or None), daemon=True).start()
 
-    def _bundle_worker(self, paths: list[str]) -> None:
+    def _bundle_worker(self, paths: list[str], alarm_path: str | None) -> None:
         job = Job()
         job.source_name = os.path.splitext(os.path.basename(paths[0]))[0] + ".bzx"
         try:
             from .bundle import encode_bundle_files
-            data = encode_bundle_files(paths)
+            data = encode_bundle_files(paths, alarm_paths=[alarm_path] if alarm_path else None)
             self._job_from_bundle(job, data)
             job.stats.insert(0, ("creato da", ", ".join(os.path.basename(p) for p in paths)))
         except Exception as exc:
@@ -598,18 +624,23 @@ class BalzarApp:
         SVG -- those buttons stay disabled instead of doing something
         meaningless; only the payload/QR (format-agnostic) and the new
         3D viewer button apply."""
-        if job.is_3d:
+        if job.is_3d or job.is_bundle:
             payload_text = "Salva bundle (.bzx)" if job.is_bundle else "Salva payload (.b3d)"
             self.btn_payload.configure(state="normal", text=payload_text)
             self.btn_program.configure(state="disabled")
             self.btn_export.configure(state="disabled")
             self.btn_svg.configure(state="disabled")
             self.btn_chunks.configure(state="normal")
-            self.btn_view3d.configure(state="normal")
+            # a doc-only bundle has no 3D to "view in 3D" -- relabel to
+            # match what the button actually opens (the document index)
+            view_text = ("Visualizza documenti (browser)"
+                         if job.is_bundle and not job.is_3d
+                         else "Visualizza in 3D (browser)")
+            self.btn_view3d.configure(state="normal", text=view_text)
         else:
             self._set_buttons(True)
             self.btn_payload.configure(text="Salva payload (.bzp)")
-            self.btn_view3d.configure(state="disabled")
+            self.btn_view3d.configure(state="disabled", text="Visualizza in 3D (browser)")
 
     def _photo_from_rgb(self, w: int, h: int, rgb: bytes) -> tk.PhotoImage:
         """RGB bytes -> Tk PhotoImage via in-memory PNG (Tk 8.6 reads PNG)."""
@@ -629,13 +660,17 @@ class BalzarApp:
             self._anim_after = None
         self._photo_refs = []
 
-        if job.is_3d:
-            # no 2D render exists for a 3D assembly -- show a text hint
-            # instead of pretending there's an image to preview
+        if job.is_3d or job.is_bundle:
+            # no 2D render exists for a 3D assembly or a document bundle --
+            # show a text hint instead of pretending there's an image
             self._orig_photos = []
             self._regen_photos = []
-            for canvas, label in ((self.canvas_orig, "assieme 3D"),
-                                  (self.canvas_regen, "usa 'Visualizza in 3D'")):
+            if job.is_bundle and not job.is_3d:
+                labels = ("bundle di documenti", "usa 'Visualizza documenti'")
+            else:
+                labels = ("assieme 3D", "usa 'Visualizza in 3D'")
+            for canvas, label in ((self.canvas_orig, labels[0]),
+                                  (self.canvas_regen, labels[1])):
                 canvas.delete("all")
                 canvas.create_text(PREVIEW_MAX // 2, PREVIEW_MAX // 2, text=label,
                                    fill="#888", font=("TkDefaultFont", 11))

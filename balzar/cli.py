@@ -242,14 +242,23 @@ def cmd_render_3d(args: argparse.Namespace) -> int:
 
 
 def cmd_encode_bundle(args: argparse.Namespace) -> int:
-    """3D assembly (.3dxml/.b3d) + optional CSV lookup table(s) -> one
-    .bzx bundle (balzar/bundle.py) -- a single file/QR that opens with
-    both the 3D viewer and the alarm search already wired, see CLAUDE.md
-    for the multi-document flow this exists for."""
+    """3D assembly (.3dxml/.b3d) + optional alarm CSV (--alarm) + any
+    number of consultable documents -> one .bzx bundle (balzar/bundle.py):
+    a single file/QR that opens straight into the 3D viewer, the alarm
+    search, and a navigable document index. A file passed to --alarm is
+    wired to the search bar; every other non-3D file is a generic
+    consultable document. No 3D is required -- a documents-only bundle is
+    valid. See CLAUDE.md for the multi-document flow this exists for."""
     from .bundle import BundleError, decode_bundle, encode_bundle_files
 
+    alarm_paths = args.alarm or []
+    for a in alarm_paths:
+        if a not in args.inputs:
+            print(f"errore: --alarm {a} deve essere anche tra i file del bundle",
+                  file=sys.stderr)
+            return 1
     try:
-        data = encode_bundle_files(args.inputs)
+        data = encode_bundle_files(args.inputs, alarm_paths=alarm_paths)
     except BundleError as exc:
         print(f"errore: {exc}", file=sys.stderr)
         return 1
@@ -592,9 +601,13 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_render_3d)
 
     p = sub.add_parser("encode-bundle",
-                       help="assieme 3D + CSV allarmi -> un bundle .bzx (balzar/bundle.py)")
+                       help="assieme 3D + tabella allarmi + documenti -> un bundle .bzx")
     p.add_argument("inputs", nargs="+",
-                   help="file da includere: .3dxml/.b3d (assieme 3D) e .csv (tabella allarmi)")
+                   help="file da includere: .3dxml/.b3d (3D), i file marcati --alarm "
+                        "(tabella allarmi), qualunque altro file (documento consultabile)")
+    p.add_argument("--alarm", action="append", metavar="FILE",
+                   help="marca un file (anche tra gli input) come tabella allarmi CSV, "
+                        "cablata alla ricerca; ripetibile")
     p.add_argument("-o", "--output", default=None)
     p.set_defaults(func=cmd_encode_bundle)
 

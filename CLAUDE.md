@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-247 test, tutti verdi (`python3 -m unittest discover -s tests`):
+251 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -2453,12 +2453,96 @@ specifico per `BZR1` 2D, non esteso a `BZX1` (avrebbe richiesto
 insegnargli a mostrare GLB+BOM, fuori dallo scope di questa richiesta);
 nessuna UI per un bundle con più di un elemento "3d" o con più CSV
 combinati in modi diversi dal semplice "unisci tutte le righe" già
-implementato in `open_bundle_in_browser`.
+implementato in `open_bundle_in_browser`. **Molti di questi limiti sono
+stati poi superati** in una sessione successiva — vedi §9.17 (documenti
+generici consultabili, bundle senza 3D, indice navigabile).
+
+### 9.17 Documenti generici + indice navigabile (bundle come insieme di documenti)
+
+Domanda diretta di sessione, generalizzazione di §9.16: il CSV (o altri
+formati) di un bundle può NON essere una tabella allarmi ma un semplice
+documento contestuale, consultabile ma non collegato al 3D? E si può
+avere un indice navigabile dei documenti estratti dal QR? Sì. Due
+decisioni di scope confermate con l'utente prima di costruire (via
+`AskUserQuestion`): (1) **il 3D diventa opzionale** — un bundle di soli
+documenti, senza 3D, è valido e apre una pagina indice-only; (2)
+**consultazione inline per i formati semplici** (testo txt/md/log, CSV
+come tabella, immagini png/gif/svg/jpg/webp/bmp), **download per gli
+strutturati** (html/xml/json/pdf/dxf/binari) — nessuna anteprima finta,
+stessa onestà di `svg.py` che rifiuta ciò che non sa rappresentare.
+
+**Il modello del bundle passa da "3D + tabella allarmi" a "insieme di
+documenti con ruoli"** (`balzar/bundle.py`). Il `kind` è un RUOLO, non
+un tipo di file:
+- `KIND_3D` (`"3d"`) → il viewer + BOM;
+- `KIND_ALARM` (`"alarm"`, prima `"csv"`; `is_alarm_kind()` accetta
+  ancora il vecchio tag per retro-compatibilità) → cablato alla ricerca;
+- `KIND_DOC` (`"doc"`, nuovo) → documento generico consultabile, nel
+  solo indice navigabile, **non** collegato al 3D.
+
+**Il ruolo è sempre esplicito, mai indovinato dall'estensione**: un
+`.csv` è una tabella allarmi solo se marcato tale (`encode_bundle_files(
+paths, alarm_paths=...)`, flag `--alarm` in CLI, campo dedicato in
+GUI/web); un `.csv` non marcato è un semplice documento. Il tipo di
+contenuto di un doc è dedotto dall'estensione della sua label **a
+tempo di visualizzazione** (client-side), non memorizzato nel formato —
+i byte del doc sono trasportati grezzi, nessun parsing che possa fallire.
+Il formato binario `BZX1` **non cambia** (stessi campi kind/label/dati);
+cambia solo l'insieme dei valori di `kind` ammessi e il fatto che un 3D
+non è più obbligatorio.
+
+**Indice navigabile + rendering inline** (`_DOC_JS` in `viewer3d.py`
+per il desktop, logica gemella in `app.js` per la demo web — duplicata
+per lo stesso motivo già documentato di `_SELECT_JS`): ogni elemento
+alarm/doc diventa una voce cliccabile con un badge di ruolo; il click
+apre il contenuto inline (testo in `<pre>`, CSV come `<table>` con lo
+stesso parser split-semplice dichiarato altrove, immagini come `<img>`
+data-URI) oppure, per un formato strutturato, lo scarica onestamente
+invece di mostrare un'anteprima vuota. La pagina è **unica e
+parametrica** (`_render_viewer_page`): la sezione 3D (model-viewer +
+controlli + BOM + ricerca) è presente solo se c'è un GLB, l'indice solo
+se ci sono documenti — così un bundle di soli documenti rende una
+pagina indice-only e un assieme puro rende esattamente la vecchia
+pagina 3D (verificato che il percorso non-bundle è invariato).
+
+**Superfici**: `open_bundle_in_browser` gestisce tutti i casi (3D+docs,
+solo-3D, solo-docs) da un unico ingresso; la GUI desktop apre `.bzx` di
+soli documenti (bottone "Visualizza documenti", canvas placeholder
+"bundle di documenti") e "Crea bundle" ora prende 3D (opzionale) +
+allarmi (opzionale) + documenti multipli (opzionale); CLI
+`encode-bundle ... --alarm FILE` marca la tabella allarmi, ogni altro
+non-3D è un documento, nessun 3D richiesto; demo web con un campo
+"documenti aggiuntivi" a selezione multipla nel tab 3D, `handle_encode_3d`
+esteso per impacchettarli e restituire `documents` (base64) +
+`alarm_rows`, il frontend costruisce lo stesso indice.
+
+**Verificato con Playwright, non solo scritto**, su fixture sintetiche
+(3DXML a 2 parti + txt + csv + png + pdf): sul viewer desktop sia
+**3D+documenti** (model-viewer presente, indice a 5 voci incl. allarmi,
+click su txt→testo inline, csv→tabella a 3 righe, png→`<img>`) sia
+**solo-documenti** (nessun model-viewer, indice a 4 voci, stessa
+consultazione inline); sulla demo web reale (upload vero attraverso il
+devserver che instrada al vero `handle_encode_3d`): `bundled: true` con
+5 documenti, indice reso, anteprime inline testo/tabella/immagine, e la
+ricerca allarmi ancora cablata dal bundle; sulla GUI desktop sotto Xvfb
+un `.bzx` di soli documenti riconosciuto (`is_bundle` true, `is_3d`
+false, bottone e etichette corretti). Il formato strutturato (pdf) cade
+sul download in tutti i casi, come dichiarato.
+
+Test: `tests/test_bundle.py` aggiornato al nuovo dispatch (alarm
+marcato vs doc generico, formato arbitrario come doc, bundle di soli
+documenti, alarm non-UTF8 rifiutato col nome file); `tests/test_cli.py`
+(alarm marcato, bundle di soli documenti con formato arbitrario, errore
+pulito se `--alarm` non è tra gli input); `tests/test_webapi.py`
+invariato per il campo `alarm_csv`, il campo `documents` verificato via
+Playwright (comportamento client-side per il rendering, backend coperto
+dal round-trip del bundle). PDF resta fuori scope come encoder (solo
+trasporto grezzo, §9.16).
 
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 247 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 251 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

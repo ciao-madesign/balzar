@@ -16,9 +16,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 from test_scene3d import _write_fixture_3dxml
 
-from balzar.bundle import (KIND_3D, KIND_CSV, BundleError, BundleItem,
-                           decode_bundle, encode_bundle, encode_bundle_files,
-                           is_bundle)
+from balzar.bundle import (KIND_3D, KIND_ALARM, KIND_CSV, KIND_DOC, BundleError,
+                           BundleItem, decode_bundle, encode_bundle,
+                           encode_bundle_files, is_bundle)
 from balzar.payload import assemble_chunks, chunk_payload
 from balzar.scene3d import decode_payload as decode_scene, generate_bom
 
@@ -73,15 +73,42 @@ class TestEncodeBundleFiles(unittest.TestCase):
         with open(self.csv_path, "w", encoding="utf-8") as fh:
             fh.write("codice_allarme,nome_componente\nE100,PartA\nE100,PartB\nE200,PartB\n")
 
-    def test_3dxml_plus_csv_bundle_decodes_to_both(self):
-        data = encode_bundle_files([self.xml_path, self.csv_path])
+    def test_3dxml_plus_marked_alarm_csv(self):
+        data = encode_bundle_files([self.xml_path, self.csv_path],
+                                   alarm_paths=[self.csv_path])
         items = decode_bundle(data)
-        self.assertEqual([it.kind for it in items], [KIND_3D, KIND_CSV])
+        self.assertEqual([it.kind for it in items], [KIND_3D, KIND_ALARM])
         scene = decode_scene(items[0].data)
         bom = generate_bom(scene)
         self.assertEqual(sorted(e.name for e in bom), ["PartA", "PartB"])
-        csv_text = items[1].data.decode("utf-8")
-        self.assertIn("E100,PartA", csv_text)
+        self.assertIn("E100,PartA", items[1].data.decode("utf-8"))
+
+    def test_unmarked_csv_is_a_generic_doc_not_an_alarm_table(self):
+        # a CSV that isn't marked as the alarm table is just a document
+        data = encode_bundle_files([self.xml_path, self.csv_path])
+        items = decode_bundle(data)
+        self.assertEqual([it.kind for it in items], [KIND_3D, KIND_DOC])
+
+    def test_arbitrary_format_carried_as_generic_doc(self):
+        # a format the viewer can't render (pdf) is carried as a raw doc,
+        # not rejected -- it's a consultable attachment, downloaded not
+        # previewed (see CLAUDE.md; PDF has no encoder, just raw carriage)
+        pdf_path = os.path.join(self.tmp, "drawing.pdf")
+        with open(pdf_path, "wb") as fh:
+            fh.write(b"%PDF-1.4 fake")
+        data = encode_bundle_files([pdf_path])
+        items = decode_bundle(data)
+        self.assertEqual(items[0].kind, KIND_DOC)
+        self.assertEqual(items[0].label, "drawing.pdf")
+        self.assertEqual(items[0].data, b"%PDF-1.4 fake")
+
+    def test_document_only_bundle_needs_no_3d(self):
+        txt_path = os.path.join(self.tmp, "manual.txt")
+        with open(txt_path, "w", encoding="utf-8") as fh:
+            fh.write("istruzioni")
+        data = encode_bundle_files([txt_path, self.csv_path])
+        items = decode_bundle(data)
+        self.assertEqual([it.kind for it in items], [KIND_DOC, KIND_DOC])
 
     def test_b3d_input_is_carried_verbatim(self):
         from balzar.scene3d import encode_payload, parse_3dxml
@@ -95,13 +122,13 @@ class TestEncodeBundleFiles(unittest.TestCase):
         with open(b3d_path, "rb") as fh:
             self.assertEqual(items[0].data, fh.read())
 
-    def test_unsupported_extension_rejected_with_filename(self):
-        bad_path = os.path.join(self.tmp, "drawing.pdf")
-        with open(bad_path, "wb") as fh:
-            fh.write(b"%PDF-1.4 fake")
+    def test_marked_alarm_that_is_not_utf8_rejected_with_filename(self):
+        bad_alarm = os.path.join(self.tmp, "alarms_bad.csv")
+        with open(bad_alarm, "wb") as fh:
+            fh.write(b"\xff\xfe not utf8")
         with self.assertRaises(BundleError) as ctx:
-            encode_bundle_files([self.xml_path, bad_path])
-        self.assertIn("drawing.pdf", str(ctx.exception))
+            encode_bundle_files([bad_alarm], alarm_paths=[bad_alarm])
+        self.assertIn("alarms_bad.csv", str(ctx.exception))
 
     def test_invalid_3dxml_error_includes_filename(self):
         bad_xml = os.path.join(self.tmp, "broken.3dxml")

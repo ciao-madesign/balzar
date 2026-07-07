@@ -1,18 +1,26 @@
-"""Multi-document bundle: several typed sub-documents (a 3D assembly, a
-CSV lookup table, ...) carried as ONE opaque blob of bytes -- so the
-existing physical-carrier machinery (chunk_payload/payload_to_qr_frames/
-LiveScanner in payload.py/qr.py, which already treats *any* payload as
-opaque bytes with a CRC) carries a bundle through completely unchanged,
-exactly like it already carries a bare BZM1 or BZR1 payload. No changes
-needed anywhere in qr.py for this to work.
+"""Multi-document bundle: several typed sub-documents (a 3D assembly, an
+alarm-code table, generic consultable documents) carried as ONE opaque
+blob of bytes -- so the existing physical-carrier machinery
+(chunk_payload/payload_to_qr_frames/LiveScanner in payload.py/qr.py,
+which already treats *any* payload as opaque bytes with a CRC) carries a
+bundle through completely unchanged, exactly like it already carries a
+bare BZM1 or BZR1 payload. No changes needed anywhere in qr.py for this.
 
 Format:  b"BZX1" | u16 version | u16 item_count | u32 body_length
          | u32 crc32(body) | deflate(body)
 
 body = concatenation of items, each:
-    u8  kind_len | kind (ascii)     -- KIND_3D or KIND_CSV
+    u8  kind_len | kind (ascii)     -- KIND_3D / KIND_ALARM / KIND_DOC
     u8  label_len | label (utf-8)   -- human-readable, e.g. a filename
     u32 data_len | data             -- the item's own native bytes
+
+The `kind` is a ROLE, not a file type: it tells the reader how to
+dispatch the item (KIND_3D -> the model viewer + BOM; KIND_ALARM -> the
+search bar; KIND_DOC -> the navigable document index, just consultable,
+not linked to the 3D). A .csv is KIND_ALARM only when the user
+explicitly marks it as the alarm table; an unmarked .csv (or any other
+non-3D file) is a KIND_DOC. Content type for a doc is inferred from its
+label's extension at view time, not stored here.
 
 Deliberately ONE compress+CRC pass over the whole concatenated body,
 not one per item: each item's own native format already self-checks on
@@ -21,17 +29,17 @@ single outer pass compresses better across items than N separate passes
 would (same reasoning already applied by BZM1/BZR1 for their own
 bodies).
 
-Scope, explicit: only "3d" (a complete BZM1 blob from scene3d.py) and
-"csv" (UTF-8 text, e.g. an alarm-code lookup table) are produced today.
-PDF technical drawings were discussed and deliberately excluded: balzar
-has no PDF encoder at all (no compression claim would be honest -- it
-would be pure raw carriage), and a real PDF drawing is typically large
-enough to blow past the "fits in a handful of QR codes" property that
-makes the physical-carrier design useful in the field in the first
-place -- see CLAUDE.md for the full reasoning. Adding a "pdf" kind
-later (raw bytes, explicitly no generative compression) is possible
-without changing this format, but is a decision to make deliberately,
-not a side effect of building the bundle mechanism.
+A bundle needs at least one item but NOT a 3D item -- a pure set of
+consultable documents (no 3D at all) is valid, and viewer3d.py renders
+an index-only page for it.
+
+Scope, explicit: PDF technical drawings and any structured format the
+viewer can't render inline are carried as raw KIND_DOC bytes (offered
+for download, not previewed). balzar has no PDF encoder -- carrying one
+is pure raw carriage with no compression claim, and a real PDF drawing
+is typically large enough to blow past the "fits in a handful of QR
+codes" property that makes the physical carrier useful (see CLAUDE.md).
+Nothing here stops you bundling one, but the size math is on you.
 """
 
 from __future__ import annotations
@@ -44,8 +52,16 @@ from dataclasses import dataclass
 MAGIC = b"BZX1"
 _HEADER_LEN = 4 + 2 + 2 + 4 + 4
 
-KIND_3D = "3d"
-KIND_CSV = "csv"
+# item roles, not file extensions: the kind says what the item IS FOR,
+# so the reader knows how to dispatch it, independent of its content type
+KIND_3D = "3d"        # a BZM1 3D assembly -> the model viewer + BOM
+KIND_ALARM = "alarm"  # a codice_allarme,nome_componente CSV -> wired to the search bar
+KIND_DOC = "doc"      # a generic consultable document -> the navigable index, not linked to the 3D
+
+# back-compat alias: earlier bundles tagged the alarm table "csv". Reading
+# still accepts it (see decode dispatch in viewer3d/gui), new bundles use
+# KIND_ALARM. A generic CSV that is NOT an alarm table is a KIND_DOC.
+KIND_CSV = KIND_ALARM
 
 
 class BundleError(ValueError):
@@ -117,24 +133,52 @@ def is_bundle(data: bytes) -> bool:
     return data[:4] == MAGIC
 
 
+def is_alarm_kind(kind: str) -> bool:
+    """True for an item that powers the alarm search. Accepts the legacy
+    "csv" tag as well as KIND_ALARM so a bundle written before the role
+    was renamed still wires its search bar."""
+    return kind in (KIND_ALARM, "csv")
+
+
 # ------------------------------------------------------ file-based helper
 
-def encode_bundle_files(paths: list[str]) -> bytes:
-    """Dispatch each path to a bundle item by extension and pack them
-    together. Strict on purpose (unlike encode_independent's per-file
-    isolation in sequence.py): a bundle is a deliberate small set the
-    user assembled for one scan, so silently dropping a file the user
-    explicitly included (e.g. the alarm table, in the exact maintenance
-    flow this exists for) would be a much worse failure than refusing
-    up front with a clear reason."""
+def encode_bundle_files(paths: list[str], alarm_paths=None) -> bytes:
+    """Dispatch each path to a bundle item and pack them together.
+
+    Roles are assigned explicitly, never guessed from content:
+    - `.3dxml`/`.b3d` -> KIND_3D (the model);
+    - any path listed in `alarm_paths` -> KIND_ALARM (the search table),
+      validated as UTF-8;
+    - every other file -> KIND_DOC (a generic consultable document,
+      raw bytes, rendered/downloaded by the viewer from its extension).
+
+    So a `.csv` is an alarm table ONLY when the caller marks it in
+    `alarm_paths`; an unmarked `.csv` is just a document. No 3D file is
+    required -- a bundle of documents alone is valid.
+
+    Strict on purpose (unlike encode_independent's per-file isolation in
+    sequence.py): a bundle is a deliberate small set the user assembled
+    for one scan, so a genuinely broken 3D/alarm file refuses up front
+    with a clear reason rather than being silently dropped. A generic
+    doc, by contrast, is carried as-is with no parsing that could fail."""
     from .scene3d import Scene3DError, encode_payload as encode_scene, parse_3dxml
     from .scene3d import MAGIC as BZM1_MAGIC
+
+    alarm_set = {os.path.abspath(p) for p in (alarm_paths or [])}
 
     items: list[BundleItem] = []
     for path in paths:
         ext = os.path.splitext(path)[1].lower()
         label = os.path.basename(path)
-        if ext == ".3dxml":
+        if os.path.abspath(path) in alarm_set:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            try:
+                data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise BundleError(f"{label}: tabella allarmi non e' UTF-8 valido: {exc}") from None
+            items.append(BundleItem(KIND_ALARM, label, data))
+        elif ext == ".3dxml":
             try:
                 scene = parse_3dxml(path)
             except Scene3DError as exc:
@@ -146,16 +190,7 @@ def encode_bundle_files(paths: list[str]) -> bytes:
             if data[:4] != BZM1_MAGIC:
                 raise BundleError(f"{label}: non e' un payload BZM1 valido")
             items.append(BundleItem(KIND_3D, label, data))
-        elif ext == ".csv":
-            with open(path, "rb") as fh:
-                data = fh.read()
-            try:
-                data.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise BundleError(f"{label}: CSV non e' UTF-8 valido: {exc}") from None
-            items.append(BundleItem(KIND_CSV, label, data))
         else:
-            raise BundleError(
-                f"{label}: formato non supportato nel bundle (.{ext.lstrip('.')}) -- "
-                f"atteso .3dxml/.b3d (assieme 3D) o .csv (tabella allarmi)")
+            with open(path, "rb") as fh:
+                items.append(BundleItem(KIND_DOC, label, fh.read()))
     return encode_bundle(items)

@@ -493,7 +493,14 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   il formato e una scoperta onesta: per un assieme piccolo il bundle
   *pesa di più* della somma delle parti separate (il payload 3D è già
   compresso, comprimerlo di nuovo non aiuta) — il vantaggio è la
-  convenienza di un solo scan, non la dimensione.
+  convenienza di un solo scan, non la dimensione. Oltre alla tabella
+  allarmi puoi includere **documenti aggiuntivi consultabili** (campo
+  a selezione multipla): non collegati al 3D, appaiono in un **indice
+  navigabile** e si aprono inline se sono formati semplici
+  (testo/CSV/immagini) o si scaricano se strutturati (pdf/html/xml/…).
+  Il 3D è opzionale: un bundle di **soli documenti** è valido e apre
+  una pagina indice-only (via CLI/GUI desktop; il tab web resta
+  ancorato a un 3D). Vedi CLAUDE.md §9.17.
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
@@ -559,8 +566,9 @@ balzar/
                   sistema (solo GUI desktop); clicca una parte per evidenziarla/
                   isolarla, click sulla BOM per selezionare tutte le istanze di un tipo;
                   barra di ricerca per nome/codice allarme, apre anche bundle BZX1
-  bundle.py       formato BZX1: più documenti tipizzati (3D + CSV) in un solo blob,
-                  transita nel livello QR/chunking senza modifiche (vedi CLAUDE.md §9.16)
+  bundle.py       formato BZX1: più documenti con ruoli (3D / allarmi / doc generici)
+                  in un solo blob con indice navigabile; transita nel livello QR/chunking
+                  senza modifiche, 3D opzionale (vedi CLAUDE.md §9.16-9.17)
   webapi.py       logica dell'API web con profili di limiti
   cli.py          render / encode / encode-image / encode-vector / encode-3d /
                   encode-video / encode-sequence / explode-vector / render-3d /

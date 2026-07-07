@@ -103,28 +103,66 @@ model-viewer{{width:100%;height:100%}}
 #search-note{{position:absolute;bottom:52px;left:12px;right:12px;margin:0;color:#eee;
              font-size:12px;background:rgba(20,20,20,0.7);padding:4px 8px;border-radius:4px;
              max-height:60px;overflow-y:auto}}
+#doc-index{{position:absolute;top:54px;left:12px;max-width:260px;max-height:60vh;overflow-y:auto;
+           background:rgba(20,20,20,0.85);color:#eee;padding:8px 12px;border-radius:6px;
+           font-size:13px}}
+body.no-3d #doc-index{{top:12px}}
+#doc-index h3{{margin:0 0 6px 0;font-size:14px;color:#fff}}
+#doc-index ul{{list-style:none;margin:0;padding:0}}
+#doc-index li{{padding:3px 4px;cursor:pointer;border-radius:4px;display:flex;gap:6px;align-items:baseline}}
+#doc-index li:hover{{background:#333}}
+#doc-index .role{{font-size:10px;text-transform:uppercase;color:#9cf;border:1px solid #456;
+                 border-radius:3px;padding:0 4px}}
+#doc-overlay{{position:absolute;top:24px;left:24px;right:24px;bottom:24px;background:#fbfbfb;
+             color:#111;border-radius:8px;display:none;flex-direction:column;overflow:hidden;
+             box-shadow:0 4px 30px rgba(0,0,0,0.6)}}
+#doc-overlay.open{{display:flex}}
+#doc-overlay-head{{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid #ddd;
+                  background:#efefef}}
+#doc-overlay-title{{font-weight:bold;flex:1;font-size:14px;word-break:break-all}}
+#doc-overlay-close{{border:1px solid #999;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer}}
+#doc-overlay-body{{flex:1;overflow:auto;padding:14px}}
+#doc-overlay-body pre{{white-space:pre-wrap;word-break:break-word;font-size:13px;margin:0}}
+#doc-overlay-body table{{border-collapse:collapse;font-size:13px}}
+#doc-overlay-body td,#doc-overlay-body th{{border:1px solid #ccc;padding:2px 8px;text-align:left}}
+#doc-overlay-body img{{max-width:100%;height:auto}}
 </style>
 </head>
-<body>
-<model-viewer id="mv" src="model.glb" camera-controls auto-rotate
+<body class="{body_class}">
+{threed_section}
+{bom_html}
+{doc_index_html}
+<div id="doc-overlay">
+  <div id="doc-overlay-head">
+    <span id="doc-overlay-title"></span>
+    <button id="doc-overlay-close" type="button">Chiudi</button>
+  </div>
+  <div id="doc-overlay-body"></div>
+</div>
+<script>
+window.__BALZAR_ALARM_ROWS__ = {alarm_rows_json};
+window.__BALZAR_DOCS__ = {docs_json};
+{select_js}
+{doc_js}
+</script>
+</body>
+</html>
+"""
+
+# The 3D cluster (model-viewer + its controls), interpolated into
+# {threed_section} only when the bundle actually has a 3D item -- a
+# document-only bundle omits it entirely and shows just the index.
+_THREED_SECTION = """<model-viewer id="mv" src="model.glb" camera-controls auto-rotate
              shadow-intensity="0.6" exposure="1.1" field-of-view="30deg"></model-viewer>
 <button id="reset-btn" type="button">Mostra tutto</button>
 <button id="export-btn" type="button" disabled>Esporta scheda ricambio</button>
-{bom_html}
 <p id="search-note"></p>
 <div id="search-bar">
   <input id="search-input" type="text" placeholder="Cerca componente o codice allarme…">
   <button id="search-btn" type="button">Cerca</button>
   <label id="alarm-csv-label" for="alarm-csv-input">Carica tabella allarmi (CSV)</label>
   <input id="alarm-csv-input" type="file" accept=".csv,text/csv" style="display:none">
-</div>
-<script>
-window.__BALZAR_ALARM_ROWS__ = {alarm_rows_json};
-{select_js}
-</script>
-</body>
-</html>
-"""
+</div>"""
 
 # Shared with the web demo's app.js -- same materialFromPoint-based
 # selection logic, only the DOM ids differ (kept a separate literal
@@ -327,6 +365,109 @@ def _bom_html(bom_lines: list[tuple[str, int]] | None) -> str:
     return f'<div id="bom"><h3>Distinta base</h3><table>{rows}</table></div>'
 
 
+def _doc_index_html(documents: list[dict] | None) -> str:
+    """The navigable index of consultable documents extracted from the
+    bundle -- one clickable entry per document (its content is embedded
+    in window.__BALZAR_DOCS__ and rendered/downloaded by _DOC_JS from
+    the entry's index). Empty string (panel absent) when the bundle
+    carries no documents, e.g. a plain 3D assembly."""
+    if not documents:
+        return ""
+    lis = "".join(
+        f'<li data-doc-index="{i}"><span class="role">{html.escape(d["role"])}</span>'
+        f'<span>{html.escape(d["label"])}</span></li>'
+        for i, d in enumerate(documents)
+    )
+    return f'<div id="doc-index"><h3>Documenti nel bundle</h3><ul>{lis}</ul></div>'
+
+
+# Client-side document index + inline viewer. Kept a separate literal
+# (not shared with app.js) for the same reason as _SELECT_JS: one is
+# embedded in a Python template here, the other loads as a static
+# <script> in the web demo. Inline rendering covers the browser-native
+# simple formats (text and images); anything structured (html/xml/json/
+# pdf/dxf/binary) is offered for download instead of a fake preview --
+# the same honesty rule as svg.py refusing ops it can't represent.
+_DOC_JS = """
+(function(){
+  var docs = window.__BALZAR_DOCS__ || [];
+  var indexEl = document.getElementById('doc-index');
+  if (!indexEl) return;
+  var overlay = document.getElementById('doc-overlay');
+  var titleEl = document.getElementById('doc-overlay-title');
+  var bodyEl = document.getElementById('doc-overlay-body');
+  var TEXT_EXT = ['txt', 'md', 'log'];
+  var IMG_MIME = {png:'image/png', gif:'image/gif', svg:'image/svg+xml',
+                  jpg:'image/jpeg', jpeg:'image/jpeg', webp:'image/webp', bmp:'image/bmp'};
+
+  function ext(label){ var m = /\\.([^.]+)$/.exec(label.toLowerCase()); return m ? m[1] : ''; }
+  function bytes(doc){
+    var bin = atob(doc.b64);
+    var a = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+    return a;
+  }
+  function asText(doc){ return new TextDecoder('utf-8').decode(bytes(doc)); }
+
+  function renderCsvTable(text){
+    var table = document.createElement('table');
+    text.split(/\\r?\\n/).forEach(function(line){
+      if (!line.length) return;
+      var tr = document.createElement('tr');
+      line.split(',').forEach(function(cell){
+        var td = document.createElement('td');
+        td.textContent = cell;
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+    return table;
+  }
+
+  function download(doc){
+    var blob = new Blob([bytes(doc)], {type: 'application/octet-stream'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = doc.label; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function open(doc){
+    var e = ext(doc.label);
+    titleEl.textContent = doc.label;
+    bodyEl.innerHTML = '';
+    if (e === 'csv'){
+      bodyEl.appendChild(renderCsvTable(asText(doc)));
+    } else if (TEXT_EXT.indexOf(e) >= 0){
+      var pre = document.createElement('pre');
+      pre.textContent = asText(doc);
+      bodyEl.appendChild(pre);
+    } else if (IMG_MIME[e]){
+      var img = document.createElement('img');
+      img.src = 'data:' + IMG_MIME[e] + ';base64,' + doc.b64;
+      bodyEl.appendChild(img);
+    } else {
+      // structured/binary: no honest inline preview -- download instead,
+      // and say so rather than showing an empty overlay
+      var note = document.createElement('p');
+      note.textContent = 'Formato non visualizzabile inline: scaricato per la consultazione con l\\'app di sistema.';
+      bodyEl.appendChild(note);
+      download(doc);
+      return; // no overlay for a pure download
+    }
+    overlay.classList.add('open');
+  }
+
+  indexEl.querySelectorAll('li[data-doc-index]').forEach(function(li){
+    li.addEventListener('click', function(){ open(docs[+li.dataset.docIndex]); });
+  });
+  document.getElementById('doc-overlay-close').addEventListener('click', function(){
+    overlay.classList.remove('open');
+  });
+})();
+"""
+
+
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):  # noqa: A002 - matches base class signature
         pass  # the desktop app has no console for this to usefully go to
@@ -363,34 +504,35 @@ def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
         return parse_alarm_csv_text(fh.read())
 
 
-def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
-                        work_dir: str,
-                        alarm_rows: list[tuple[str, str]] | None = None) -> None:
-    """Write model.glb + viewer.html + a copy of model-viewer.min.js into
-    `work_dir`, serve it on an ephemeral localhost port, open the default
-    browser. `work_dir` is the caller's responsibility (a TemporaryDirectory
-    the caller keeps alive for as long as the viewer might be open — this
-    function does not clean up after itself, since the HTTP server keeps
-    serving from it for the life of the background thread).
-
-    `alarm_rows` (optional, from parse_alarm_csv or built by hand) gets
-    baked into the page as a JS literal so the alarm-code search works
-    immediately on load, with no manual CSV upload step -- the piece that
-    makes automation possible: a page generated once can be re-opened
-    with `?q=<code>` (from a script, an HMI button, a QR code) and the
-    matching component highlights with zero typing."""
-    with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
-        fh.write(glb)
-    # </script> inside a component/alarm name would otherwise close the
-    # tag early -- escape the slash so the JSON stays inert text to the
-    # HTML parser, same mitigation as embedding any untrusted JSON in a
-    # <script> block.
+def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
+                        work_dir: str) -> None:
+    """Write model.glb (if any) + viewer.html + a copy of
+    model-viewer.min.js, then serve `work_dir` on an ephemeral localhost
+    port and open the default browser. The single page builder behind
+    both the pure-3D viewer and the bundle viewer: the 3D cluster
+    (model-viewer + controls + BOM + search) is present only when there
+    is a GLB, and the document index is present only when there are
+    documents, so a document-only bundle renders an index-only page and
+    a plain assembly renders exactly the old 3D page."""
+    if glb is not None:
+        with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
+            fh.write(glb)
+    # </script> inside a name/label would otherwise close the tag early --
+    # escape the slash so embedded JSON stays inert text to the HTML
+    # parser (same mitigation for the alarm rows and every doc's label).
     alarm_rows_json = json.dumps(alarm_rows or []).replace("</", "<\\/")
+    docs_json = json.dumps(documents or []).replace("</", "<\\/")
+    html_out = _PAGE_TEMPLATE.format(
+        body_class="" if glb is not None else "no-3d",
+        threed_section=_THREED_SECTION if glb is not None else "",
+        bom_html=_bom_html(bom_lines) if glb is not None else "",
+        doc_index_html=_doc_index_html(documents),
+        alarm_rows_json=alarm_rows_json,
+        docs_json=docs_json,
+        select_js=_SELECT_JS if glb is not None else "",
+        doc_js=_DOC_JS)
     with open(os.path.join(work_dir, "viewer.html"), "w", encoding="utf-8") as fh:
-        fh.write(_PAGE_TEMPLATE.format(
-            bom_html=_bom_html(bom_lines),
-            alarm_rows_json=alarm_rows_json,
-            select_js=_SELECT_JS))
+        fh.write(html_out)
     if os.path.exists(_MODEL_VIEWER_JS):
         shutil.copy(_MODEL_VIEWER_JS, os.path.join(work_dir, "model-viewer.min.js"))
 
@@ -403,18 +545,66 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
     webbrowser.open(f"http://127.0.0.1:{port}/viewer.html")
 
 
+def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
+                        work_dir: str,
+                        alarm_rows: list[tuple[str, str]] | None = None,
+                        documents: list[dict] | None = None) -> None:
+    """Write model.glb + viewer.html + a copy of model-viewer.min.js into
+    `work_dir`, serve it on an ephemeral localhost port, open the default
+    browser. `work_dir` is the caller's responsibility (a TemporaryDirectory
+    the caller keeps alive for as long as the viewer might be open — this
+    function does not clean up after itself, since the HTTP server keeps
+    serving from it for the life of the background thread).
+
+    `alarm_rows` (optional, from parse_alarm_csv or built by hand) gets
+    baked into the page as a JS literal so the alarm-code search works
+    immediately on load, with no manual CSV upload step -- the piece that
+    makes automation possible: a page generated once can be re-opened
+    with `?q=<code>` (from a script, an HMI button, a QR code) and the
+    matching component highlights with zero typing.
+
+    `documents` (optional, each {role, label, b64}) adds a navigable
+    index of consultable documents alongside the model -- see
+    open_bundle_in_browser, which builds it from a bundle's doc items."""
+    _render_viewer_page(glb, bom_lines, alarm_rows, documents, work_dir)
+
+
+def _documents_from_items(items) -> list[dict]:
+    """Build the viewer's document list from a bundle's alarm/doc items
+    (base64 each, role tag for the index badge) -- the 3D item is NOT a
+    document here, it's the main view, so it's excluded. An alarm table
+    is included: it powers the search AND is itself a consultable table."""
+    import base64 as _b64
+
+    from .bundle import KIND_ALARM, KIND_DOC, is_alarm_kind
+    docs = []
+    for it in items:
+        if is_alarm_kind(it.kind):
+            role = "allarmi"
+        elif it.kind == KIND_DOC:
+            role = "doc"
+        else:
+            continue  # 3D item is the main view, not an index entry
+        docs.append({"role": role, "label": it.label,
+                     "b64": _b64.b64encode(it.data).decode("ascii")})
+    return docs
+
+
 def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
-    """Same as open_glb_in_browser, but the input is a multi-document
-    bundle (balzar/bundle.py) instead of a bare GLB -- unpacks the "3d"
-    item into the model.glb + BOM this module already knows how to show,
-    and any "csv" item(s) straight into alarm_rows with no manual upload
-    step in the browser: one scan, everything already wired.
+    """Open a multi-document bundle (balzar/bundle.py): the "3d" item
+    (if any) becomes the model.glb + BOM this module already shows, any
+    alarm item wires the search bar with no manual upload, and every
+    alarm/doc item also appears in a navigable document index that can
+    be consulted inline (text/CSV/image) or downloaded (structured
+    formats). A bundle with NO 3D item is valid -- it renders an
+    index-only page of its documents.
 
     Deliberately local imports (scene3d.py/gltf.py, not used by the rest
-    of this module) so the plain GLB+BOM path above stays exactly as
-    decoupled from the 3D encoding stack as before -- this function is
-    the only place in viewer3d.py that needs to know a bundle exists."""
-    from .bundle import KIND_3D, KIND_CSV, BundleError, decode_bundle
+    of this module) so the plain GLB+BOM path stays as decoupled from the
+    3D encoding stack as before -- this function is the only place in
+    viewer3d.py that needs to know a bundle exists."""
+    from .bundle import BundleError, decode_bundle, is_alarm_kind
+    from .bundle import KIND_3D
     from .gltf import scene3d_to_glb
     from .scene3d import Scene3DError, decode_payload as decode_scene, generate_bom
 
@@ -423,10 +613,21 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
     except BundleError as exc:
         raise ValueError(f"bundle non valido: {exc}") from None
 
+    documents = _documents_from_items(items)
+
+    alarm_rows: list[tuple[str, str]] = []
+    for it in items:
+        if is_alarm_kind(it.kind):
+            alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
+
     three_d_items = [it for it in items if it.kind == KIND_3D]
     if not three_d_items:
-        kinds = ", ".join(sorted({it.kind for it in items})) or "nessuno"
-        raise ValueError(f"il bundle non contiene un assieme 3D da visualizzare (trovato: {kinds})")
+        # a document-only bundle: no model, just the navigable index
+        if not documents:
+            raise ValueError("il bundle e' vuoto: niente da mostrare")
+        _render_viewer_page(None, None, None, documents, work_dir)
+        return
+
     # a bundle with more than one 3D item is valid (the format doesn't
     # forbid it) but this viewer shows exactly one model -- the first one,
     # not silently merged or dropped without saying so
@@ -436,11 +637,6 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> None:
         raise ValueError(f"assieme 3D nel bundle non valido: {exc}") from None
 
     glb = scene3d_to_glb(scene)
-    bom = generate_bom(scene)
-    bom_lines = [(e.name, e.count) for e in bom]
-
-    alarm_rows: list[tuple[str, str]] = []
-    for csv_item in (it for it in items if it.kind == KIND_CSV):
-        alarm_rows.extend(parse_alarm_csv_text(csv_item.data.decode("utf-8")))
-
-    open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None)
+    bom_lines = [(e.name, e.count) for e in generate_bom(scene)]
+    open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None,
+                        documents=documents or None)

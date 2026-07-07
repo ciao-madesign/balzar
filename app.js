@@ -852,6 +852,10 @@ const threedSearchInput = document.getElementById("threed-search-input");
 const threedSearchBtn = document.getElementById("threed-search-btn");
 const threedSearchNote = document.getElementById("threed-search-note");
 const threedAlarmCsvInput = document.getElementById("threed-alarm-csv-input");
+const threedBundleDocsInput = document.getElementById("threed-bundle-docs-input");
+const threedBundleDocsClearBtn = document.getElementById("threed-bundle-docs-clear-btn");
+const threedDocsBlock = document.getElementById("threed-docs-block");
+const threedDocsIndex = document.getElementById("threed-docs-index");
 
 let lastThreedResult = null;
 let lastThreedGlbUrl = null;
@@ -1031,6 +1035,7 @@ threedFileInput.addEventListener("change", () => {
   if (threedFileInput.files[0]) handleThreedFile(threedFileInput.files[0]);
 });
 threedBundleCsvClearBtn.addEventListener("click", () => { threedBundleCsvInput.value = ""; });
+threedBundleDocsClearBtn.addEventListener("click", () => { threedBundleDocsInput.value = ""; });
 ["dragenter", "dragover"].forEach(evt =>
   threedDrop.addEventListener(evt, e => { e.preventDefault(); threedDrop.classList.add("dragover"); })
 );
@@ -1059,13 +1064,21 @@ async function handleThreedFile(file) {
     return;
   }
   const csvFile = threedBundleCsvInput.files[0];
-  setThreedStatus(csvFile
-    ? `Analisi di "${file.name}" + "${csvFile.name}" (bundle) in corso…`
+  const docFiles = Array.from(threedBundleDocsInput.files || []);
+  const extras = (csvFile ? 1 : 0) + docFiles.length;
+  setThreedStatus(extras
+    ? `Analisi di "${file.name}" + ${extras} documento/i (bundle) in corso…`
     : `Analisi di "${file.name}" in corso…`);
   try {
     const data = await fileToBase64(file);
     const body = { data };
     if (csvFile) body.alarm_csv = await fileToBase64(csvFile);
+    if (docFiles.length) {
+      body.documents = [];
+      for (const df of docFiles) {
+        body.documents.push({ label: df.name, data: await fileToBase64(df) });
+      }
+    }
     const res = await fetch("/api/encode_3d", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1077,7 +1090,7 @@ async function handleThreedFile(file) {
     lastThreedResult = json;
     renderThreedResult(json);
     setThreedStatus(json.bundled
-      ? `Fatto: ${file.name} + ${csvFile.name} (bundle BZX1)`
+      ? `Fatto: ${file.name} + ${extras} documento/i (bundle BZX1)`
       : `Fatto: ${file.name}`);
   } catch (err) {
     setThreedStatus("Errore: " + err.message, true);
@@ -1153,6 +1166,88 @@ function renderThreedResult(r) {
   } else {
     threedSearchNote.textContent = "";
   }
+
+  renderThreedDocsIndex(r.documents || []);
+}
+
+// Navigable index of the bundle's consultable documents (web demo).
+// Same rule as the desktop viewer's index (viewer3d.py _DOC_JS): inline
+// preview for browser-native simple formats, download for structured.
+const THREED_TEXT_EXT = ["txt", "md", "log"];
+const THREED_IMG_MIME = {
+  png: "image/png", gif: "image/gif", svg: "image/svg+xml",
+  jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp",
+};
+
+function docExt(label) {
+  const m = /\.([^.]+)$/.exec(label.toLowerCase());
+  return m ? m[1] : "";
+}
+
+function renderThreedDocsIndex(documents) {
+  threedDocsIndex.innerHTML = "";
+  if (!documents.length) {
+    threedDocsBlock.hidden = true;
+    return;
+  }
+  threedDocsBlock.hidden = false;
+  documents.forEach(doc => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="role">${escapeHtml(doc.role)}</span>` +
+      `<span>${escapeHtml(doc.label)}</span>`;
+    li.addEventListener("click", () => openThreedDoc(doc, li));
+    threedDocsIndex.appendChild(li);
+  });
+}
+
+function openThreedDoc(doc, li) {
+  // remove any existing preview
+  const existing = document.querySelector(".doc-preview");
+  if (existing) existing.remove();
+  const e = docExt(doc.label);
+  const bytes = base64ToBytes(doc.b64);
+
+  if (e !== "csv" && THREED_TEXT_EXT.indexOf(e) < 0 && !THREED_IMG_MIME[e]) {
+    // structured/binary: honest download, no fake inline preview
+    downloadBlob(bytes, doc.label, "application/octet-stream");
+    return;
+  }
+
+  const box = document.createElement("div");
+  box.className = "doc-preview";
+  const head = document.createElement("div");
+  head.className = "doc-preview-head";
+  head.innerHTML = `<span class="doc-preview-title">${escapeHtml(doc.label)}</span>`;
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.textContent = "Chiudi";
+  closeBtn.addEventListener("click", () => box.remove());
+  head.appendChild(closeBtn);
+  box.appendChild(head);
+
+  if (e === "csv") {
+    const table = document.createElement("table");
+    new TextDecoder("utf-8").decode(bytes).split(/\r?\n/).forEach(line => {
+      if (!line.length) return;
+      const tr = document.createElement("tr");
+      line.split(",").forEach(cell => {
+        const td = document.createElement("td");
+        td.textContent = cell;
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+  } else if (THREED_IMG_MIME[e]) {
+    const img = document.createElement("img");
+    img.src = `data:${THREED_IMG_MIME[e]};base64,${doc.b64}`;
+    box.appendChild(img);
+  } else {
+    const pre = document.createElement("pre");
+    pre.textContent = new TextDecoder("utf-8").decode(bytes);
+    box.appendChild(pre);
+  }
+  li.parentElement.parentElement.appendChild(box);
 }
 
 threedDlPayload.addEventListener("click", () => {

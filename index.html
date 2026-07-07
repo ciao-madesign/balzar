@@ -307,16 +307,23 @@
         compatto per il trasporto; la vista qui e il download <code>.glb</code> sono un
         formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
 
-      <p class="honesty">Puoi includere anche una tabella allarmi nello stesso QR:
-        scegli il CSV qui sotto <strong>prima</strong> di caricare il file 3D — i due
-        vengono impacchettati insieme in un bundle (<code>BZX1</code>,
-        <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca per codice
-        allarme pronta, senza upload separati. Opzionale: senza CSV il payload resta
-        un semplice <code>BZM1</code> come prima.</p>
+      <p class="honesty">Puoi includere nello stesso QR anche una tabella allarmi e
+        altri documenti consultabili: scegli i file qui sotto <strong>prima</strong> di
+        caricare il file 3D — tutto viene impacchettato in un bundle (<code>BZX1</code>,
+        <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca allarmi
+        pronta e un indice navigabile dei documenti. I documenti aggiuntivi sono solo
+        da consultare (non collegati al 3D): testo/CSV/immagini si aprono inline, i
+        formati strutturati (pdf/html/xml/…) si scaricano. Opzionale: senza extra il
+        payload resta un semplice <code>BZM1</code> come prima.</p>
       <p>
         <label>Tabella allarmi da includere nel bundle (opzionale):
           <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
         <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
+      </p>
+      <p>
+        <label>Documenti aggiuntivi da consultare (opzionale, selezione multipla):
+          <input type="file" id="threed-bundle-docs-input" multiple></label>
+        <button id="threed-bundle-docs-clear-btn" type="button">Rimuovi documenti</button>
       </p>
 
       <section id="threed-drop" class="dropzone">
@@ -369,6 +376,11 @@
           browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
 
         <table class="stats" id="threed-stats-table"></table>
+
+        <details id="threed-docs-block" open hidden>
+          <summary>documenti nel bundle</summary>
+          <ul id="threed-docs-index" class="doc-index-list"></ul>
+        </details>
 
         <details open>
           <summary>distinta base</summary>
