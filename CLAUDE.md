@@ -1127,6 +1127,24 @@ scansione whole-image su una griglia completa) — vedi §2.4b).
     `_Shape` di `vectorio.py` (già strutturate per kind/geom/layer) nel
     formato a coppie codice/valore DXF — probabilmente il pezzo più
     semplice di questa lista, perché il modello dati esiste già.
+13. **"3D filtered mode"** (nome scelto in sessione): mostrare solo gli
+    assiemi di primo livello nominati dal disegnatore, nascondendo
+    sotto-codici/sotto-assiemi che possono essere informazione
+    riservata (part number proprietari, dettagli costruttivi interni).
+    Proposto e discusso, esplicitamente **rimandato** a valutazione
+    futura, non ancora iniziato. Punto tecnico chiave emerso nella
+    discussione, da tenere presente quando si riprende: **nascondere
+    solo nella UI del viewer non basta** — il `.glb` scaricabile
+    contiene comunque nomi e gerarchia completi di ogni sotto-parte,
+    ispezionabili da chiunque con un viewer glTF generico o un editor
+    di testo (è JSON+binario). Una vera riservatezza richiederebbe
+    unire la geometria sotto il livello scelto già in fase di export
+    (`scene3d.py`/`gltf.py`, non un filtro lato client) — le sotto-parti
+    nascoste diventerebbero una singola mesh anonima, senza nomi né
+    materiali distinti, con il costo esplicito di perdere il
+    click-to-select per quelle sotto-parti specifiche (un compromesso
+    riservatezza-vs-interattività, non un dettaglio implementativo
+    gratuito).
 
 ## 6. Applicazioni target (valutate, non solo elencate)
 
