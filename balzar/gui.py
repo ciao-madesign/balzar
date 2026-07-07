@@ -642,6 +642,15 @@ class BalzarApp:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)
 
+    def _shutdown_viewer(self, key: str) -> None:
+        """Shuts down and pops the running server registered under `key`
+        (a library entry id, or a job's own fallback id) and frees its
+        port -- shared by both places that can close a viewer, so the
+        teardown sequence only needs to be right in one place."""
+        server = self._open_viewers.pop(key)
+        server.shutdown()
+        server.server_close()
+
     def _close_library_viewer_selected(self) -> None:
         """Shuts down the ephemeral local server for the selected entry
         (if one is running) and frees its port -- without this, every
@@ -650,9 +659,7 @@ class BalzarApp:
         entry = self._selected_library_entry()
         if entry is None or entry.id not in self._open_viewers:
             return
-        server = self._open_viewers.pop(entry.id)
-        server.shutdown()
-        server.server_close()
+        self._shutdown_viewer(entry.id)
         self._refresh_library_panel()
         self.status.set(f"Visualizzazione di {entry.source_name} chiusa")
 
@@ -665,9 +672,7 @@ class BalzarApp:
                 "Il file scompare dalla libreria, non solo dalla vista."):
             return
         if entry.id in self._open_viewers:
-            server = self._open_viewers.pop(entry.id)
-            server.shutdown()
-            server.server_close()
+            self._shutdown_viewer(entry.id)
         # if the currently-displayed job still points at this entry (it
         # was auto-saved but never actually viewed, so it was never in
         # _open_viewers above), clear the reference -- otherwise a later
