@@ -2615,6 +2615,96 @@ per multi-frame, solo PNG per un programma fuori dal sottoinsieme
 vettoriale come `NOISE` — 22 test totali nel file), 2 in
 `tests/test_cli.py`, 3 in `tests/test_webapi.py::TestHandleEncode3D`.
 
+### 9.19 "Balzar Live" — valutato, non ancora implementato, ma meno lontano di quanto sembri
+
+Proposta esterna ricevuta in sessione (due documenti di specifica, tecnico e
+prodotto): un "sotto-prodotto" **Balzar Live** che collega il contenuto
+statico generato da balzar (modello/esploso/BOM/documenti) allo **stato
+reale della macchina**, letto in tempo reale via protocollo industriale
+(OPC UA, Modbus TCP, MQTT, REST), per far scattare automaticamente
+highlight/ricerca quando arriva un codice di allarme — invece che
+l'operatore lo digiti a mano nella barra di ricerca (§9.15).
+
+**Perché non è la stessa proposta già scartata in §7.2.** Il "gemello
+digitale UI runtime" era stato respinto perché richiedeva che il *motore*
+di balzar (DSL/interprete) leggesse stato esterno a runtime — cosa che
+l'architettura non ammette per costruzione (niente condizionali, seed
+cotto nel payload, determinismo totale, vedi `dsl.py`). Balzar Live non
+tocca quel confine: lo stato live resta interamente **fuori** dal motore
+balzar, in un orchestratore esterno; balzar continua a generare solo
+contenuto statico deterministico, esattamente come oggi. L'orchestratore
+si limita a richiamare un'API di visualizzazione già esistente
+(`highlightNames()` in `viewer3d.py`/`app.js`, §9.11/§9.15) al posto di un
+click o di una digitazione umana.
+
+**Scope deliberatamente ridotto rispetto ai documenti originali, deciso
+in sessione**: **niente animazione, niente movimento assi nel viewer** —
+la proposta originale includeva `viewer.moveAxis(...)`/
+`viewer.playAnimation(...)`, scartati esplicitamente per non introdurre
+uno stato/motore di animazione che oggi non esiste in `viewer3d.py` (il
+viewer mostra una scena statica + eventuale navigazione frame-per-frame
+già presente per le sequenze, §2.3/§2.9 — non un player di animazioni
+guidato da eventi live). La visualizzazione resta quella di oggi
+(rotazione/zoom/isolamento/ricerca/BOM/indice documenti, §9.9-§9.17),
+**invariata**. L'unica estensione concessa: **colonne aggiuntive nella
+tabella allarmi con un riferimento a un documento-procedura**, così un
+evento allarme può sia evidenziare il componente (già esistente) sia
+aprire automaticamente il documento di procedura collegato (già
+esistente come voce `KIND_DOC` nell'indice bundle, §9.17) — nessuna
+primitiva nuova nel viewer, solo un secondo campo opzionale nel CSV già
+letto da `parse_alarm_csv()` e un secondo trigger sulla stessa
+infrastruttura di ricerca-e-apertura già scritta.
+
+**Mappatura onesta tra i nomi proposti e ciò che esiste già nel
+codice**, perché i due documenti originali usano una terminologia
+(Balzar Studio/Core/Live/Runtime/Bridge) che non collima con niente di
+scritto finora e rischierebbe di far sembrare tutto da rifare da zero:
+
+| Nome nella proposta | Cosa è davvero, oggi |
+|---|---|
+| Balzar Studio (encoder/decoder, creazione contenuti) | l'insieme già esistente: CLI (`balzar/cli.py`), GUI desktop (`balzar/gui.py`), demo web (§2.9) — nessun nome nuovo necessario nel codice, è un'etichetta di prodotto/marketing sopra ciò che c'è |
+| Balzar Core | il motore deterministico (`grid.py`/`ops.py`/`dsl.py`/`interpreter.py`) + i vari encoder (`encoder.py`/`vectorio.py`/`video.py`/`scene3d.py`) — già così chiamato implicitamente in questo documento |
+| Balzar Live Runtime (ricostruzione + viewer offline) | **esiste già**: `balzar/viewer3d.py` (desktop) + `index.html`/`app.js` (demo web), con click-to-select (§9.11), ricerca allarmi (§9.15), indice documenti (§9.17), tavole 2D (§9.18) |
+| Balzar Bridge (connessione PLC/SCADA, driver protocollari) | **l'unico pezzo genuinamente nuovo** — zero righe di codice oggi. Corrisponde esattamente al punto 2 già annotato in §9.15 ("watcher di un sistema PLC/SCADA reale... non iniziato, richiede di sapere con quale sistema reale si integra") |
+
+**Cosa servirebbe davvero per costruire il solo Bridge** (non
+implementato, elenco di scoping onesto):
+1. Estendere `parse_alarm_csv`/il formato CSV con colonne opzionali
+   aggiuntive (es. `codice,componente,documento_procedura`) — piccola
+   estensione retrocompatibile, non un nuovo formato.
+2. Un endpoint locale sul server già avviato da `open_glb_in_browser`
+   (già `http.server`, stdlib) che riceva un evento (`POST
+   /set_alarm?code=...`) e lo giri alla pagina già aperta — nessuna
+   libreria nuova per questa parte.
+3. Un driver per protocollo (OPC UA/Modbus/MQTT/REST), ciascuno una
+   **nuova dipendenza opzionale** (es. `asyncua`, `pymodbus`,
+   `paho-mqtt`) — esplicitamente **fuori** dal vincolo "stdlib pura" che
+   vale per il motore core (§1): quel vincolo riguarda `balzar/` come
+   motore di generazione, non un eventuale layer Bridge, che è un
+   prodotto satellite e può avere dipendenze proprie, dichiarate come
+   tali e mai infiltrate nel motore.
+4. **Read-only imposto architetturalmente, non solo dichiarato**: ogni
+   driver dovrebbe esporre solo metodi di lettura nell'interfaccia verso
+   il Runtime (nessun metodo di scrittura raggiungibile), stessa
+   disciplina già seguita altrove nel progetto per fallire esplicito
+   invece che implicito (es. `_tile_boxes` in `qr.py`, §2.4b).
+
+**Cosa di questo documento resta volutamente fuori scope, marcato
+speculativo e non una roadmap impegnata** (stesso trattamento già dato
+ad altre idee esterne in §7): app Android dedicata, modalità AR, "gemello
+digitale leggero", plugin SCADA/MES, supporto Ethernet/IP e Profinet.
+Nessuna di queste ha un percorso di implementazione concreto oggi, e
+elencarle come fasi 2-4 di una roadmap tecnica (come nei documenti
+originali) darebbe un'impressione di pianificazione che non esiste —
+restano idee valutate, non impegni, esattamente come STEP in §7.3.
+
+**Stato**: valutata, non implementata. Nessun modulo `bridge.py` nel
+repository, nessuna dipendenza a protocolli industriali installata,
+nessun formato CSV allarmi esteso. Vedi anche il documento di visione
+separato (vedi §11) per il posizionamento di prodotto (Balzar Studio /
+Balzar Live) — questa sezione resta il riferimento tecnico su cosa
+esiste davvero e cosa mancherebbe.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
@@ -2639,3 +2729,14 @@ Pillow va installato su entrambe le versioni se si passa dall'una all'altra
 Stesso discorso per `qrcode`/`pyzbar` (usati da `balzar/qr.py`, opzionali):
 `pyzbar` richiede anche `libzbar0` di sistema (`apt-get install libzbar0`),
 non solo il pacchetto pip.
+
+## 11. Documento di visione/scopo
+
+`VISIONE.md` (radice del repository) raccoglie in forma leggibile, senza i
+dettagli tecnici di sessione, la visione del progetto (§1), le applicazioni
+target (§6), le idee esterne valutate (§7) e il posizionamento di prodotto
+Balzar Studio/Balzar Live (§9.19). È un documento **duplicato**, non
+sostitutivo: le sezioni corrispondenti restano qui, questo file resta la
+fonte tecnica di verità; `VISIONE.md` è la vista di sintesi condivisibile
+con chi non ha bisogno del log di sessione completo. Tenerli allineati a
+mano quando cambia la sostanza di una delle sezioni duplicate.
