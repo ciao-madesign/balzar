@@ -668,6 +668,15 @@ class BalzarApp:
             server = self._open_viewers.pop(entry.id)
             server.shutdown()
             server.server_close()
+        # if the currently-displayed job still points at this entry (it
+        # was auto-saved but never actually viewed, so it was never in
+        # _open_viewers above), clear the reference -- otherwise a later
+        # first click on "Visualizza in 3D" for that still-displayed job
+        # would resurrect this now-deleted id into _open_viewers, and
+        # since it can never appear in the library listbox again, that
+        # server could never be closed from this panel again either
+        if self.job is not None and self.job.library_entry_id == entry.id:
+            self.job.library_entry_id = None
         from .library import delete_from_library
         delete_from_library(entry)
         self._refresh_library_panel()
