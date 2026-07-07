@@ -211,5 +211,79 @@ class TestQRFrameSequence(unittest.TestCase):
             shutil.rmtree(out_dir)
 
 
+@unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
+class TestParallelQRGeneration(unittest.TestCase):
+    """balzar/qr.py's _generate_qr_images: QR encoding at near-max
+    capacity is CPU-bound and proportional to total data regardless of
+    grid_dim (measured in session: ~0.06ms per base64 char at every QR
+    version tried, 10 through 40) -- every chunk's encoding is
+    independent of every other's, so this parallelizes across a process
+    pool for a real wall-clock win (measured 3.84x on a 4-core machine
+    for 64 codes) with zero change to the output bytes. These tests
+    check correctness of that parallel path and its fallback, not the
+    speedup itself (timing assertions would be flaky across CI
+    hardware)."""
+
+    def test_parallel_path_matches_sequential_byte_for_byte(self):
+        from balzar.qr import _PARALLEL_MIN_IMAGES, _generate_qr_images, _qr_image
+
+        texts = [f"payload-chunk-{i}" for i in range(_PARALLEL_MIN_IMAGES + 4)]
+        sequential = [_qr_image(t) for t in texts]
+        parallel = _generate_qr_images(texts)
+        self.assertEqual(len(parallel), len(sequential))
+        for seq_img, par_img in zip(sequential, parallel):
+            buf_seq, buf_par = io.BytesIO(), io.BytesIO()
+            seq_img.save(buf_seq, format="PNG")
+            par_img.save(buf_par, format="PNG")
+            self.assertEqual(buf_seq.getvalue(), buf_par.getvalue())
+
+    def test_below_threshold_stays_sequential_even_if_pool_is_broken(self):
+        import concurrent.futures
+
+        import balzar.qr as qr_mod
+
+        texts = ["only-one-chunk"]
+        self.assertLess(len(texts), qr_mod._PARALLEL_MIN_IMAGES)
+
+        class _BoomPool:
+            def __init__(self, *a, **k):
+                raise RuntimeError("process pool should never be created below threshold")
+
+        original = concurrent.futures.ProcessPoolExecutor
+        concurrent.futures.ProcessPoolExecutor = _BoomPool
+        try:
+            images = qr_mod._generate_qr_images(texts)
+        finally:
+            concurrent.futures.ProcessPoolExecutor = original
+        self.assertEqual(len(images), 1)
+
+    def test_falls_back_to_sequential_when_the_process_pool_fails(self):
+        # a sandboxed environment without process-spawn support, or any
+        # other platform quirk not seen in this session's testing --
+        # this must never crash the whole encode, only forgo the speedup
+        import concurrent.futures
+
+        import balzar.qr as qr_mod
+
+        class _BoomPool:
+            def __init__(self, *a, **k):
+                raise RuntimeError("simulated: this platform can't spawn a process pool")
+
+        original = concurrent.futures.ProcessPoolExecutor
+        concurrent.futures.ProcessPoolExecutor = _BoomPool
+        try:
+            texts = [f"payload-chunk-{i}" for i in range(qr_mod._PARALLEL_MIN_IMAGES + 2)]
+            images = qr_mod._generate_qr_images(texts)
+        finally:
+            concurrent.futures.ProcessPoolExecutor = original
+        self.assertEqual(len(images), len(texts))
+        expected = [qr_mod._qr_image(t) for t in texts]
+        for img, exp in zip(images, expected):
+            buf_img, buf_exp = io.BytesIO(), io.BytesIO()
+            img.save(buf_img, format="PNG")
+            exp.save(buf_exp, format="PNG")
+            self.assertEqual(buf_img.getvalue(), buf_exp.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
