@@ -500,7 +500,12 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   (testo/CSV/immagini) o si scaricano se strutturati (pdf/html/xml/…).
   Il 3D è opzionale: un bundle di **soli documenti** è valido e apre
   una pagina indice-only (via CLI/GUI desktop; il tab web resta
-  ancorato a un 3D). Vedi CLAUDE.md §9.17.
+  ancorato a un 3D). Vedi CLAUDE.md §9.17. Un documento `.bzr`/`.bzp`
+  (un programma/payload balzar 2D — una tavola tecnica) è un caso
+  speciale: viene **rigenerato al volo** in PNG/SVG (o GIF se
+  multi-frame) al momento dell'apertura, non salvato come immagine —
+  stesso principio "descrivi, non memorizzare i pixel" di tutto balzar,
+  applicato a un documento dentro il bundle. Vedi CLAUDE.md §9.18.
 - **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
   una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il

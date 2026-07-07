@@ -569,16 +569,69 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int]] | None,
     _render_viewer_page(glb, bom_lines, alarm_rows, documents, work_dir)
 
 
+def _render_2d_item(item) -> list[dict]:
+    """Render a KIND_2D bundle item (a full BZR1 program) into doc-index
+    entries -- generated fresh here, at view time, from the program, not
+    stored as pixels: the same "describe, don't store" principle as the
+    rest of balzar, applied to one document inside a bundle instead of
+    the main payload. Always produces a PNG (or GIF if the program has
+    more than one frame); also an SVG entry when the program is in the
+    vector-safe subset (balzar/svg.py) -- both get a real image
+    extension as their label (.png/.gif/.svg), so the SAME image-preview
+    code path in _DOC_JS picks them up automatically, no new client-side
+    branch needed for this to work."""
+    import base64 as _b64
+    import io as _io
+
+    from PIL import Image
+
+    from .interpreter import render as render_program
+    from .payload import decode_payload as decode_2d
+    from .png import png_bytes
+
+    program_text = decode_2d(item.data)
+    result = render_program(program_text)
+    stem = os.path.splitext(item.label)[0]
+    docs = []
+
+    if len(result.frames) == 1:
+        data = png_bytes(result.width, result.height, result.frame_rgb(0))
+        docs.append({"role": "tavola 2D", "label": stem + ".png",
+                    "b64": _b64.b64encode(data).decode("ascii")})
+    else:
+        images = [Image.frombytes("RGB", (result.width, result.height), result.frame_rgb(i))
+                 for i in range(len(result.frames))]
+        buf = _io.BytesIO()
+        images[0].save(buf, format="GIF", save_all=True, append_images=images[1:],
+                       duration=200, loop=0)
+        docs.append({"role": "tavola 2D (animata)", "label": stem + ".gif",
+                    "b64": _b64.b64encode(buf.getvalue()).decode("ascii")})
+
+    try:
+        from .svg import UnsupportedForSVG, render_svg
+        svg_text = render_svg(program_text)
+        docs.append({"role": "tavola 2D (vettoriale)", "label": stem + ".svg",
+                    "b64": _b64.b64encode(svg_text.encode("utf-8")).decode("ascii")})
+    except UnsupportedForSVG:
+        pass  # not in the vector-safe subset -- the PNG/GIF above still stands
+
+    return docs
+
+
 def _documents_from_items(items) -> list[dict]:
-    """Build the viewer's document list from a bundle's alarm/doc items
-    (base64 each, role tag for the index badge) -- the 3D item is NOT a
-    document here, it's the main view, so it's excluded. An alarm table
-    is included: it powers the search AND is itself a consultable table."""
+    """Build the viewer's document list from a bundle's 2d/alarm/doc
+    items (base64 each, role tag for the index badge) -- the 3D item is
+    NOT a document here, it's the main view, so it's excluded. An alarm
+    table is included: it powers the search AND is itself a consultable
+    table."""
     import base64 as _b64
 
-    from .bundle import KIND_ALARM, KIND_DOC, is_alarm_kind
+    from .bundle import KIND_2D, KIND_ALARM, KIND_DOC, is_alarm_kind
     docs = []
     for it in items:
+        if it.kind == KIND_2D:
+            docs.extend(_render_2d_item(it))
+            continue
         if is_alarm_kind(it.kind):
             role = "allarmi"
         elif it.kind == KIND_DOC:

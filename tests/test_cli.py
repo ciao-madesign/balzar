@@ -337,6 +337,26 @@ class TestCli(unittest.TestCase):
         self.assertIn("errore:", err)
         self.assertNotIn("Traceback", err)
 
+    def test_encode_bundle_2d_tavola_no_3d_required(self):
+        bzr_path = self._write("tavola.bzr",
+                               "CANVAS w=30 h=30 bg=1\nPALETTE i=2 rgb=#FF0000\n"
+                               "RECT x=5 y=5 w=10 h=10 color=2 fill=1\n")
+        out_path = self._path("tavola.bzx")
+        code, out, err = _run(["encode-bundle", bzr_path, "-o", out_path])
+        self.assertEqual(code, 0)
+        self.assertIn("1 elementi", out)
+        self.assertIn("2d", out)
+        with open(out_path, "rb") as fh:
+            self.assertEqual(fh.read(4), b"BZX1")
+
+    def test_encode_bundle_invalid_bzr_gives_clean_error(self):
+        bzr_path = self._write("broken.bzr", "BOGUS x=1\n")
+        code, out, err = _run(["encode-bundle", bzr_path])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+        self.assertIn("broken.bzr", err)
+        self.assertNotIn("Traceback", err)
+
     # ------------------------------------------------------ encode-video
 
     def test_encode_video_gif(self):

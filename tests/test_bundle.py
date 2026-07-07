@@ -16,8 +16,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 from test_scene3d import _write_fixture_3dxml
 
-from balzar.bundle import (KIND_3D, KIND_ALARM, KIND_CSV, KIND_DOC, BundleError,
-                           BundleItem, decode_bundle, encode_bundle,
+from balzar.bundle import (KIND_2D, KIND_3D, KIND_ALARM, KIND_CSV, KIND_DOC,
+                           BundleError, BundleItem, decode_bundle, encode_bundle,
                            encode_bundle_files, is_bundle)
 from balzar.payload import assemble_chunks, chunk_payload
 from balzar.scene3d import decode_payload as decode_scene, generate_bom
@@ -137,6 +137,108 @@ class TestEncodeBundleFiles(unittest.TestCase):
         with self.assertRaises(BundleError) as ctx:
             encode_bundle_files([bad_xml])
         self.assertIn("broken.3dxml", str(ctx.exception))
+
+
+class TestKind2D(unittest.TestCase):
+    """A .bzr/.bzp file (a 2D balzar program -- a technical drawing) gets
+    its own role, KIND_2D: rendered fresh at view time (viewer3d.py),
+    never stored as pixels here -- bundle.py only carries the program."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _write_bzr(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def test_bzr_file_becomes_kind_2d(self):
+        path = self._write_bzr("tavola.bzr",
+                               "CANVAS w=50 h=50 bg=1\nPALETTE i=2 rgb=#FF0000\n"
+                               "RECT x=5 y=5 w=10 h=10 color=2 fill=1\n")
+        items = decode_bundle(encode_bundle_files([path]))
+        self.assertEqual(items[0].kind, KIND_2D)
+        self.assertEqual(items[0].label, "tavola.bzr")
+
+    def test_bzp_payload_carried_verbatim(self):
+        from balzar.payload import encode_payload
+        text = "CANVAS w=20 h=20 bg=1\n"
+        bzp_path = os.path.join(self.tmp, "tavola.bzp")
+        with open(bzp_path, "wb") as fh:
+            fh.write(encode_payload(text))
+        items = decode_bundle(encode_bundle_files([bzp_path]))
+        self.assertEqual(items[0].kind, KIND_2D)
+        with open(bzp_path, "rb") as fh:
+            self.assertEqual(items[0].data, fh.read())
+
+    def test_bzr_with_unknown_instruction_rejected_with_filename(self):
+        path = self._write_bzr("broken.bzr", "BOGUS x=1 y=2\n")
+        with self.assertRaises(BundleError) as ctx:
+            encode_bundle_files([path])
+        self.assertIn("broken.bzr", str(ctx.exception))
+        self.assertIn("BOGUS", str(ctx.exception))
+
+    def test_bzp_with_bad_magic_rejected(self):
+        bad_path = os.path.join(self.tmp, "fake.bzp")
+        with open(bad_path, "wb") as fh:
+            fh.write(b"not a real payload")
+        with self.assertRaises(BundleError):
+            encode_bundle_files([bad_path])
+
+    def test_3d_plus_2d_bundle_has_both_kinds(self):
+        xml_path = os.path.join(self.tmp, "assembly.3dxml")
+        _write_fixture_3dxml(xml_path)
+        bzr_path = self._write_bzr("tavola.bzr", "CANVAS w=20 h=20 bg=1\n")
+        items = decode_bundle(encode_bundle_files([xml_path, bzr_path]))
+        self.assertEqual([it.kind for it in items], [KIND_3D, KIND_2D])
+
+
+class TestRender2DItem(unittest.TestCase):
+    """viewer3d._render_2d_item: decodes a KIND_2D item and renders it
+    fresh into doc-index entries with real image extensions, so the
+    existing image-preview path in _DOC_JS/app.js picks them up with no
+    new client-side branch (verified separately via Playwright)."""
+
+    def test_single_frame_program_renders_png_and_svg(self):
+        from balzar.viewer3d import _render_2d_item
+
+        text = ("CANVAS w=40 h=40 bg=1\nPALETTE i=2 rgb=#FF0000\n"
+                "RECT x=5 y=5 w=10 h=10 color=2 fill=1\n")
+        from balzar.payload import encode_payload
+        item = BundleItem(KIND_2D, "tavola.bzr", encode_payload(text))
+        docs = _render_2d_item(item)
+        labels = [d["label"] for d in docs]
+        self.assertIn("tavola.png", labels)
+        self.assertIn("tavola.svg", labels)
+        for d in docs:
+            self.assertGreater(len(d["b64"]), 0)
+
+    def test_multi_frame_program_renders_gif_not_svg(self):
+        from balzar.viewer3d import _render_2d_item
+
+        text = ("CANVAS w=20 h=20 bg=1\nPALETTE i=2 rgb=#00AA00\n"
+                "RECT x=1 y=1 w=5 h=5 color=2 fill=1\nFRAME\n"
+                "RECT x=10 y=10 w=5 h=5 color=2 fill=1\nFRAME\n")
+        from balzar.payload import encode_payload
+        item = BundleItem(KIND_2D, "anim.bzr", encode_payload(text))
+        docs = _render_2d_item(item)
+        labels = [d["label"] for d in docs]
+        self.assertIn("anim.gif", labels)
+        self.assertNotIn("anim.svg", labels)  # multi-frame is out of svg.py's scope
+
+    def test_svg_unsafe_program_renders_only_raster(self):
+        from balzar.viewer3d import _render_2d_item
+
+        # NOISE has no vector equivalent (balzar/svg.py rejects it)
+        text = ("CANVAS w=20 h=20 bg=1\nPALETTE i=2 rgb=#FF0000\n"
+                "REGION name=FULL x=0 y=0 w=20 h=20\nNOISE region=FULL color=2 density=0.5\n")
+        from balzar.payload import encode_payload
+        item = BundleItem(KIND_2D, "rumore.bzr", encode_payload(text))
+        docs = _render_2d_item(item)
+        labels = [d["label"] for d in docs]
+        self.assertIn("rumore.png", labels)
+        self.assertNotIn("rumore.svg", labels)
 
 
 class TestBundleThroughQrCarrier(unittest.TestCase):

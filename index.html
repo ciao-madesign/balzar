@@ -313,8 +313,11 @@
         <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca allarmi
         pronta e un indice navigabile dei documenti. I documenti aggiuntivi sono solo
         da consultare (non collegati al 3D): testo/CSV/immagini si aprono inline, i
-        formati strutturati (pdf/html/xml/…) si scaricano. Opzionale: senza extra il
-        payload resta un semplice <code>BZM1</code> come prima.</p>
+        formati strutturati (pdf/html/xml/…) si scaricano. Un file <code>.bzr</code>/
+        <code>.bzp</code> (un programma/payload balzar 2D — una tavola tecnica) viene
+        invece <strong>rigenerato al volo</strong> in PNG/SVG e mostrato come le
+        immagini — nessun pixel salvato, solo il programma che lo disegna. Opzionale:
+        senza extra il payload resta un semplice <code>BZM1</code> come prima.</p>
       <p>
         <label>Tabella allarmi da includere nel bundle (opzionale):
           <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>

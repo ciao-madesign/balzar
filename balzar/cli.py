@@ -246,9 +246,11 @@ def cmd_encode_bundle(args: argparse.Namespace) -> int:
     number of consultable documents -> one .bzx bundle (balzar/bundle.py):
     a single file/QR that opens straight into the 3D viewer, the alarm
     search, and a navigable document index. A file passed to --alarm is
-    wired to the search bar; every other non-3D file is a generic
-    consultable document. No 3D is required -- a documents-only bundle is
-    valid. See CLAUDE.md for the multi-document flow this exists for."""
+    wired to the search bar; a .bzr/.bzp (a 2D balzar program/payload --
+    a technical drawing) is rendered fresh into PNG/SVG at view time, not
+    stored as pixels; every other non-3D file is a generic consultable
+    document. No 3D is required -- a documents-only bundle is valid. See
+    CLAUDE.md for the multi-document flow this exists for."""
     from .bundle import BundleError, decode_bundle, encode_bundle_files
 
     alarm_paths = args.alarm or []
@@ -603,8 +605,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("encode-bundle",
                        help="assieme 3D + tabella allarmi + documenti -> un bundle .bzx")
     p.add_argument("inputs", nargs="+",
-                   help="file da includere: .3dxml/.b3d (3D), i file marcati --alarm "
-                        "(tabella allarmi), qualunque altro file (documento consultabile)")
+                   help="file da includere: .3dxml/.b3d (3D), .bzr/.bzp (tavola 2D, "
+                        "rigenerata in PNG/SVG), i file marcati --alarm (tabella allarmi), "
+                        "qualunque altro file (documento consultabile)")
     p.add_argument("--alarm", action="append", metavar="FILE",
                    help="marca un file (anche tra gli input) come tabella allarmi CSV, "
                         "cablata alla ricerca; ripetibile")

@@ -344,9 +344,13 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
     }
 
     if alarm_csv_text is not None or doc_items:
-        from .bundle import (KIND_3D, KIND_ALARM, KIND_DOC, BundleItem,
+        import os as _os
+
+        from .bundle import (KIND_3D, KIND_2D, KIND_ALARM, KIND_DOC, BundleItem,
                              encode_bundle)
-        from .viewer3d import parse_alarm_csv_text
+        from .payload import MAGIC as BZR1_MAGIC
+        from .payload import encode_payload as encode_2d
+        from .viewer3d import _render_2d_item, parse_alarm_csv_text
 
         bundle_items = [BundleItem(KIND_3D, "assembly.b3d", result.payload)]
         response_docs = []
@@ -358,9 +362,37 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
             response_docs.append({"role": "allarmi", "label": "alarms.csv",
                                  "b64": base64.b64encode(alarm_csv_text.encode("utf-8")).decode("ascii")})
         for label, doc_bytes in doc_items:
-            bundle_items.append(BundleItem(KIND_DOC, label, doc_bytes))
-            response_docs.append({"role": "doc", "label": label,
-                                 "b64": base64.b64encode(doc_bytes).decode("ascii")})
+            ext = _os.path.splitext(label)[1].lower()
+            # .bzr/.bzp are rendered fresh into PNG/GIF/SVG entries (same
+            # "describe, don't store pixels" rule as everywhere else in
+            # balzar), exactly like encode_bundle_files does for the CLI/
+            # desktop path -- everything else stays a raw KIND_DOC.
+            if ext == ".bzr":
+                try:
+                    payload_2d = encode_2d(doc_bytes.decode("utf-8"))
+                except UnicodeDecodeError as exc:
+                    return 400, {"ok": False, "error": f"documento '{label}' non e' UTF-8 valido: {exc}"}
+                except (SyntaxError, ValueError) as exc:
+                    return 400, {"ok": False, "error": f"documento '{label}' non valido: {exc}"}
+            elif ext == ".bzp":
+                if doc_bytes[:4] != BZR1_MAGIC:
+                    return 400, {"ok": False,
+                                 "error": f"documento '{label}' non e' un payload BZR1 valido"}
+                payload_2d = doc_bytes
+            else:
+                payload_2d = None
+
+            if payload_2d is not None:
+                item = BundleItem(KIND_2D, label, payload_2d)
+                try:
+                    response_docs.extend(_render_2d_item(item))
+                except (SyntaxError, ValueError, RuntimeError) as exc:
+                    return 400, {"ok": False, "error": f"documento '{label}' non valido: {exc}"}
+                bundle_items.append(item)
+            else:
+                bundle_items.append(BundleItem(KIND_DOC, label, doc_bytes))
+                response_docs.append({"role": "doc", "label": label,
+                                     "b64": base64.b64encode(doc_bytes).decode("ascii")})
 
         bundle_bytes = encode_bundle(bundle_items)
         response.update(_payload_response_fields(bundle_bytes, limits))

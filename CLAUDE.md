@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-251 test, tutti verdi (`python3 -m unittest discover -s tests`):
+264 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -2539,10 +2539,86 @@ Playwright (comportamento client-side per il rendering, backend coperto
 dal round-trip del bundle). PDF resta fuori scope come encoder (solo
 trasporto grezzo, §9.16).
 
+### 9.18 Tavole 2D nel bundle: `KIND_2D`, rigenerate al volo (non salvate come pixel)
+
+Seguito diretto di sessione: nel bundle, un file `.bzr`/`.bzp` (un
+programma/payload balzar 2D) può essere una "sottoapplicazione" a sé,
+con un visualizzatore dedicato invece di finire nel generico `KIND_DOC`
+(che offrirebbe solo il download, dato che `.bzr`/`.bzp` non sono
+formati che un browser sa mostrare). Nuovo ruolo `KIND_2D`
+(`balzar/bundle.py`): il file viene riconosciuto per estensione
+(`.3dxml`/`.b3d` restano 3D, `.bzr`/`.bzp` sono 2D, nessuna ambiguità —
+diversamente dal CSV che richiede la marcatura esplicita `--alarm`
+perché un CSV può essere sia tabella allarmi sia documento generico).
+
+**Il punto architetturale centrale, coerente con tutto il resto del
+progetto**: il bundle porta il *programma* (bytes `BZR1`), non
+un'immagine. La rigenerazione in PNG/GIF/SVG avviene al **momento
+dell'apertura del viewer** (`viewer3d._render_2d_item`, sia sulla GUI
+desktop sia — al momento della codifica — sulla demo web in
+`handle_encode_3d`), non viene mai salvata nel bundle stesso. Stesso
+principio "descrivi, non memorizzare i pixel" già alla base di tutto
+balzar, applicato qui a un documento dentro un bundle invece che al
+payload principale.
+
+**Riuso totale del codice client-side esistente, zero JavaScript
+nuovo**: gli item PNG/GIF/SVG generati ricevono un'estensione reale
+come label (`tavola.png`, `tavola.gif`, `tavola.svg`) — lo stesso
+percorso di anteprima-immagine già scritto per l'indice documenti
+(§9.17) li riconosce e mostra automaticamente, senza che `_DOC_JS`/
+`app.js` debbano sapere che quell'immagine viene da un programma balzar
+invece che da una foto. Un programma a un solo frame produce un PNG
+(più un SVG se il programma sta nel sottoinsieme vettoriale-sicuro di
+`svg.py` — `UnsupportedForSVG` viene silenziata: niente SVG non è un
+errore, è onestamente dichiarato omettendo semplicemente quella voce
+dall'indice); un programma multi-frame produce un GIF animato (nessun
+SVG in quel caso, `svg.py` rifiuta esplicitamente i programmi
+multi-frame).
+
+**Validazione reale, non solo tokenizzazione**: il primo tentativo
+validava un `.bzr` solo con `canonical()` (usato da `encode_payload`)
+— scoperto **insufficiente** scrivendo il test dell'errore: un
+programma con un'istruzione inesistente (`BOGUS x=1`) veniva accettato
+silenziosamente, perché `canonical()` tokenizza `key=value` ma non
+verifica che l'istruzione sia registrata in `ops.py` — quel controllo
+avviene solo eseguendo davvero il programma. Fix: `encode_bundle_files`
+ora chiama `interpreter.render()` per davvero prima di accettare un
+`.bzr`, catturando `SyntaxError`/`ValueError`/`RuntimeError` con il nome
+del file — stesso livello di rigore già usato per la validazione
+`.3dxml` (parsing completo, non un controllo superficiale). Un `.bzp`
+(payload già codificato) resta invece validato solo sul magic byte
+`BZR1`, coerente con lo stesso livello di fiducia già dato a un `.b3d`
+già codificato (l'eventuale corruzione più fine emerge comunque al
+momento della vista, con un errore chiaro, non un crash).
+
+**Superfici**: CLI (`encode-bundle assembly.3dxml tavola.bzr -o
+out.bzx`, nessun flag nuovo, dispatch automatico per estensione); GUI
+desktop (il picker "documenti aggiuntivi" già generico in `create_bundle`
+accetta `.bzr`/`.bzp` senza alcuna modifica al codice — l'unico punto
+toccato è `bundle.py`); demo web (lo stesso campo "documenti aggiuntivi"
+del tab 3D, `handle_encode_3d` esteso per riconoscere `.bzr`/`.bzp` tra
+i documenti caricati e chiamare `viewer3d._render_2d_item` lato server
+prima di rispondere, così il frontend riceve PNG/GIF/SVG già pronti
+senza dover eseguire l'interprete lato browser — cosa che non esiste,
+essendo l'interprete scritto in Python).
+
+Verificato con Playwright, non solo scritto, su entrambe le interfacce
+con tavole sintetiche (un rettangolo/cerchio a un frame, un programma
+a due frame con `FRAME`): indice con `tavola.png`+`tavola.svg` per il
+caso a singolo frame, `tavola.gif` (niente `.svg`) per il multi-frame,
+contenuto reale non vuoto in tutti e tre i formati (`data:image/...`
+con byte reali). Aggiunti 8 test in `tests/test_bundle.py`
+(`TestKind2D` + `TestRender2DItem`: dispatch per estensione, bundle
+3D+2D, payload `.bzp` portato verbatim, istruzione sconosciuta
+rifiutata col nome file, PNG+SVG per un frame singolo, GIF senza SVG
+per multi-frame, solo PNG per un programma fuori dal sottoinsieme
+vettoriale come `NOISE` — 22 test totali nel file), 2 in
+`tests/test_cli.py`, 3 in `tests/test_webapi.py::TestHandleEncode3D`.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 251 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 264 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

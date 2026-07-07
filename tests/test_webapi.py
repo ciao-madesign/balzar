@@ -338,6 +338,37 @@ class TestHandleEncode3D(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertFalse(resp["ok"])
 
+    def test_bzr_document_is_rendered_into_png_and_svg(self):
+        bzr_text = ("CANVAS w=40 h=40 bg=1\nPALETTE i=2 rgb=#FF0000\n"
+                   "RECT x=5 y=5 w=10 h=10 color=2 fill=1\n")
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_bytes()),
+            "documents": [{"label": "tavola.bzr", "data": _b64(bzr_text.encode("utf-8"))}],
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["bundled"])
+        labels = [d["label"] for d in resp["documents"]]
+        self.assertIn("tavola.png", labels)
+        self.assertIn("tavola.svg", labels)
+
+    def test_invalid_bzr_document_gives_clean_400(self):
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_bytes()),
+            "documents": [{"label": "broken.bzr", "data": _b64(b"BOGUS x=1\n")}],
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+        self.assertIn("broken.bzr", resp["error"])
+
+    def test_plain_document_stays_a_generic_doc(self):
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_bytes()),
+            "documents": [{"label": "note.txt", "data": _b64(b"hello")}],
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["documents"], [{"role": "doc", "label": "note.txt",
+                                             "b64": _b64(b"hello")}])
+
 
 class TestHandleEncodeVideo(unittest.TestCase):
     def _make_gif(self, n_frames=4):

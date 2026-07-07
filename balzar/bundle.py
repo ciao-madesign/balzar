@@ -10,17 +10,19 @@ Format:  b"BZX1" | u16 version | u16 item_count | u32 body_length
          | u32 crc32(body) | deflate(body)
 
 body = concatenation of items, each:
-    u8  kind_len | kind (ascii)     -- KIND_3D / KIND_ALARM / KIND_DOC
+    u8  kind_len | kind (ascii)     -- KIND_3D / KIND_2D / KIND_ALARM / KIND_DOC
     u8  label_len | label (utf-8)   -- human-readable, e.g. a filename
     u32 data_len | data             -- the item's own native bytes
 
 The `kind` is a ROLE, not a file type: it tells the reader how to
-dispatch the item (KIND_3D -> the model viewer + BOM; KIND_ALARM -> the
-search bar; KIND_DOC -> the navigable document index, just consultable,
-not linked to the 3D). A .csv is KIND_ALARM only when the user
-explicitly marks it as the alarm table; an unmarked .csv (or any other
-non-3D file) is a KIND_DOC. Content type for a doc is inferred from its
-label's extension at view time, not stored here.
+dispatch the item (KIND_3D -> the model viewer + BOM; KIND_2D -> a BZR1
+program rendered fresh into the doc index, see viewer3d._render_2d_item;
+KIND_ALARM -> the search bar; KIND_DOC -> the navigable document index,
+just consultable, not linked to the 3D). A .csv is KIND_ALARM only when
+the user explicitly marks it as the alarm table; an unmarked .csv (or
+any other non-3D/non-2D file) is a KIND_DOC. Content type for a KIND_DOC
+is inferred from its label's extension at view time, not stored here;
+KIND_2D always gets rendered, its content type is never ambiguous.
 
 Deliberately ONE compress+CRC pass over the whole concatenated body,
 not one per item: each item's own native format already self-checks on
@@ -56,6 +58,7 @@ _HEADER_LEN = 4 + 2 + 2 + 4 + 4
 # so the reader knows how to dispatch it, independent of its content type
 KIND_3D = "3d"        # a BZM1 3D assembly -> the model viewer + BOM
 KIND_ALARM = "alarm"  # a codice_allarme,nome_componente CSV -> wired to the search bar
+KIND_2D = "2d"        # a BZR1 2D program (drawing/schematic) -> rendered PNG/GIF/SVG in the index
 KIND_DOC = "doc"      # a generic consultable document -> the navigable index, not linked to the 3D
 
 # back-compat alias: earlier bundles tagged the alarm table "csv". Reading
@@ -147,6 +150,10 @@ def encode_bundle_files(paths: list[str], alarm_paths=None) -> bytes:
 
     Roles are assigned explicitly, never guessed from content:
     - `.3dxml`/`.b3d` -> KIND_3D (the model);
+    - `.bzr`/`.bzp` -> KIND_2D (a 2D drawing/schematic program -- the
+      viewer renders it fresh at open time, see viewer3d._render_2d_item,
+      the same "generate, don't store pixels" principle as the rest of
+      balzar applied to a bundled document instead of the main payload);
     - any path listed in `alarm_paths` -> KIND_ALARM (the search table),
       validated as UTF-8;
     - every other file -> KIND_DOC (a generic consultable document,
@@ -158,9 +165,12 @@ def encode_bundle_files(paths: list[str], alarm_paths=None) -> bytes:
 
     Strict on purpose (unlike encode_independent's per-file isolation in
     sequence.py): a bundle is a deliberate small set the user assembled
-    for one scan, so a genuinely broken 3D/alarm file refuses up front
+    for one scan, so a genuinely broken 3D/2D/alarm file refuses up front
     with a clear reason rather than being silently dropped. A generic
     doc, by contrast, is carried as-is with no parsing that could fail."""
+    from .interpreter import render as render_2d
+    from .payload import MAGIC as BZR1_MAGIC
+    from .payload import encode_payload as encode_2d
     from .scene3d import Scene3DError, encode_payload as encode_scene, parse_3dxml
     from .scene3d import MAGIC as BZM1_MAGIC
 
@@ -190,6 +200,24 @@ def encode_bundle_files(paths: list[str], alarm_paths=None) -> bytes:
             if data[:4] != BZM1_MAGIC:
                 raise BundleError(f"{label}: non e' un payload BZM1 valido")
             items.append(BundleItem(KIND_3D, label, data))
+        elif ext == ".bzr":
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            try:
+                render_2d(text)  # a real render, not just tokenizing --
+                                 # canonical() alone accepts a program
+                                 # with unknown/malformed instructions,
+                                 # only actually running it catches that
+                data = encode_2d(text)
+            except (SyntaxError, ValueError, RuntimeError) as exc:
+                raise BundleError(f"{label}: {exc}") from None
+            items.append(BundleItem(KIND_2D, label, data))
+        elif ext == ".bzp":
+            with open(path, "rb") as fh:
+                data = fh.read()
+            if data[:4] != BZR1_MAGIC:
+                raise BundleError(f"{label}: non e' un payload BZR1 valido")
+            items.append(BundleItem(KIND_2D, label, data))
         else:
             with open(path, "rb") as fh:
                 items.append(BundleItem(KIND_DOC, label, fh.read()))
