@@ -113,10 +113,15 @@ per lo scenario "3 macchine, 3 QR scansionati": il bottone "Libreria…"
 elenca ogni voce salvata, permette di riaprirne una senza riscansionare
 (anche dopo aver chiuso e riaperto l'app), e di chiudere/eliminare
 quelle non più utili. Riaprire due volte la stessa voce riusa lo stesso
-server locale invece di aprirne uno nuovo ogni volta. Vedi CLAUDE.md
-§9.22 per il bug di crash risolto nel percorso di scansione (un QR con
-un assieme 3D/bundle andava in crash prima di questa sessione) e per il
-bug di risorsa risolto nel visualizzatore.
+server locale invece di aprirne uno nuovo ogni volta — la stessa
+deduplica copre anche un file appena codificato da Balzar Studio, mai
+salvato in libreria (CLAUDE.md §9.23, punto 2). Vedi CLAUDE.md §9.22
+per il bug di crash risolto nel percorso di scansione (un QR con un
+assieme 3D/bundle andava in crash prima di questa sessione) e per il
+bug di risorsa risolto nel visualizzatore, e §9.23 per un audit
+successivo che ha trovato e corretto altri 10 problemi (selezione nel
+pannello, scrittura del manifest non atomica, gestione eccezioni,
+pulizia dei file temporanei, blocco della UI in chiusura, e altro).
 
 Per distribuirla come eseguibile singolo senza Python installato:
 

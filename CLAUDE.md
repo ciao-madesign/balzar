@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-288 test, tutti verdi (`python3 -m unittest discover -s tests`):
+290 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -3023,10 +3023,132 @@ principio già seguito nel progetto: l'interazione Tkinter/browser si
 verifica manualmente sotto Xvfb, non nella suite `unittest`) — 288 test
 totali.
 
+### 9.23 Audit del codice della libreria (§9.22): 10 bug reali trovati e corretti
+
+Subito dopo aver pushato la feature libreria (§9.22, commit `6d21920`),
+eseguito un audit dedicato (`code-review`, 8 angoli di ricerca in
+parallelo — correttezza riga-per-riga, comportamento rimosso, tracciante
+cross-file, riuso, semplificazione, efficienza, altitudine, convenzioni
+CLAUDE.md) sul diff di quel solo commit. Nessuna violazione di
+convenzioni trovata; tutti gli altri 7 angoli hanno prodotto candidati
+reali, verificati leggendo il codice attuale (non solo fidandosi del
+giudizio dei finder) prima di correggerli. Dieci bug/problemi confermati,
+corretti uno alla volta con test/verifica Xvfb dopo ciascuno, commit e
+push separati per ognuno:
+
+1. **Bug di selezione nel pannello libreria**: `_refresh_library_panel`
+   riassegnava `self._library_entries` alla lista appena ricaricata
+   *prima* di leggere l'indice di selezione corrente della listbox —
+   un salvataggio automatico in background mentre il pannello era
+   aperto poteva far evidenziare silenziosamente la voce sbagliata dopo
+   il refresh. Fix: catturare id della voce selezionata contro la
+   lista ancora a schermo, poi ricaricare.
+2. **Il fix anti-leak non copriva gli encode freschi di Balzar
+   Studio** — il più significativo dei dieci. `view_3d()` deduplicava
+   i server solo per `job.library_entry_id`, che resta `None` per un
+   job appena codificato (`.3dxml` fresco o un bundle appena creato,
+   mai salvato in libreria per design — `is_live_artifact` resta
+   `False`). Cliccare ripetutamente "Visualizza in 3D" su un file
+   appena codificato — un flusso comune quanto (o più di) riaprire
+   dalla libreria — perdeva ancora un `HTTPServer` per click, esatto
+   bug che il fix originale dell sessione precedente doveva chiudere,
+   solo sull'altro percorso. Fix: `Job` porta ora un id proprio stabile
+   (`uuid4` all'istanziazione, indipendente dalla libreria);
+   `view_3d()` usa `job.library_entry_id or job.id` come chiave — un
+   job mai salvato in libreria deduplica comunque i propri click
+   ripetuti, mentre codificare un file davvero nuovo (un nuovo `Job`,
+   una nuova chiave) ottiene correttamente un proprio server.
+3. **`_save_job_to_library` catturava solo `OSError`**: un
+   `ValueError` (kind sconosciuto, o `json.JSONDecodeError` da un
+   manifest corrotto — sottoclasse di `ValueError`) sfuggiva non
+   catturato attraverso `_poll_queue`, il cui riarmo ricorrente
+   `root.after(100, self._poll_queue)` sta subito dopo questa
+   chiamata — fermando permanentemente e silenziosamente il polling
+   della coda dei job finché l'app non veniva riavviata. Fix: catturare
+   `(OSError, ValueError)`.
+4. **Scrittura del manifest non atomica**: `_write_manifest` scriveva
+   `manifest.json` direttamente, quindi un crash/disco pieno a metà
+   scrittura lasciava un file troncato/corrotto per ogni sessione
+   futura. Fix: scrivere su un file temporaneo nella stessa cartella e
+   `os.replace()` atomico sopra il manifest reale.
+5. **Voce di libreria orfana dopo elimina-poi-visualizza**: una voce
+   salvata automaticamente ma mai visualizzata (mai in
+   `_open_viewers`) poteva essere eliminata dal pannello mentre il suo
+   `Job` restava quello mostrato nella finestra principale; un
+   successivo primo click su "Visualizza in 3D" per quel job ancora
+   visualizzato resuscitava l'id ormai eliminato dentro
+   `_open_viewers` — e poiché quell'id non poteva più comparire nella
+   listbox (più corta), quel server non poteva più essere chiuso dal
+   pannello. Fix: `_delete_library_selected` azzera
+   `self.job.library_entry_id` se coincide con la voce eliminata, così
+   una vista successiva ricade sull'id proprio del job (punto 2) invece
+   di resuscitare quello eliminato.
+6. **Ordinamento "più recente in cima" non garantito per salvataggi
+   nello stesso secondo**: `list_library()` ordinava per `saved_at`
+   (risoluzione 1 secondo) con `reverse=True`, ma l'ordinamento di
+   Python è stabile anche in modalità inversa (le chiavi uguali
+   mantengono il loro ordine relativo originale, non vengono
+   invertite) — due scansioni completate nello stesso secondo
+   mostravano quindi la più vecchia delle due in cima, contraddicendo
+   l'ordine documentato/atteso. Fix: spareggio per posizione originale
+   di append nel manifest, discendente.
+7. **Logica di dispatch per magic byte duplicata**: `_dispatch_payload_bytes`
+   (usata da scansione QR e riapertura da libreria) e il dispatch
+   inline di `_worker` (usato aprendo un file da disco) erano due copie
+   quasi identiche dello stesso controllo a tre vie BZX1/BZM1/BZR1, con
+   piccole varianti (fallback su estensione, branch immagine) —
+   rischio di divergenza silenziosa se una viene aggiornata e l'altra
+   no. Fix: unificate in un solo metodo con un parametro `path`
+   opzionale, che restituisce quale ramo è stato preso (usato da
+   `_worker` per derivare `job.is_live_artifact` invece di impostarlo
+   inline per ramo).
+8. **Sequenza di chiusura server duplicata**: `_close_library_viewer_selected`
+   e `_delete_library_selected` ripetevano lo stesso pop+shutdown+
+   server_close identico. Fix: estratto un helper condiviso
+   `_shutdown_viewer`.
+9. **Cartella temporanea del viewer mai ripulita**: il `work_dir` di
+   `tempfile.mkdtemp()` creato da `view_3d()` (copia di
+   `model-viewer.min.js` + `model.glb`, ~1 MB) non veniva mai rimosso
+   nemmeno dopo aver chiuso esplicitamente quel visualizzatore —
+   accumulo su disco in una sessione lunga. Fix: `_open_viewers` ora
+   traccia `(server, work_dir)`; `_shutdown_viewer` chiama
+   `shutil.rmtree` sul work_dir dopo aver fermato il server.
+10. **`server.shutdown()` bloccava il thread principale di Tkinter**:
+    `http.server`'s `shutdown()` attende che il loop `serve_forever()`
+    (in un altro thread) se ne accorga al prossimo tick del suo
+    poll-interval (~0,5s di default) — chiamarlo direttamente sul
+    thread principale congelava l'intera GUI per quel tempo ad ogni
+    click su "Chiudi visualizzazione"/"Elimina dalla libreria". Fix:
+    lo shutdown/rmtree ora girano in un thread di background; il pop
+    dal registro resta sincrono (così l'UI riflette subito la
+    chiusura).
+
+**Metodologia di verifica, non solo lettura del diff**: per ogni bug
+strutturale (2, 3, 5, 9, 10) scritto uno smoke test Xvfb dedicato che
+riproduce concretamente lo scenario prima del fix (dove tecnicamente
+possibile senza modificare il codice — es. forzare `save_to_library` a
+sollevare un `ValueError` per il punto 3) e ne conferma la risoluzione
+dopo; per i bug di logica pura (1, 4, 6) letto il codice sorgente
+attuale riga per riga per confermare ogni candidato del finder prima di
+correggere, non fidandosi del solo giudizio dell'agente di revisione.
+Ogni fix è stato verificato con l'intera suite `unittest` **e** con
+tutti gli smoke test Xvfb rilevanti prima di committare, uno alla
+volta, con push separato dopo ciascuno (10 commit, ognuno seguito da
+`git push` sia sul branch di feature sia su `main`).
+
+Test aggiunti in questo audit: 2 in `tests/test_library.py`
+(`test_newest_first_breaks_same_second_ties_by_append_order`,
+`test_write_failure_mid_manifest_write_leaves_old_manifest_intact`) —
+290 test totali. Gli altri fix (2, 3, 5, 9, 10) riguardano interazione
+Tkinter/thread/browser pura — verificati con smoke test Xvfb one-off,
+non aggiunti alla suite automatica, stesso principio già seguito per il
+resto della UI del progetto (l'interazione Tkinter si verifica
+manualmente sotto Xvfb, non in `unittest`).
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 288 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 290 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop
