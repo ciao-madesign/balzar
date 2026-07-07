@@ -577,16 +577,22 @@ class BalzarApp:
     def _refresh_library_panel(self) -> None:
         """Re-reads the manifest from disk and redraws the list -- called
         after every auto-save, open, or delete, so the panel (if open)
-        never shows stale entries."""
+        never shows stale entries.
+
+        Selection must be captured against the list that is CURRENTLY on
+        screen, before it's replaced -- looking the old listbox index up
+        in the freshly-loaded (possibly reordered, e.g. a background
+        auto-save just added a newer entry in front) list would silently
+        select the wrong row."""
         if self._library_listbox is None or not self._library_listbox.winfo_exists():
             return
+        selected_id = None
+        sel = self._library_listbox.curselection()
+        if sel and sel[0] < len(self._library_entries):
+            selected_id = self._library_entries[sel[0]].id
         from .library import list_library
         self._library_entries = list_library()
         kind_label = {"2d": "2D", "3d": "3D", "bundle": "bundle"}
-        selected_id = None
-        sel = self._library_listbox.curselection()
-        if sel:
-            selected_id = self._library_entries[sel[0]].id if sel[0] < len(self._library_entries) else None
         self._library_listbox.delete(0, "end")
         for e in self._library_entries:
             open_marker = "  [aperto]" if e.id in self._open_viewers else ""
