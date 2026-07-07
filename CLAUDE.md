@@ -346,6 +346,88 @@ pieni scendono da ~6-7,5s a ~3,4-3,6s ciascuno; il 7° frame (parziale,
 su un'immagine non a griglia, corrispondenza tra `_decode_tiled` e la
 scansione whole-image su una griglia completa) — 212 test totali.
 
+### 2.4c Trasporto QR di byte arbitrari (`chunks --raw`/`scan --raw`), non passa mai dal motore balzar
+
+Domanda diretta di sessione, nata da un caso concreto: un PDF (dichiarazione
+di conformità, 51.318 B, testo nativo non scansionato) passato per davvero
+attraverso l'encoder raster di balzar (§4.1) risultava **peggio**
+dell'originale — 313.927 B a risoluzione leggibile, 6,1× più grande del
+PDF, per lo stesso motivo già noto (bordi non assiali dei glifi, nessun
+rilevamento linee/curve). Domanda successiva: e se invece si spezzasse il
+PDF **grezzo** su una sequenza di QR, senza nessun tentativo di
+compressione generativa?
+
+**Funziona, ed è un uso legittimo di un meccanismo già esistente, non una
+funzionalità nuova nel senso pieno.** `chunk_payload`/`assemble_chunks`
+(`balzar/payload.py`) e `payload_to_qr_frames`/`LiveScanner`
+(`balzar/qr.py`) sono **agnostici al contenuto**: trattano qualunque
+sequenza di byte come dati opachi con un header `BZC1` (indice/totale/
+CRC32) — lo stesso principio già sfruttato per i bundle multi-documento
+(§9.16: "il livello QR/chunking tratta già qualunque payload come byte
+opachi"). Prima di questa sessione questo non era raggiungibile da CLI:
+`cmd_chunks` forzava `_load_program()` (valida come programma/payload
+balzar), e non esisteva alcun modo di generare o leggere una **sequenza**
+multi-fotogramma (solo la libreria `payload_to_qr_frames`, mai wired a un
+comando — gap già annotato in §2.9).
+
+**Cosa distingue questo path da tutto il resto del progetto**: qui non
+c'è generazione. Il motore (griglia/DSL/interprete) non viene mai
+toccato — è puro slicing e ricomposizione di byte, ogni passaggio
+(`chunk_payload` taglia, `to_base64`/`from_base64` codifica/decodifica
+testo in modo reversibile, ZBar legge, `assemble_chunks` concatena e
+verifica il CRC32) è una trasformazione **reversibile senza perdita**,
+mai un'interpretazione. Conseguenza diretta, verificata non solo per
+ragionamento ma con un test concreto: **firme digitali e cifratura
+embedded nel file originale sopravvivono intatte**, perché sono funzioni
+matematiche calcolate sugli stessi byte, e i byte in uscita sono
+byte-identici a quelli in ingresso (dimostrato con un HMAC-SHA256
+simulato calcolato prima e dopo il giro QR: stesso hash).
+
+**Implementazione**: nuovi flag su comandi già esistenti, non nuovi
+comandi — `chunks --raw` legge `INPUT` come byte grezzi arbitrari invece
+di richiedere `_load_program()`; `chunks --qr --grid-dim N` (funziona
+anche senza `--raw`, colma il gap generale già annotato in §2.9) genera
+una sequenza di fotogrammi via `payload_to_qr_frames` invece dell'unica
+griglia auto-dimensionata; `scan` accetta ora **più immagini**
+(`nargs="+"`, prima una sola) e usa `LiveScanner` internamente anche per
+il caso a una sola foto, così un'unica implementazione copre singolo QR,
+griglia singola e sequenza multi-fotogramma; `scan --raw` scrive i byte
+ricostruiti così come sono (richiede `-o` esplicito: nessuna estensione
+sensata da indovinare per contenuto arbitrario) invece di interpretarli
+come payload balzar — incompatibile con `--render` per lo stesso motivo.
+
+**Verificato end-to-end sul PDF reale** (non solo sulla libreria):
+
+| Passo | Byte/QR | Note |
+|---|---|---|
+| PDF originale | 51.318 | testo nativo, non scansionato |
+| Capacità reale per capitolo QR | 2.206 | byte grezzi, al netto dell'espansione base64 (~33%) — non i 2.953 usati per i payload già base64 |
+| Capitoli necessari | **24** | non 18 come una prima stima aveva calcolato ignorando l'espansione base64 — errore corretto in sessione |
+| Fotogrammi (griglia 2×2, `--grid-dim 2`) | **6** | `balzar chunks file.pdf --raw --qr --grid-dim 2 -o qr/` |
+| Round-trip (`balzar scan qr/*.png --raw -o rebuilt.pdf`) | — | **bit-identico** all'originale (SHA256 verificato, `cmp` pulito) |
+
+Confronto onesto con l'"encoding balzar" tentato prima sullo stesso file:
+questo percorso non promette né tenta compressione — il PDF nativo
+(51.318 B, già efficiente per il suo contenuto) resta l'unità di
+trasporto, balzar fa solo da corriere a pacchetti fisici per superare il
+limite di un singolo QR (2.953 B), esattamente come già fa per i propri
+payload.
+
+**Non ancora fatto**: nessuna interfaccia per leggere una sequenza così
+generata **dal telefono** — `LiveScanner`/il riassemblaggio esistono solo
+come libreria Python (CLI), non come app/pagina web lato client (serve
+un port leggero della sola logica di chunking/CRC — non del motore
+generativo — a JS con una libreria di lettura QR tipo jsQR, non ancora
+iniziato); nessuna integrazione GUI desktop/demo web per `--raw`/
+`--grid-dim` (solo CLI, in questa sessione). Test aggiunti:
+`tests/test_cli.py` (5 nuovi: round-trip raw con sequenza multi-
+fotogramma su byte arbitrari, errore pulito `--grid-dim` senza `--qr`,
+errore pulito `--raw` senza `-o`, errore pulito `--raw`+`--render`
+insieme, controprova che senza `--raw` un file non-UTF8/non-balzar
+continua a essere rifiutato onestamente) — 269 test totali. Verificata
+anche l'assenza di regressioni sul flusso `chunks`/`scan` esistente
+(payload balzar, singola griglia, con `--render`).
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
@@ -866,7 +948,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-264 test, tutti verdi (`python3 -m unittest discover -s tests`):
+269 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -2708,7 +2790,9 @@ esiste davvero e cosa mancherebbe.
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 264 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 269 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
+python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

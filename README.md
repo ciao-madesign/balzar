@@ -159,12 +159,13 @@ rigenerato, non letto: il volume informativo del supporto è il volume
 dell'output generato, non dei byte stampati.
 
 **Sequenze multi-frame** (`payload_to_qr_frames`/`frames_to_gif`/
-`frames_to_files`/`LiveScanner` in `balzar/qr.py`, non ancora esposte in
-CLI/GUI): un tetto esplicito di QR per frame (`grid_dim`, default 4→16)
-invece della griglia unica illimitata sopra, per restare leggibile a
-dimensione fisica fissa — payload grandi diventano una **sequenza** di
-griglie, bundlabile come GIF animata (schermo che cicla i frame da solo,
-senza perdita per contenuto bianco/nero) o come PNG separati (stampa).
+`frames_to_files`/`LiveScanner` in `balzar/qr.py`, esposte in CLI via
+`chunks --qr --grid-dim N` / `scan foto1 foto2 ... --grid-dim N`): un
+tetto esplicito di QR per frame (`grid_dim`, default 4→16) invece della
+griglia unica illimitata sopra, per restare leggibile a dimensione
+fisica fissa — payload grandi diventano una **sequenza** di griglie,
+bundlabile come GIF animata (schermo che cicla i frame da solo, senza
+perdita per contenuto bianco/nero) o come PNG separati (stampa).
 `LiveScanner` accumula i capitoli su più foto nel tempo, in qualsiasi
 ordine, tollerando ripetizioni. Benchmark reale su una griglia 8×8 (64
 QR): affidabile solo in una finestra stretta attorno alla stessa
@@ -173,6 +174,20 @@ tempo di decodifica per frame ~15-18× peggiore a parità di codice —
 `grid_dim=4` resta il default consigliato, un payload grande accetta
 più frame invece di frame più densi (dettagli e numeri in `CLAUDE.md`
 §2.4b).
+
+**Trasporto QR di byte arbitrari** (`chunks --raw` / `scan --raw`): il
+chunking `BZC1` non sa né gli importa che i dati siano un payload
+balzar — è puro slicing/ricomposizione di byte, mai un'interpretazione.
+Un file qualunque (un PDF, un binario) può quindi attraversare la stessa
+pipeline QR **senza passare dal motore generativo di balzar**: nessuna
+compressione tentata, nessuna perdita, il file ricostruito è
+bit-identico all'originale (firme digitali/cifratura embedded
+sopravvivono intatte, essendo funzioni degli stessi byte). Utile quando
+il contenuto non ha la struttura che l'encoder generativo sa sfruttare —
+misurato su un PDF reale di testo (51.318 B): l'encoder raster di balzar
+lo *peggiorava* (313.927 B, 6× più grande — bordi dei glifi non assiali,
+§4.1), mentre il trasporto grezzo lo spezzetta in 24 capitoli/6 fotogrammi
+2×2 senza toccarne un bit (dettagli in `CLAUDE.md` §2.4c).
 
 ## Il linguaggio (DSL)
 

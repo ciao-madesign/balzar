@@ -10,6 +10,8 @@
     python -m balzar encode-bundle assembly.3dxml alarms.csv -o bundle.bzx
     python -m balzar decode        payload.bzp    -o program.bzr
     python -m balzar info          payload.bzp
+    python -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/
+    python -m balzar scan qr/any_file_qr_frame_*.png --raw -o rebuilt.pdf
 
 `render` accepts either DSL source (.bzr) or a binary payload (.bzp,
 detected via magic) and reports the expansion factor: bytes of generated
@@ -27,6 +29,11 @@ file, grouping by layer/`<g>` (balzar/explode.py). `encode-bundle` packs a
 into a single BZX1 bundle (balzar/bundle.py) that flows through the same
 QR/chunking machinery as any other payload — `render-3d` doesn't unpack
 one (see balzar/viewer3d.py's open_bundle_in_browser / the GUI instead).
+`chunks --raw`/`scan --raw` bypass the balzar payload format entirely:
+they treat ANY file as opaque bytes for QR chunking/reassembly (physical
+transport only, no generative encoding) — the reconstructed file is
+bit-identical to the original, so embedded signatures/encryption survive
+untouched (see CLAUDE.md §2.4c).
 """
 
 from __future__ import annotations
@@ -428,23 +435,49 @@ def cmd_explode_vector(args: argparse.Namespace) -> int:
 
 
 def cmd_chunks(args: argparse.Namespace) -> int:
-    _, payload = _load_program(args.input)
+    if args.grid_dim and not args.qr:
+        print("errore: --grid-dim richiede --qr", file=sys.stderr)
+        return 1
+
+    if args.raw:
+        # trasporto fisico puro: INPUT e' trattato come byte arbitrari, non
+        # un programma/payload balzar — nessuna validazione di formato, il
+        # chunking BZC1 e' agnostico al contenuto (vedi balzar/payload.py).
+        with open(args.input, "rb") as fh:
+            payload = fh.read()
+    else:
+        _, payload = _load_program(args.input)
     os.makedirs(args.output, exist_ok=True)
     stem = os.path.splitext(os.path.basename(args.input))[0]
 
     if args.qr:
         try:
-            from .qr import payload_to_qr_image
+            from .qr import payload_to_qr_frames, payload_to_qr_image
         except ImportError:
             print("errore: --qr richiede i pacchetti 'qrcode' e 'Pillow' "
                   "(pip install qrcode pillow)", file=sys.stderr)
             return 1
+
+        if args.grid_dim:
+            frames = payload_to_qr_frames(payload, grid_dim=args.grid_dim)
+            for i, img in enumerate(frames):
+                path = os.path.join(args.output, f"{stem}_qr_frame_{i + 1:03d}.png")
+                img.save(path)
+            raw_note = " (--raw: byte grezzi, nessuna interpretazione)" if args.raw else ""
+            print(f"{len(frames)} fotogrammi ({args.grid_dim}x{args.grid_dim} "
+                  f"QR l'uno) scritti in {args.output}/{raw_note} — scansionali "
+                  f"con 'balzar scan{' --raw' if args.raw else ''} "
+                  f"{stem}_qr_frame_*.png -o ...', in qualunque ordine e anche "
+                  f"su piu' passate")
+            return 0
+
         img = payload_to_qr_image(payload)
         path = os.path.join(args.output, f"{stem}_qr.png")
         img.save(path)
         print(f"immagine QR scritta in {path} ({img.size[0]}x{img.size[1]}px) "
               f"— singolo QR o griglia auto-dimensionata a seconda della "
-              f"dimensione del payload; scansionala con 'balzar scan'")
+              f"dimensione del payload; scansionala con 'balzar scan"
+              f"{' --raw' if args.raw else ''}'")
         return 0
 
     from .payload import chunk_payload
@@ -461,20 +494,46 @@ def cmd_chunks(args: argparse.Namespace) -> int:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     try:
-        from .qr import scan_image_file
+        from .qr import LiveScanner
     except ImportError:
         print("errore: scan richiede i pacchetti 'pyzbar' (+ libzbar0 di "
               "sistema) e 'Pillow' (pip install pyzbar pillow)", file=sys.stderr)
         return 1
-    from .payload import PayloadError
 
-    try:
-        payload = scan_image_file(args.input)
-    except PayloadError as exc:
-        print(f"errore: {exc} — riprova la scansione", file=sys.stderr)
+    if args.raw and args.render:
+        print("errore: --raw e --render sono incompatibili (--raw non "
+              "interpreta l'output come un programma balzar)", file=sys.stderr)
+        return 1
+    if args.raw and not args.output:
+        print("errore: --raw richiede -o/--output esplicito (nessuna "
+              "estensione da indovinare per byte arbitrari)", file=sys.stderr)
         return 1
 
-    out = args.output or (os.path.splitext(args.input)[0] + ".bzp")
+    scanner = LiveScanner()
+    complete, missing = False, None
+    try:
+        for path in args.input:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            complete, missing = scanner.add(data, grid_dim=args.grid_dim)
+        if not complete:
+            raise ValueError(f"capitoli mancanti dopo {len(args.input)} "
+                              f"immagine/i: {missing}")
+        payload = scanner.result()
+    except ValueError as exc:
+        print(f"errore: {exc} — riprova la scansione (fornisci le foto/i "
+              f"fotogrammi mancanti)", file=sys.stderr)
+        return 1
+
+    if args.raw:
+        with open(args.output, "wb") as fh:
+            fh.write(payload)
+        print(f"file ricostruito: {args.output} ({_fmt(len(payload))} byte, "
+              f"integrita' verificata via CRC32) — byte grezzi, nessuna "
+              f"interpretazione balzar")
+        return 0
+
+    out = args.output or (os.path.splitext(args.input[0])[0] + ".bzp")
     with open(out, "wb") as fh:
         fh.write(payload)
     print(f"payload ricostruito: {out} ({_fmt(len(payload))} byte)")
@@ -483,7 +542,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         program = decode_payload(payload)
         result = render(program)
         os.makedirs(args.render, exist_ok=True)
-        stem = os.path.splitext(os.path.basename(args.input))[0]
+        stem = os.path.splitext(os.path.basename(args.input[0]))[0]
         for i in range(len(result.frames)):
             name = f"{stem}.png" if len(result.frames) == 1 else f"{stem}_{i:04d}.png"
             write_png(os.path.join(args.render, name), result.width,
@@ -661,14 +720,35 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--qr", action="store_true",
                    help="genera l'immagine QR reale (1 codice o griglia "
                         "auto-dimensionata) invece del testo base64")
+    p.add_argument("--grid-dim", type=int, default=None,
+                   help="con --qr, genera una SEQUENZA di fotogrammi "
+                        "(NxN QR l'uno) invece di un'unica griglia "
+                        "auto-dimensionata — utile oltre poche decine di "
+                        "capitoli, vedi CLAUDE.md §2.4b")
+    p.add_argument("--raw", action="store_true",
+                   help="tratta INPUT come byte arbitrari (qualunque file, "
+                        "non un programma/payload balzar): trasporto fisico "
+                        "puro via QR, nessuna interpretazione del contenuto "
+                        "— vedi CLAUDE.md §2.4c")
     p.set_defaults(func=cmd_chunks)
 
     p = sub.add_parser("scan",
-                       help="foto di 1 QR o una griglia -> payload ricostruito")
-    p.add_argument("input", help="immagine (foto/screenshot) con 1 o piu' QR")
+                       help="foto di 1+ QR/griglie/fotogrammi -> payload ricostruito")
+    p.add_argument("input", nargs="+",
+                   help="una o piu' immagini (foto/screenshot) con QR — piu' "
+                        "file per una sequenza multi-fotogramma, in "
+                        "qualunque ordine e anche con ripetizioni")
     p.add_argument("-o", "--output", default=None)
     p.add_argument("--render", default=None, metavar="DIR",
                    help="rigenera subito il contenuto in questa directory")
+    p.add_argument("--raw", action="store_true",
+                   help="scrivi i byte ricostruiti cosi' come sono, senza "
+                        "interpretarli come payload balzar — controparte di "
+                        "'chunks --raw', richiede -o esplicito")
+    p.add_argument("--grid-dim", type=int, default=None,
+                   help="suggerimento di velocita' opzionale: passalo solo "
+                        "se le immagini vengono da 'chunks --grid-dim N' "
+                        "(mai un requisito di correttezza, vedi CLAUDE.md §2.4b)")
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("assemble",

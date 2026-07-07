@@ -484,6 +484,90 @@ class TestCli(unittest.TestCase):
         self.assertIn("errore:", err)
         self.assertNotIn("Traceback", err)
 
+    # ------------------------------------------ chunks/scan --raw (physical
+    # QR transport of arbitrary bytes, bypassing the balzar payload format)
+
+    def test_chunks_raw_qr_grid_dim_and_scan_raw_roundtrip(self):
+        try:
+            import qrcode  # noqa: F401
+            from pyzbar.pyzbar import decode as _zbar_decode  # noqa: F401
+        except ImportError:
+            self.skipTest("richiede qrcode + pyzbar (+ libzbar di sistema)")
+
+        # byte arbitrari, non un programma/payload balzar valido (nessun
+        # magic BZR1/BZM1/BZC1/BZX1) — deve comunque transitare intatto
+        original = bytes(range(256)) * 40  # 10.240 byte, forza piu' capitoli
+        src = self._path("arbitrary.bin")
+        with open(src, "wb") as fh:
+            fh.write(original)
+
+        qr_dir = self._path("qr_raw")
+        code, out, err = _run(["chunks", src, "-o", qr_dir, "--raw", "--qr",
+                               "--grid-dim", "2"])
+        self.assertEqual(code, 0)
+        frames = sorted(f for f in os.listdir(qr_dir) if f.endswith(".png"))
+        self.assertGreater(len(frames), 1, "10KB dovrebbero servire piu' fotogrammi 2x2")
+
+        out_path = self._path("rebuilt.bin")
+        code, out, err = _run(["scan", *[os.path.join(qr_dir, f) for f in frames],
+                               "--raw", "-o", out_path])
+        self.assertEqual(code, 0)
+        self.assertIn("integrita' verificata", out)
+        with open(out_path, "rb") as fh:
+            rebuilt = fh.read()
+        self.assertEqual(rebuilt, original)
+
+    def test_chunks_grid_dim_without_qr_is_a_clean_error(self):
+        src = self._path("x.bin")
+        with open(src, "wb") as fh:
+            fh.write(b"whatever")
+        code, out, err = _run(["chunks", src, "--raw", "--grid-dim", "2",
+                               "-o", self._path("out")])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+        self.assertIn("--grid-dim", err)
+
+    def test_scan_raw_without_output_is_a_clean_error(self):
+        try:
+            from pyzbar.pyzbar import decode as _zbar_decode  # noqa: F401
+            from PIL import Image
+        except ImportError:
+            self.skipTest("richiede pyzbar (+ libzbar di sistema) e Pillow")
+        from PIL import Image
+        blank_path = self._path("blank.png")
+        Image.new("RGB", (50, 50), (255, 255, 255)).save(blank_path)
+        code, out, err = _run(["scan", blank_path, "--raw"])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+        self.assertIn("--raw", err)
+
+    def test_scan_raw_and_render_together_is_a_clean_error(self):
+        try:
+            from pyzbar.pyzbar import decode as _zbar_decode  # noqa: F401
+            from PIL import Image
+        except ImportError:
+            self.skipTest("richiede pyzbar (+ libzbar di sistema) e Pillow")
+        from PIL import Image
+        blank_path = self._path("blank.png")
+        Image.new("RGB", (50, 50), (255, 255, 255)).save(blank_path)
+        code, out, err = _run(["scan", blank_path, "--raw", "--render",
+                               self._path("out"), "-o", self._path("x.bin")])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+
+    def test_chunks_raw_on_non_balzar_file_would_fail_without_raw_flag(self):
+        # controprova: senza --raw un file binario arbitrario (non testo
+        # UTF-8, non un payload balzar) viene rifiutato onestamente invece
+        # di essere accettato come se fosse un programma DSL — nessuna
+        # regressione silenziosa che tratti byte arbitrari come default
+        src = self._path("not_a_program.bin")
+        with open(src, "wb") as fh:
+            fh.write(b"\xff\xfe\x00\x01not valid utf-8 \x80\x81")
+        code, out, err = _run(["chunks", src, "-o", self._path("out")])
+        self.assertEqual(code, 1)
+        self.assertIn("errore:", err)
+        self.assertNotIn("Traceback", err)
+
 
 if __name__ == "__main__":
     unittest.main()
