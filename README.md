@@ -204,7 +204,13 @@ il contenuto non ha la struttura che l'encoder generativo sa sfruttare —
 misurato su un PDF reale di testo (51.318 B): l'encoder raster di balzar
 lo *peggiorava* (313.927 B, 6× più grande — bordi dei glifi non assiali,
 §4.1), mentre il trasporto grezzo lo spezzetta in 24 capitoli/6 fotogrammi
-2×2 senza toccarne un bit (dettagli in `CLAUDE.md` §2.4c).
+2×2 senza toccarne un bit (dettagli in `CLAUDE.md` §2.4c). Disponibile
+anche fuori dal terminale: un bottone "Trasporto file (QR)…" nella GUI
+desktop (finestra dedicata, `balzar/raw_qr_gui.py`) e una pagina web a
+sé (`trasporto-qr.html`), separata dalle schede Balzar Studio/Live
+perché non tocca mai il motore balzar — la lettura QR lì è interamente
+client-side (libreria `jsQR` vendorizzata, nessun file lascia il
+browser), dettagli in `CLAUDE.md` §2.4d.
 
 **Generazione QR parallelizzata** per assiemi 3D grandi (`_generate_qr_images`
 in `balzar/qr.py`): la codifica di un QR versione 40 vicino alla

@@ -114,6 +114,7 @@ class BalzarApp:
         self._library_window: tk.Toplevel | None = None
         self._library_listbox: tk.Listbox | None = None
         self._library_entries: list = []  # parallel to _library_listbox rows
+        self._raw_qr_window: tk.Toplevel | None = None
 
         self._build_ui()
         root.after(100, self._poll_queue)
@@ -129,6 +130,8 @@ class BalzarApp:
                   command=self.open_qr_photo).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Libreria…",
                   command=self.open_library).pack(side="left", padx=(6, 0))
+        ttk.Button(top, text="Trasporto file (QR)…",
+                  command=self.open_raw_qr_transport).pack(side="left", padx=(6, 0))
         ttk.Label(top, text="  risoluzione di analisi:").pack(side="left")
         self.max_dim = tk.StringVar(value="400")
         ttk.Combobox(top, textvariable=self.max_dim, width=6, state="readonly",
@@ -557,6 +560,18 @@ class BalzarApp:
         self.status.set("Aperto nel browser predefinito")
 
     # --------------------------------------------------------------- library
+
+    def open_raw_qr_transport(self) -> None:
+        """Opens the "app within the app" for raw byte QR transport
+        (balzar/raw_qr_gui.py) -- a file that never touches the balzar
+        engine at all, kept in its own module/window so it stays that
+        way (see CLAUDE.md §2.4d)."""
+        if self._raw_qr_window is not None and self._raw_qr_window.winfo_exists():
+            self._raw_qr_window.deiconify()
+            self._raw_qr_window.lift()
+            return
+        from .raw_qr_gui import open_raw_qr_window
+        self._raw_qr_window = open_raw_qr_window(self.root)
 
     def open_library(self) -> None:
         """Open (or raise + refresh) the library panel: every artifact

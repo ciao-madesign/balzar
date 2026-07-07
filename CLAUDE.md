@@ -415,11 +415,10 @@ payload.
 
 **Non ancora fatto**: nessuna interfaccia per leggere una sequenza così
 generata **dal telefono** — `LiveScanner`/il riassemblaggio esistono solo
-come libreria Python (CLI), non come app/pagina web lato client (serve
-un port leggero della sola logica di chunking/CRC — non del motore
-generativo — a JS con una libreria di lettura QR tipo jsQR, non ancora
-iniziato); nessuna integrazione GUI desktop/demo web per `--raw`/
-`--grid-dim` (solo CLI, in questa sessione). Test aggiunti:
+come libreria Python (CLI) al momento della scrittura di questa nota —
+**integrato in una sessione successiva**, sia come finestra dedicata
+nella GUI desktop sia come pagina web a sé (JS lato client, nessun
+round-trip al server per la lettura): vedi §2.4d. Test aggiunti:
 `tests/test_cli.py` (5 nuovi: round-trip raw con sequenza multi-
 fotogramma su byte arbitrari, errore pulito `--grid-dim` senza `--qr`,
 errore pulito `--raw` senza `-o`, errore pulito `--raw`+`--render`
@@ -427,6 +426,118 @@ insieme, controprova che senza `--raw` un file non-UTF8/non-balzar
 continua a essere rifiutato onestamente) — 269 test totali. Verificata
 anche l'assenza di regressioni sul flusso `chunks`/`scan` esistente
 (payload balzar, singola griglia, con `--render`).
+
+### 2.4d Trasporto QR come "app nell'app": finestra desktop dedicata + pagina web dedicata
+
+Richiesta diretta di sessione, seguito naturale di §2.4c: portare il
+trasporto QR di byte grezzi fuori dal solo terminale — una finestra
+dedicata nella GUI desktop e una pagina a sé nella demo web, entrambe
+esplicitamente **separate** dal flusso Balzar Studio/Balzar Live (questa
+funzionalità non tocca mai il motore generativo, quindi non appartiene
+a nessuno dei due gruppi).
+
+**Desktop — `balzar/raw_qr_gui.py` + `balzar/raw_qr_logic.py`.** Split
+in due moduli deliberato, non incidentale: `raw_qr_logic.py` non importa
+mai `tkinter` (funzioni pure — `encode_file_to_qr_frames`,
+`RawQrAssembler`, un thin wrapper stateful su `LiveScanner` che ignora
+un path immagine già processato invece di ridecodificarlo), quindi resta
+importabile e testabile sotto `unittest` anche nell'ambiente Python
+3.11 di sviluppo che **non ha Tk** (§10) — lo stesso vincolo già
+documentato per `balzar/gui.py`, qui risolto separando la logica dai
+widget invece di rinunciare alla copertura di test. `raw_qr_gui.py`
+resta solo il layer widget (`RawQrTransportWindow(tk.Toplevel)`, due tab
+Codifica/Leggi, stesso pattern coda+`after(100, ...)` già usato da
+`BalzarApp`/`_poll_queue` per non bloccare il mainloop durante
+encode/decode). Nuovo bottone "Trasporto file (QR)…" nella finestra
+principale (`balzar/gui.py`), stesso principio di deduplica finestra già
+usato per "Libreria…" (`_raw_qr_window`, riusa/porta in primo piano
+un'istanza già aperta invece di aprirne una seconda).
+
+**Strutturato per poter diventare standalone in futuro, senza esserlo
+ancora** (scelta esplicita di sessione): `RawQrTransportWindow` prende
+un qualunque master Tk-compatibile a cui agganciare un `Toplevel`;
+`main()` in fondo al modulo crea invece una propria root ed esegue la
+stessa finestra come programma a sé (`python3 -m balzar.raw_qr_gui`) —
+zero refactoring necessario se in futuro si deciderà di impacchettarla
+separatamente con PyInstaller, oggi raggiungibile solo dal bottone nella
+GUI principale.
+
+**Web — `trasporto-qr.html`/`trasporto-qr.js`, pagina statica separata**
+(stesso principio di `come-funziona.html`: nessuna funzione serverless
+nuova per la lettura, linkata dall'header di `index.html`), non una
+scheda dentro l'app a tab esistente — coerente con l'essere esplicitamente
+fuori dal raggruppamento Balzar Studio/Balzar Live.
+- **Codifica**: riusa l'endpoint `/api/qr`/`handle_qr` **esistente**
+  senza modificarlo — quella funzione tratta già `payload_base64` come
+  byte opachi (nessuna validazione di formato balzar al suo interno),
+  quindi caricare un file arbitrario e generare la sequenza di pagine QR
+  non richiede nessun codice server nuovo, solo un frontend diverso che
+  ci carica byte grezzi invece del payload di una scheda encoder.
+- **Lettura**: **interamente client-side**, nessun file lascia il
+  browser — la ragione di essere di questa pagina, dato che leggere QR
+  richiederebbe altrimenti `pyzbar`/`libzbar` nativo, mai esposto sul
+  web demo (§2.9). Port JS a mano del formato `BZC1`
+  (`balzar/payload.py`: parsing header, CRC32 — tabella IEEE 802.3
+  scritta da zero, stesso polinomio di `zlib.crc32`) e della geometria
+  di ritaglio a griglia (`_tile_boxes` in `balzar/qr.py`, porta fedele
+  della stessa formula a punto fisso cell/pad, non una riapprossimazione
+  — necessario perché, a differenza di ZBar, la libreria di decodifica
+  QR lato browser trova **un solo codice per chiamata**, non una lista;
+  senza ritaglio una griglia N×N leggerebbe sempre e solo il primo QR
+  trovato).
+
+**Libreria di decodifica QR lato browser: bug reale trovato con una
+misura, non assunto.** Prima scelta `@paulmillr/qr` (doppia licenza
+Apache-2.0/MIT, mantenuta attivamente, encode+decode in un solo pacchetto
+zero-dipendenze) — **scartata dopo aver isolato un bug reale**: su una
+griglia 2×2 generata dal payload PDF reale di §2.4c (24 capitoli, 6
+fotogrammi), la sua `decodeQR` falliva con un errore interno
+(`Cannot read properties of undefined`) su 3/24 QR altrimenti
+perfettamente validi — isolato passo-passo fino a `detect()`→`transform()`
+nel codice della libreria stessa, non un problema di ritaglio (lo stesso
+identico crop, passato a ZBar via `pyzbar`, decodifica correttamente;
+nessuna combinazione di margine/padding/opzioni ha risolto il fallimento,
+segno di un bug data-dipendente nella libreria, non un errore di
+geometria). Provata **jsQR** (Apache-2.0, non più mantenuta da anni, ma
+matura/battle-tested) sugli stessi 24 QR: **24/24**, zero fallimenti.
+Scelta jsQR nonostante la minore freschezza di manutenzione — la
+correttezza misurata vince sulla frequenza di aggiornamento per una
+libreria che fa solo una cosa (decodifica QR, algoritmo stabile da anni)
+e il cui bug nell'alternativa "mantenuta" era già isolato e riproducibile,
+non ipotetico. Vendorizzata come `jsQR.min.js` (build UMD ufficiale del
+pacchetto npm `jsqr@1.4.0`, 257 KB, nessuna ricompilazione necessaria —
+già pronta per un `<script>` diretto, a differenza di `@paulmillr/qr` che
+avrebbe comunque richiesto un bundle con `esbuild` essendo distribuita
+solo come moduli ESM/CJS).
+
+**Verificato end-to-end con Playwright, non solo scritto**: upload del
+PDF reale di §2.4c (51.318 B) nella sezione Codifica → 6 pagine QR
+generate via `/api/qr` (server) → le stesse 6 immagini ripassate alla
+sezione Leggi **in ordine invertito** (prova diretta dell'indipendenza
+dall'ordine) → riassemblaggio client-side completo, **bit-identico**
+all'originale (SHA256 confrontato, non solo la dimensione). Verificato
+anche lato desktop (screenshot reali sotto Xvfb dei due tab, e un
+round-trip completo pilotando direttamente i worker thread della
+finestra con un file arbitrario non-balzar da 7.680 B — stato dei label
+e del bottone "Salva" verificati, byte ricostruiti bit-identici).
+
+Test aggiunti: `tests/test_raw_qr_logic.py` (3 test: round-trip
+encode→assemble su byte arbitrari via `payload_to_qr_frames`/
+`LiveScanner`, un path immagine già processato viene ignorato non
+riletto, uno scan parziale segnala correttamente i capitoli mancanti e
+`result()` solleva `ValueError` se richiamato prima del completamento) —
+skippato se `qrcode`/`pyzbar` non installati, stesso principio di
+`test_qr.py`. Nessun test Python per `trasporto-qr.js` (comportamento
+client-side puro, stesso principio già seguito per il resto della UI 3D:
+verifica Playwright manuale in sessione, non nella suite automatica).
+
+**Non ancora fatto**: nessun test automatico Playwright committato nel
+repository per questa pagina (verifica manuale one-off in sessione,
+stesso principio già seguito altrove per JS); nessuna opzione di
+rilevamento automatico di `grid_dim` lato lettura (l'utente deve saperlo
+e impostarlo uguale a come è stato generato — un valore sbagliato non
+corrompe nulla, semplicemente non trova QR, dichiarato esplicitamente
+nell'interfaccia).
 
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
@@ -948,7 +1059,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-306 test, tutti verdi (`python3 -m unittest discover -s tests`):
+309 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -960,7 +1071,9 @@ ricerca/tabella allarmi del viewer 3D — vedi §9.15), `test_bundle.py`
 (formato `BZX1`, dispatch per estensione, transito byte-identico
 attraverso il chunking QR — vedi §9.16), `test_library.py` (libreria
 locale persistente di Balzar Live: logica pura file/JSON, isolata via
-`BALZAR_LIBRARY_DIR` — vedi §9.22/§9.23). Copertura: round-trip
+`BALZAR_LIBRARY_DIR` — vedi §9.22/§9.23), `test_raw_qr_logic.py`
+(trasporto QR di byte arbitrari, nessun motore balzar — vedi §2.4d).
+Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
 encoder lossless su contenuto strutturato e onesto su rumore, video delta
@@ -3401,7 +3514,7 @@ rotto, `_decode_tiled` end-to-end), 3 in
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 306 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 309 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trasporto file via QR — balzar</title>
+<link rel="stylesheet" href="style.css">
+<script src="jsQR.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>balzar</h1>
+    <p class="tagline">Trasporto QR di byte grezzi — <strong>non passa dal motore generativo di
+      balzar</strong>. Un file qualunque (PDF, binario, qualsiasi cosa) si spezzetta in una serie di
+      QR e si riassembla identico, bit per bit — nessuna compressione tentata, nessuna
+      interpretazione del contenuto.</p>
+    <p class="honesty">Utile quando il contenuto non ha la struttura che l'encoder generativo di
+      balzar sa sfruttare (un PDF di testo, un binario) — qui non si promette nessun guadagno di
+      spazio, solo un modo di far stare un file più grande di un QR in una sequenza di QR
+      stampabili/fotografabili, con integrità verificata (CRC32) al riassemblaggio.</p>
+    <p class="nav-links">← <a href="index.html">torna alla demo balzar</a></p>
+  </header>
+
+  <main>
+
+    <section class="card">
+      <h2>1. Codifica — file → sequenza di QR</h2>
+      <p>Il file resta sul tuo dispositivo: viene letto, spezzettato in capitoli autodescrittivi
+        (<code>BZC1</code>, lo stesso formato già usato per i payload balzar), e la <em>generazione</em>
+        delle immagini QR avviene sul server (libreria <code>qrcode</code>, nessuna compressione —
+        stesso endpoint <code>/api/qr</code> già usato altrove nella demo, qui su byte arbitrari
+        invece che su un payload balzar).</p>
+      <section id="enc-drop" class="dropzone">
+        <input type="file" id="enc-file-input" hidden>
+        <p id="enc-drop-label">Trascina un file qualunque qui, oppure
+          <button id="enc-browse-btn" type="button">scegli un file</button></p>
+        <label class="dim-picker">
+          QR per fotogramma (griglia N×N)
+          <select id="enc-grid-dim">
+            <option value="1">1 (nessuna griglia, un QR/pagina)</option>
+            <option value="2">2×2 = 4</option>
+            <option value="4" selected>4×4 = 16 (consigliato)</option>
+            <option value="8">8×8 = 64 (denso, più lento da leggere)</option>
+          </select>
+        </label>
+      </section>
+      <p id="enc-status" class="status"></p>
+      <div id="enc-pages" class="qr-pages"></div>
+    </section>
+
+    <section class="card">
+      <h2>2. Lettura — foto dei QR → file ricostruito</h2>
+      <p>Carica le foto/pagine nell'ordine che preferisci (anche a più riprese, anche ripetute — un
+        capitolo già letto viene semplicemente ignorato). La decodifica QR e il riassemblaggio
+        avvengono <strong>interamente nel browser</strong>, via <code>jsQR</code>
+        (vendorizzato, licenza Apache-2.0) — nessun file lascia il dispositivo.</p>
+      <label class="dim-picker">
+        QR per immagine (deve corrispondere a come sono stati generati)
+        <select id="dec-grid-dim">
+          <option value="1">1 (nessuna griglia, un QR/immagine)</option>
+          <option value="2">2×2 = 4</option>
+          <option value="4" selected>4×4 = 16</option>
+          <option value="8">8×8 = 64</option>
+        </select>
+      </label>
+      <section id="dec-drop" class="dropzone">
+        <input type="file" id="dec-file-input" accept="image/*" capture="environment" multiple hidden>
+        <p id="dec-drop-label">Trascina una o più foto/pagine qui, oppure
+          <button id="dec-browse-btn" type="button">scegli foto</button>
+          (su telefono, apre la fotocamera)</p>
+      </section>
+      <ul id="dec-file-list" class="file-list"></ul>
+      <p id="dec-status" class="status"></p>
+      <label class="dim-picker" id="dec-filename-row" hidden>
+        nome del file ricostruito (i byte grezzi non portano un nome — inseriscilo tu se lo conosci)
+        <input type="text" id="dec-filename" value="file_ricostruito.bin">
+      </label>
+      <button id="dec-download-btn" type="button" hidden>Scarica file ricostruito</button>
+      <button id="dec-reset-btn" type="button" hidden>Ricomincia lettura</button>
+    </section>
+
+    <section class="card">
+      <h2>Come funziona</h2>
+      <p class="honesty">Ogni QR porta un capitolo con un header <code>BZC1</code>
+        (indice/totale/CRC32 dell'intero file) — i capitoli si leggono in qualsiasi ordine, su più
+        foto nel tempo, con ripetizioni tollerate. Il riassemblaggio verifica il CRC32 dell'intero
+        file prima di offrirlo in download: se anche un solo bit fosse alterato nel giro
+        stampa/foto/lettura, la verifica fallisce esplicitamente invece di restituire un file
+        silenziosamente corrotto. Stesso principio già usato per i payload balzar
+        (<code>chunks --raw</code>/<code>scan --raw</code> in CLI, <code>CLAUDE.md</code> §2.4c) —
+        qui applicato senza bisogno di un terminale.</p>
+    </section>
+
+  </main>
+
+  <script src="trasporto-qr.js"></script>
+</body>
+</html>
