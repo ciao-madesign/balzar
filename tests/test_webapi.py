@@ -157,6 +157,85 @@ class TestHandleRender(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertFalse(resp["ok"])
 
+    def test_2d_response_carries_kind_discriminator(self):
+        status, resp = handle_render({"data": _b64(self._payload())}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["kind"], "2d")
+
+    def test_bare_bzm1_payload_opens_as_3d(self):
+        from balzar.scene3d import encode_payload as encode_scene, parse_3dxml
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "assembly.3dxml")
+            with open(path, "wb") as fh:
+                fh.write(_make_3dxml_bytes())
+            payload = encode_scene(parse_3dxml(path))
+
+        status, resp = handle_render({"data": _b64(payload)}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["kind"], "3d")
+        self.assertEqual(resp["shape_count"], 1)
+        self.assertEqual(resp["instance_count"], 2)
+        self.assertFalse(resp["glb_omitted"])
+        self.assertTrue(resp["glb_base64"])
+        self.assertIn("payload_base64", resp)
+
+    def test_corrupt_bzm1_gives_clean_400_not_500(self):
+        from balzar.scene3d import MAGIC
+        garbage = MAGIC + b"\x00" * 20
+        status, resp = handle_render({"data": _b64(garbage)}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
+    def test_bzx1_bundle_with_3d_and_alarm_opens_with_both(self):
+        from balzar.bundle import BundleItem, KIND_3D, KIND_ALARM, encode_bundle
+        from balzar.scene3d import encode_payload as encode_scene, parse_3dxml
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "assembly.3dxml")
+            with open(path, "wb") as fh:
+                fh.write(_make_3dxml_bytes())
+            scene_payload = encode_scene(parse_3dxml(path))
+
+        csv_text = "codice_allarme,nome_componente\nE100,Bullone-M6\n"
+        bundle = encode_bundle([
+            BundleItem(KIND_3D, "assembly.b3d", scene_payload),
+            BundleItem(KIND_ALARM, "alarms.csv", csv_text.encode("utf-8")),
+        ])
+
+        status, resp = handle_render({"data": _b64(bundle)}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["kind"], "bundle")
+        self.assertTrue(resp["has_3d"])
+        self.assertEqual(resp["shape_count"], 1)
+        self.assertTrue(resp["glb_base64"])
+        self.assertEqual(resp["alarm_rows"], [["E100", "Bullone-M6"]])
+        self.assertTrue(any(d["label"] == "alarms.csv" for d in resp["documents"]))
+
+    def test_bzx1_documents_only_bundle_has_no_3d(self):
+        from balzar.bundle import BundleItem, KIND_DOC, encode_bundle
+        bundle = encode_bundle([BundleItem(KIND_DOC, "note.txt", b"ciao mondo")])
+
+        status, resp = handle_render({"data": _b64(bundle)}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["kind"], "bundle")
+        self.assertFalse(resp["has_3d"])
+        self.assertNotIn("glb_base64", resp)
+        self.assertEqual(len(resp["documents"]), 1)
+        self.assertEqual(resp["documents"][0]["label"], "note.txt")
+
+    def test_corrupt_bzx1_gives_clean_400_not_500(self):
+        from balzar.bundle import MAGIC
+        garbage = MAGIC + b"\x00" * 20
+        status, resp = handle_render({"data": _b64(garbage)}, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
 
 class TestHandleEncodeVector(unittest.TestCase):
     def test_svg_success(self):

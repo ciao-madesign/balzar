@@ -866,7 +866,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-264 test, tutti verdi (`python3 -m unittest discover -s tests`):
+270 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -2705,10 +2705,109 @@ separato (vedi §11) per il posizionamento di prodotto (Balzar Studio /
 Balzar Live) — questa sezione resta il riferimento tecnico su cosa
 esiste davvero e cosa mancherebbe.
 
+### 9.20 Demo web riorganizzata in Balzar Studio / Balzar Live; "Apri programma" diventa un apritore generico
+
+Seguito diretto di §9.19: una volta stabilita la coppia di prodotto
+Balzar Studio (crea) / Balzar Live (consulta), la demo web (`index.html`)
+aveva ancora sei schede appiattite senza quella distinzione visibile, e
+la sesta scheda ("Apri programma") apriva **solo** `BZR1` — un payload
+`.b3d` (`BZM1`, §9.5) o un bundle `.bzx` (`BZX1`, §9.16) scaricati dalle
+altre schede non potevano essere riaperti da lì, l'unico modo per
+rivederli era rigenerarli da capo con lo stesso upload sorgente. Due
+cambi, entrambi nella stessa direzione (rendere esplicito ciò che era
+già vero nell'architettura):
+
+**1) Riorganizzazione visiva, nessun cambio di funzionalità.** Le
+cinque schede di codifica (Comprimi immagine/Vettoriale/Video/Sequenza/
+Assemblee 3D) sono ora raggruppate sotto un'etichetta "Balzar Studio ·
+crea", la sesta sotto "Balzar Live · consulta" (`.tab-groups`/
+`.tab-group-name` in `style.css`) — stesso principio di `VISIONE.md` §2,
+reso visibile nella UI invece di restare solo nel documento di
+posizionamento.
+
+**2) `handle_render` (in `balzar/webapi.py`) diventa l'apritore
+generico di Balzar Live**: dispatch sui **magic byte** del payload
+decodificato (`BZR1`→2D, `BZM1`→3D, `BZX1`→bundle), non
+sull'estensione del file caricato — stesso principio già usato da
+`chunk_payload`/`qr.py` per trattare i byte come autodescrittivi. Tre
+funzioni interne nuove:
+- `_handle_render_2d` — il vecchio corpo di `handle_render`, invariato
+  a parte un campo `"kind": "2d"` aggiunto per uniformità con gli altri
+  due casi;
+- `_handle_render_3d` — un `.b3d` isolato: `scene3d.decode_payload` +
+  `gltf.scene3d_to_glb` + `generate_bom`, stessa forma di risposta di
+  `handle_encode_3d` (`shape_count`/`reference_count`/`instance_count`/
+  `vertex_count`/`bom`/`glb_base64`) **tranne** `mean_vertex_error`: quel
+  campo confronta contro la geometria originale non quantizzata, che un
+  payload già codificato non porta più con sé — omesso onestamente
+  invece di inventato, nuovo helper condiviso `_scene3d_stats(scene)`
+  usato da entrambi i path 3D/bundle;
+- `_handle_render_bundle` — stesso dispatch che `open_bundle_in_browser`
+  già fa per il viewer desktop (§9.16), riletto qui per produrre JSON
+  invece di HTML: al più un elemento 3D mostrato (il primo, bundle con
+  più di un 3D restano validi ma il viewer ne mostra uno), ogni
+  elemento allarme alimenta `alarm_rows`, `_documents_from_items`
+  (già scritta per la scheda "Assemblee 3D", §9.17/§9.18) produce
+  l'indice documenti — **zero codice nuovo per il rendering dei
+  documenti**, riusato esattamente com'è. Un bundle senza alcun 3D
+  (`has_3d: false`) è valido, risposta con solo `alarm_rows`/
+  `documents`.
+
+**Frontend (`app.js`): stesso principio, refactoring invece di
+duplicazione.** La scheda "Assemblee 3D" aveva ~250 righe di JS legate
+a doppio filo a id DOM fissi (`threedViewer`, `threedBomTable`, ecc.) —
+copiarle per la nuova sotto-vista 3D di "Apri programma" avrebbe
+significato una seconda copia quasi identica nello stesso file (a
+differenza della duplicazione JS server-HTML-vs-statico già accettata
+altrove nel progetto per motivi di ambiente diverso, qui l'ambiente è
+lo stesso file: nessuna scusa per duplicare). Estratta una fabbrica
+`createSceneViewerController(ids)` — click-to-select/isolamento,
+ricerca nome/allarme, export scheda ricambio, indice documenti — e una
+funzione `renderScenePanel(ctrl, r)` che popola tabella statistiche/BOM/
+ricerca/indice da una risposta `r` **il cui formato è già condiviso**
+tra `handle_encode_3d` e `_handle_render_3d`/`_handle_render_bundle`
+(stessa scelta di campo deliberata sopra). La scheda "Assemblee 3D" ora
+istanzia un controller (`threedCtrl`) sugli stessi id di sempre, "Apri
+programma" ne istanzia un secondo (`open3dCtrl`) sui nuovi id
+`open-3d-*` — stessa logica, zero copie. Tre sezioni di risultato ora
+mutuamente esclusive nel tab "Apri programma"
+(`open-result`/`open-3d-result`/`open-docs-result`), scelte da
+`json.kind`/`json.has_3d`.
+
+**Verificato con Playwright contro un devserver locale reale** (stessa
+metodologia già nota, route `handle_*` dirette non un mock — vedi nota
+di sessione su perché non contro Vercel): upload di un `.b3d` nudo →
+viewer 3D con BOM corretta; upload di un `.bzx` con 3D+tabella
+allarmi+documento → viewer 3D + indice documenti (`alarms.csv`,
+`nota.txt`) + ricerca per codice allarme funzionante
+("E100" → "Bullone-M6"); upload di un `.bzx` di soli documenti → solo
+il pannello indice, nessun viewer 3D montato; upload di un `.bzr`
+testuale semplice → percorso 2D invariato. **Verifica di
+non-regressione esplicita sulla scheda "Assemblee 3D"** dopo il
+refactoring del suo JS: stesso file 3DXML sintetico codificato da capo
+→ statistiche con `mean_vertex_error` (assente invece nel path
+"Apri programma", come atteso), click su una riga BOM → scheda ricambio
+abilitata, reset → di nuovo disabilitata, ricerca per nome → trovato.
+Generazione QR verificata anche sulla nuova sezione `open-3d-result`
+(stesso `setupQrButton` riusato con un terzo/quarto prefisso
+`open-3d`/`open-docs`). Nessuna regressione trovata. Suite Python
+invariata (nessuna riga JS è testata da `unittest`, per costruzione —
+stesso principio già seguito per il resto della UI 3D): 7 nuovi test in
+`tests/test_webapi.py::TestHandleRender` (discriminatore `kind` sul
+path 2D, apertura di un `.b3d` nudo, `.b3d` corrotto → 400 pulito,
+bundle con 3D+allarme → entrambi presenti, bundle di soli documenti →
+`has_3d: false`, bundle corrotto → 400 pulito).
+
+**Non ancora fatto**: CLI/GUI desktop non hanno bisogno di questo
+cambio (già aprono `.b3d`/`.bzx` nativamente in `balzar/gui.py`/
+`cli.py` da sessioni precedenti, §9.9/§9.16) — questo lavoro riguardava
+solo la demo web, che era rimasta indietro sull'unico punto (l'apritore
+generico) non ancora allineato.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 264 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 270 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
 python3 -m balzar render-3d out.b3d -o out.glb
 python3 -m balzar gui                        # app desktop

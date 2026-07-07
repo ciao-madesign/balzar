@@ -17,14 +17,28 @@
       Su foto e rumore l'encoder lo dichiara onestamente invece di fingere una compressione che non c'è —
       è il limite di complessità di Kolmogorov descritto nel progetto.</p>
     <p class="nav-links"><a href="come-funziona.html">Come funziona balzar, e confronto con altri sistemi di compressione →</a></p>
+    <p class="honesty">Due prodotti, non uno: <strong>Balzar Studio</strong> crea un payload da un file
+      sorgente (encoder — le prime cinque schede), <strong>Balzar Live</strong> apre un payload già
+      esistente e lo consulta (nessun encoder coinvolto — l'ultima scheda). Stesso principio
+      dell'app desktop e della CLI, qui applicato alla stessa demo web.</p>
 
-    <div class="tabs" role="tablist">
-      <button class="tab active" id="tab-encode" type="button">Comprimi immagine</button>
-      <button class="tab" id="tab-vector" type="button">Vettoriale (SVG/DXF)</button>
-      <button class="tab" id="tab-video" type="button">Video (GIF animata)</button>
-      <button class="tab" id="tab-sequence" type="button">Sequenza (multi-file)</button>
-      <button class="tab" id="tab-3d" type="button">Assemblee 3D</button>
-      <button class="tab" id="tab-open" type="button">Apri programma (.bzr / .bzp)</button>
+    <div class="tab-groups">
+      <div class="tab-group">
+        <span class="tab-group-name">Balzar Studio · crea</span>
+        <div class="tabs" role="tablist">
+          <button class="tab active" id="tab-encode" type="button">Comprimi immagine</button>
+          <button class="tab" id="tab-vector" type="button">Vettoriale (SVG/DXF)</button>
+          <button class="tab" id="tab-video" type="button">Video (GIF animata)</button>
+          <button class="tab" id="tab-sequence" type="button">Sequenza (multi-file)</button>
+          <button class="tab" id="tab-3d" type="button">Assemblee 3D</button>
+        </div>
+      </div>
+      <div class="tab-group">
+        <span class="tab-group-name">Balzar Live · consulta</span>
+        <div class="tabs" role="tablist">
+          <button class="tab" id="tab-open" type="button">Apri programma (.bzr / .bzp / .b3d / .bzx)</button>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -415,16 +429,21 @@
     </div>
 
     <div id="panel-open" hidden>
-      <p class="purpose">Consumo · apri un payload già esistente</p>
-      <p class="tagline">Hai già un file <code>.bzr</code> o <code>.bzp</code> (scaricato da qui, o
-        prodotto dalla CLI/app desktop)? Caricalo qui: viene decodificato e <strong>rigenerato</strong> —
-        nessun terminale necessario. Se il programma usa solo operazioni vettoriali (rettangoli, cerchi,
-        linee, testo — niente tiling/rumore/frattali), scarichi anche un vero SVG, non un raster incapsulato.</p>
+      <p class="purpose">Balzar Live · apri un payload già esistente</p>
+      <p class="tagline">Hai già un file <code>.bzr</code>/<code>.bzp</code> (un programma 2D),
+        <code>.b3d</code> (un assieme 3D, <code>BZM1</code>) o <code>.bzx</code> (un bundle
+        multi-documento, <code>BZX1</code> — vedi CLAUDE.md §9.16-9.18) scaricato da qui o
+        prodotto dalla CLI/app desktop? Caricalo qui: <strong>nessun encoder coinvolto</strong>,
+        solo i magic byte del file decidono come aprirlo — esattamente come fa
+        <code>balzar/viewer3d.py</code> per l'app desktop. Un <code>.bzr</code>/<code>.bzp</code>
+        viene rigenerato in PNG/GIF/SVG; un <code>.b3d</code> apre il viewer 3D con la distinta
+        base; un <code>.bzx</code> apre 3D (se presente) + ricerca allarmi + indice documenti,
+        tutto insieme.</p>
 
       <section id="open-drop" class="dropzone">
-        <input type="file" id="open-file-input" accept=".bzr,.bzp,text/plain" hidden>
-        <p>Trascina un file <code>.bzr</code>/<code>.bzp</code> qui, oppure
-          <button id="open-browse-btn" type="button">scegli un file</button></p>
+        <input type="file" id="open-file-input" accept=".bzr,.bzp,.b3d,.bzx,text/plain" hidden>
+        <p>Trascina un file <code>.bzr</code>/<code>.bzp</code>/<code>.b3d</code>/<code>.bzx</code>
+          qui, oppure <button id="open-browse-btn" type="button">scegli un file</button></p>
       </section>
 
       <section id="open-status" class="status" hidden></section>
@@ -465,6 +484,82 @@
           <summary>programma (DSL)</summary>
           <pre id="open-program-text"></pre>
         </details>
+      </section>
+
+      <section id="open-3d-result" class="result" hidden>
+        <div style="position:relative">
+          <model-viewer id="open-3d-viewer" camera-controls auto-rotate shadow-intensity="0.6"
+                       exposure="1.1" field-of-view="30deg" style="width:100%;height:420px;background:#1c1c1c;border-radius:6px"></model-viewer>
+          <button id="open-3d-reset-btn" type="button"
+                 style="position:absolute;top:10px;left:10px">Mostra tutto</button>
+          <button id="open-3d-export-btn" type="button" disabled
+                 style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
+          <p id="open-3d-search-note" style="position:absolute;bottom:52px;left:10px;right:10px;
+             margin:0;color:#eee;font-size:12px;background:rgba(20,20,20,0.7);padding:4px 8px;
+             border-radius:4px;max-height:60px;overflow-y:auto"></p>
+          <div style="position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:8px;
+               align-items:center;flex-wrap:wrap">
+            <input id="open-3d-search-input" type="text"
+                   placeholder="Cerca componente o codice allarme…"
+                   style="flex:1;min-width:200px;padding:6px 10px;border-radius:6px;
+                          border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
+                          font:inherit">
+            <button id="open-3d-search-btn" type="button">Cerca</button>
+          </div>
+        </div>
+        <table class="stats" id="open-3d-stats-table"></table>
+        <details id="open-3d-docs-block" open hidden>
+          <summary>documenti nel bundle</summary>
+          <ul id="open-3d-docs-index" class="doc-index-list"></ul>
+        </details>
+        <details open>
+          <summary>distinta base</summary>
+          <table class="stats" id="open-3d-bom-table"></table>
+        </details>
+        <div class="downloads">
+          <button id="open-3d-dl-payload" type="button">scarica payload (.b3d/.bzx)</button>
+          <button id="open-3d-dl-glb" type="button">scarica modello (.glb)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="open-3d-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
+          <button id="open-3d-gen-qr-btn" type="button">genera QR</button>
+        </div>
+        <div id="open-3d-qr-result" class="qr-block" hidden>
+          <img id="open-3d-qr-img" class="qr-image" alt="QR del payload">
+          <div id="open-3d-qr-pages" class="qr-pages"></div>
+          <p id="open-3d-qr-note" class="honesty"></p>
+          <button id="open-3d-qr-dl-btn" type="button">scarica QR</button>
+        </div>
+      </section>
+
+      <section id="open-docs-result" class="result" hidden>
+        <p class="honesty">Bundle di soli documenti (nessun assieme 3D dentro): indice
+          navigabile, stesso principio del viewer 3D quando include documenti extra.</p>
+        <details open>
+          <summary>documenti</summary>
+          <ul id="open-docs-index" class="doc-index-list"></ul>
+        </details>
+        <div class="downloads">
+          <button id="open-docs-dl-payload" type="button">scarica bundle (.bzx)</button>
+          <label class="qr-mode-label">Tipo di export QR:
+            <select id="open-docs-qr-mode">
+              <option value="single">Immagine singola (griglia unica)</option>
+              <option value="gif">Sequenza QR — GIF animata</option>
+              <option value="pages">Sequenza QR — pagine PNG</option>
+            </select>
+          </label>
+          <button id="open-docs-gen-qr-btn" type="button">genera QR</button>
+        </div>
+        <div id="open-docs-qr-result" class="qr-block" hidden>
+          <img id="open-docs-qr-img" class="qr-image" alt="QR del payload">
+          <div id="open-docs-qr-pages" class="qr-pages"></div>
+          <p id="open-docs-qr-note" class="honesty"></p>
+          <button id="open-docs-qr-dl-btn" type="button">scarica QR</button>
+        </div>
       </section>
     </div>
   </main>

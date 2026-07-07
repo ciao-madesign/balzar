@@ -498,21 +498,31 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   a selezione multipla): non collegati al 3D, appaiono in un **indice
   navigabile** e si aprono inline se sono formati semplici
   (testo/CSV/immagini) o si scaricano se strutturati (pdf/html/xml/…).
-  Il 3D è opzionale: un bundle di **soli documenti** è valido e apre
-  una pagina indice-only (via CLI/GUI desktop; il tab web resta
-  ancorato a un 3D). Vedi CLAUDE.md §9.17. Un documento `.bzr`/`.bzp`
-  (un programma/payload balzar 2D — una tavola tecnica) è un caso
-  speciale: viene **rigenerato al volo** in PNG/SVG (o GIF se
-  multi-frame) al momento dell'apertura, non salvato come immagine —
-  stesso principio "descrivi, non memorizzare i pixel" di tutto balzar,
-  applicato a un documento dentro il bundle. Vedi CLAUDE.md §9.18.
-- **"Apri programma (.bzr/.bzp)"** (`api/render.py`): hai già un file
+  Il 3D è opzionale lato **creazione**: costruire un nuovo bundle da
+  questo tab richiede sempre un file `.3dxml` (è la scheda "Assemblee
+  3D", non un creatore di bundle generico); un bundle di **soli
+  documenti** si crea invece dalla CLI/GUI desktop. Vedi CLAUDE.md §9.17.
+  Un documento `.bzr`/`.bzp` (un programma/payload balzar 2D — una
+  tavola tecnica) è un caso speciale: viene **rigenerato al volo** in
+  PNG/SVG (o GIF se multi-frame) al momento dell'apertura, non salvato
+  come immagine — stesso principio "descrivi, non memorizzare i pixel"
+  di tutto balzar, applicato a un documento dentro il bundle. Vedi
+  CLAUDE.md §9.18.
+- **"Apri programma"** (`api/render.py`): il lato **Balzar Live** della
+  demo — l'unico tab di consumo, non di codifica. Hai già un file
   generato altrove (dalla CLI, dall'app desktop, o scaricato da qui in
-  una sessione precedente) e non vuoi/puoi usare un terminale? Carichi il
-  file, viene decodificato e rigenerato, scarichi PNG (o GIF se
-  multi-frame, o SVG vettoriale se il programma è nel sottoinsieme
-  supportato — vedi sopra), o il payload stesso (`.bzp`, ri-codificato
-  canonicamente anche se l'upload era un `.bzr` testuale) con un click.
+  una sessione precedente)? Caricalo, qualunque dei tre formati balzar
+  sia: **`.bzr`/`.bzp`** (un programma 2D, magic `BZR1`) viene
+  decodificato e rigenerato, scarichi PNG/GIF/SVG o il payload; **`.b3d`**
+  (un assieme 3D, magic `BZM1`) apre lo stesso viewer 3D con
+  click-to-select/ricerca/BOM della scheda "Assemblee 3D" (stesso
+  codice JS riusato, non duplicato); **`.bzx`** (un bundle, magic
+  `BZX1`) apre il 3D (se presente) **più** ricerca allarmi **più**
+  indice documenti tutto insieme, oppure — se il bundle non contiene
+  nessun 3D — solo l'indice documenti. Non serve scegliere il tipo:
+  `handle_render` legge i magic byte del file e decide da solo (vedi
+  CLAUDE.md §9.20). Le tre viste sono mutuamente esclusive nella
+  stessa pagina.
 
 Ogni tab mostra in cima un badge esplicito ("Codifica" o "Consumo") con
 lo scopo di quel flusso specifico, e — dove esiste un payload — un
@@ -571,9 +581,11 @@ balzar/
                   sistema (solo GUI desktop); clicca una parte per evidenziarla/
                   isolarla, click sulla BOM per selezionare tutte le istanze di un tipo;
                   barra di ricerca per nome/codice allarme, apre anche bundle BZX1
-  bundle.py       formato BZX1: più documenti con ruoli (3D / allarmi / doc generici)
-                  in un solo blob con indice navigabile; transita nel livello QR/chunking
-                  senza modifiche, 3D opzionale (vedi CLAUDE.md §9.16-9.17)
+  bundle.py       formato BZX1: più documenti con ruoli (3D / tavole 2D / allarmi /
+                  doc generici) in un solo blob con indice navigabile; una tavola 2D
+                  (.bzr/.bzp) viene rigenerata al volo in PNG/GIF/SVG, mai salvata
+                  come pixel; transita nel livello QR/chunking senza modifiche,
+                  3D opzionale (vedi CLAUDE.md §9.16-9.18)
   webapi.py       logica dell'API web con profili di limiti
   cli.py          render / encode / encode-image / encode-vector / encode-3d /
                   encode-video / encode-sequence / explode-vector / render-3d /

@@ -781,19 +781,132 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
 
 
 def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
-    """Open an existing .bzr/.bzp (no terminal needed): decode + render,
-    return a PNG/GIF to look at and download, plus SVG if the program
-    only uses the vector-safe op subset (balzar/svg.py)."""
+    """Open an existing balzar artifact -- this is the "Balzar Live"
+    generic opener, not just a .bzr/.bzp reader anymore: the magic bytes
+    of the decoded upload decide the path (BZR1 -> 2D program, BZM1 ->
+    3D scene, BZX1 -> multi-document bundle), not the file extension --
+    a browser upload doesn't reliably preserve one, and the three
+    formats are trivially distinguishable by their own header anyway
+    (same principle chunk_payload/qr.py already use: treat the bytes as
+    self-describing, never guess from a filename)."""
     data_b64 = body.get("data")
     if not data_b64:
         return 400, {"ok": False, "error": "campo 'data' mancante"}
-
-    from .payload import MAGIC, PayloadError, decode_payload
-
     try:
         raw = _b64decode(data_b64)
     except ValueError as exc:
         return 400, {"ok": False, "error": str(exc)}
+
+    from .bundle import MAGIC as BZX1_MAGIC
+    from .scene3d import MAGIC as BZM1_MAGIC
+
+    if raw[:4] == BZX1_MAGIC:
+        return _handle_render_bundle(raw, limits)
+    if raw[:4] == BZM1_MAGIC:
+        return _handle_render_3d(raw, limits)
+    return _handle_render_2d(raw, limits)
+
+
+def _scene3d_stats(scene) -> dict:
+    """Shape/reference/instance/vertex counts + BOM straight from an
+    already-decoded Scene3D -- no `mean_vertex_error` here (unlike
+    Scene3DEncodeResult): that field compares against the original,
+    unquantized CAD source, which a re-opened BZM1/BZX1 payload no
+    longer carries -- only encode_3dxml_file can report it honestly."""
+    from .scene3d import generate_bom
+    bom = generate_bom(scene)
+    return {
+        "shape_count": len(scene.shapes),
+        "reference_count": len(scene.references),
+        "instance_count": sum(len(r.children) for r in scene.references),
+        "vertex_count": sum(len(s.vertices) for s in scene.shapes),
+        "bom": [{"name": e.name, "count": e.count} for e in sorted(bom, key=lambda e: -e.count)],
+    }
+
+
+def _handle_render_3d(raw: bytes, limits: Limits) -> tuple[int, dict]:
+    """A bare BZM1 payload (e.g. a .b3d saved from the CLI/desktop app,
+    outside a bundle): decode straight to a GLB + BOM, same shape as
+    handle_encode_3d's response so the frontend can reuse its 3D-tab
+    rendering code for the "open" tab too."""
+    from .scene3d import Scene3DError, decode_payload
+
+    try:
+        scene = decode_payload(raw)
+    except Scene3DError as exc:
+        return 400, {"ok": False, "error": f"payload 3D non valido: {exc}"}
+
+    from .gltf import scene3d_to_glb
+    glb = scene3d_to_glb(scene)
+    glb_b64 = base64.b64encode(glb).decode("ascii")
+    glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
+
+    response = {"ok": True, "kind": "3d", "bundled": False, "alarm_rows": [], "documents": []}
+    response.update(_scene3d_stats(scene))
+    response["glb_omitted"] = glb_omitted
+    response["glb_base64"] = "" if glb_omitted else glb_b64
+    response.update(_payload_response_fields(raw, limits))
+    return 200, response
+
+
+def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
+    """A BZX1 bundle: same dispatch open_bundle_in_browser already does
+    for the desktop viewer (balzar/viewer3d.py), reused here to build a
+    JSON response instead of an HTML page -- at most one 3D item is
+    shown (the first, same rule as the desktop viewer), every alarm item
+    feeds the search bar, every 2d/alarm/doc item lands in the document
+    index via the same _documents_from_items already used by the
+    "Assemblee 3D" tab's own bundle path."""
+    from .bundle import BundleError, KIND_3D, decode_bundle, is_alarm_kind
+
+    try:
+        items = decode_bundle(raw)
+    except BundleError as exc:
+        return 400, {"ok": False, "error": f"bundle non valido: {exc}"}
+
+    from .viewer3d import _documents_from_items, parse_alarm_csv_text
+
+    three_d_items = [it for it in items if it.kind == KIND_3D]
+    response = {"ok": True, "kind": "bundle", "bundled": True, "has_3d": bool(three_d_items)}
+
+    if three_d_items:
+        from .scene3d import Scene3DError, decode_payload
+        try:
+            scene = decode_payload(three_d_items[0].data)
+        except Scene3DError as exc:
+            return 400, {"ok": False, "error": f"assieme 3D nel bundle non valido: {exc}"}
+        from .gltf import scene3d_to_glb
+        glb = scene3d_to_glb(scene)
+        glb_b64 = base64.b64encode(glb).decode("ascii")
+        glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
+        response.update(_scene3d_stats(scene))
+        response["glb_omitted"] = glb_omitted
+        response["glb_base64"] = "" if glb_omitted else glb_b64
+
+    try:
+        alarm_rows = []
+        for it in items:
+            if is_alarm_kind(it.kind):
+                alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
+    except UnicodeDecodeError as exc:
+        return 400, {"ok": False, "error": f"tabella allarmi nel bundle non e' UTF-8 valida: {exc}"}
+    response["alarm_rows"] = [[code, name] for code, name in alarm_rows]
+
+    try:
+        response["documents"] = _documents_from_items(items)
+    except (SyntaxError, ValueError, RuntimeError) as exc:
+        return 400, {"ok": False, "error": f"documento nel bundle non valido: {exc}"}
+
+    response.update(_payload_response_fields(raw, limits))
+    return 200, response
+
+
+def _handle_render_2d(raw: bytes, limits: Limits) -> tuple[int, dict]:
+    """A bare BZR1 payload or plain DSL source text (no recognized
+    binary magic): the original "Apri programma" path, unchanged except
+    for the added `kind` discriminator field."""
+    from .payload import MAGIC, PayloadError, decode_payload
+
     try:
         program_text = decode_payload(raw) if raw[:4] == MAGIC else raw.decode("utf-8")
     except (PayloadError, UnicodeDecodeError) as exc:
@@ -823,6 +936,7 @@ def handle_render(body: dict, limits: Limits) -> tuple[int, dict]:
 
     response = {
         "ok": True,
+        "kind": "2d",
         "width": result.width,
         "height": result.height,
         "frame_count": len(result.frames),
