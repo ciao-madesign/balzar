@@ -645,17 +645,29 @@ class BalzarApp:
         self.queue.put(job)
 
     def _shutdown_viewer(self, key: str) -> None:
-        """Shuts down and pops the running server registered under `key`
-        (a library entry id, or a job's own fallback id), frees its
-        port, and removes its temp work_dir (model-viewer.min.js + the
-        GLB copy, ~1MB) from disk -- shared by both places that can
-        close a viewer, so the teardown sequence only needs to be right
-        in one place."""
-        import shutil
+        """Pops the running server registered under `key` (a library
+        entry id, or a job's own fallback id) and tears it down in a
+        background thread -- shared by both places that can close a
+        viewer, so the teardown sequence only needs to be right in one
+        place.
+
+        The pop happens here, synchronously, so the UI immediately
+        reflects the close (e.g. a following _refresh_library_panel()
+        call no longer shows it as "aperto"). The actual shutdown()
+        does not: http.server's shutdown() blocks the caller until the
+        OTHER thread's serve_forever() loop notices, on its next
+        poll-interval tick (~0.5s by default) -- doing that on the
+        Tkinter main thread would freeze the whole GUI for that long on
+        every close/delete click."""
         server, work_dir = self._open_viewers.pop(key)
-        server.shutdown()
-        server.server_close()
-        shutil.rmtree(work_dir, ignore_errors=True)
+
+        def _teardown() -> None:
+            import shutil
+            server.shutdown()
+            server.server_close()
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+        threading.Thread(target=_teardown, daemon=True).start()
 
     def _close_library_viewer_selected(self) -> None:
         """Shuts down the ephemeral local server for the selected entry
