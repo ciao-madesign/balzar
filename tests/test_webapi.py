@@ -793,6 +793,29 @@ class TestHandleQr(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(resp["grid_dim"], 8)
 
+    def test_grid_dim_1_is_allowed_not_clamped_up(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        # grid_dim=1 (one QR per frame, no grid) is the only grid_dim a
+        # live camera can reliably decode continuously -- must pass
+        # through unchanged, not get clamped up to the old floor of 2.
+        status, resp = handle_qr(
+            {"payload_base64": _b64(b"x" * 200), "mode": "pages", "grid_dim": 1}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["grid_dim"], 1)
+
+    def test_grid_dim_below_1_is_clamped_up_to_1(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        status, resp = handle_qr(
+            {"payload_base64": _b64(b"x" * 200), "mode": "gif", "grid_dim": 0}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["grid_dim"], 1)
+
     def test_gif_mode_single_frame_for_small_payload(self):
         try:
             import qrcode  # noqa: F401

@@ -249,7 +249,22 @@ def _tile_boxes(width: int, height: int, grid_dim: int):
         rows = round((height - top - pad) / row_h)
         if rows < 1:
             continue
-        if abs(top + rows * row_h + pad - height) > row_h / 2:
+        # A real bug found here, not a hypothetical: this used to compare
+        # against `row_h / 2` (hundreds of pixels) instead of a tight
+        # tolerance. On a real 2x2 grid (top=0, the correct value), the
+        # WRONG top=26 hypothesis (tried first) reconstructed a height
+        # only 26px off -- comfortably inside that old margin, so it was
+        # silently accepted as "close enough", producing every crop
+        # shifted ~26px vertically from the real cells. ZBar and jsQR
+        # both failed to decode the mis-cropped boxes, and jsQR's
+        # whole-image fallback (unlike Python's ZBar one) isn't reliable
+        # on a multi-code composed grid either, so the failure was total,
+        # not just a speed loss. When the hypothesis is genuinely right,
+        # this reconstructs EXACTLY (0px error) because cell/pad/rows are
+        # all the same integers _compose_grid itself used -- a couple of
+        # pixels of slack is enough for any rounding edge case, nothing
+        # close to row_h/2 should ever be needed.
+        if abs(top + rows * row_h + pad - height) > 2:
             continue  # this (cols, top) hypothesis doesn't reconstruct the real height
         candidate = []
         for r in range(rows):

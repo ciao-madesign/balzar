@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="style.css">
 <script src="jsQR.min.js"></script>
 <script src="qr-transport-core.js"></script>
+<script src="qr-camera-scanner.js"></script>
 </head>
 <body>
   <header>
@@ -31,11 +32,31 @@
         delle immagini QR avviene sul server (libreria <code>qrcode</code>, nessuna compressione —
         stesso endpoint <code>/api/qr</code> già usato altrove nella demo, qui su byte arbitrari
         invece che su un payload balzar).</p>
+      <fieldset class="qr-mode-picker" id="enc-mode-fieldset">
+        <legend>Come vuoi generare la sequenza?</legend>
+        <label class="mode-option">
+          <input type="radio" name="enc-mode" value="pages" checked>
+          <span>
+            <strong>Pagine da fotografare a mano</strong>
+            <span class="mode-pro-con">Pro: con una griglia densa (es. 4×4) bastano poche foto.
+              Contro: scatti/carichi tu una foto per pagina, e avanzi tu.</span>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="enc-mode" value="gif">
+          <span>
+            <strong>GIF per acquisizione continua (fotocamera)</strong>
+            <span class="mode-pro-con">Pro: si riproduce da sola sullo schermo e si legge da sola
+              con la fotocamera, zero tocchi. Contro: un solo QR per fotogramma (niente griglia)
+              quindi servono più pagine, e non è stampabile.</span>
+          </span>
+        </label>
+      </fieldset>
       <section id="enc-drop" class="dropzone">
         <input type="file" id="enc-file-input" hidden>
         <p id="enc-drop-label">Trascina un file qualunque qui, oppure
           <button id="enc-browse-btn" type="button">scegli un file</button></p>
-        <label class="dim-picker">
+        <label class="dim-picker" id="enc-grid-dim-row">
           QR per fotogramma (griglia N×N)
           <select id="enc-grid-dim">
             <option value="1">1 (nessuna griglia, un QR/pagina)</option>
@@ -44,9 +65,16 @@
             <option value="8">8×8 = 64 (denso, più lento da leggere)</option>
           </select>
         </label>
+        <p class="dim-picker" id="enc-grid-dim-fixed" hidden>Griglia fissata a 1×1 (nessuna
+          griglia): l'acquisizione continua da fotocamera legge in modo affidabile solo un QR per
+          fotogramma — vedi CLAUDE.md §2.4g per la misura.</p>
       </section>
       <p id="enc-status" class="status"></p>
       <div id="enc-pages" class="qr-pages"></div>
+      <div id="enc-gif-result" class="qr-page-item" hidden>
+        <img id="enc-gif-img" alt="GIF per acquisizione continua">
+        <button id="enc-gif-download-btn" type="button">Scarica GIF</button>
+      </div>
     </section>
 
     <section class="card">
@@ -55,22 +83,57 @@
         capitolo già letto viene semplicemente ignorato). La decodifica QR e il riassemblaggio
         avvengono <strong>interamente nel browser</strong>, via <code>jsQR</code>
         (vendorizzato, licenza Apache-2.0) — nessun file lascia il dispositivo.</p>
-      <label class="dim-picker">
-        QR per immagine (deve corrispondere a come sono stati generati)
-        <select id="dec-grid-dim">
-          <option value="1">1 (nessuna griglia, un QR/immagine)</option>
-          <option value="2">2×2 = 4</option>
-          <option value="4" selected>4×4 = 16</option>
-          <option value="8">8×8 = 64</option>
-        </select>
-      </label>
-      <section id="dec-drop" class="dropzone">
-        <input type="file" id="dec-file-input" accept="image/*" capture="environment" multiple hidden>
-        <p id="dec-drop-label">Trascina una o più foto/pagine qui, oppure
-          <button id="dec-browse-btn" type="button">scegli foto</button>
-          (su telefono, apre la fotocamera)</p>
+      <fieldset class="qr-mode-picker" id="dec-mode-fieldset">
+        <legend>Come vuoi acquisire?</legend>
+        <label class="mode-option">
+          <input type="radio" name="dec-mode" value="manual" checked>
+          <span>
+            <strong>Foto multiple (comando dell'operatore)</strong>
+            <span class="mode-pro-con">Pro: funziona con qualunque griglia, anche densa. Contro:
+              scatti/carichi tu ogni foto, una alla volta.</span>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="dec-mode" value="continuous">
+          <span>
+            <strong>Acquisizione continua (fotocamera)</strong>
+            <span class="mode-pro-con">Pro: zero tocchi, si ferma da sola a lettura completata.
+              Contro: solo per sequenze generate con "GIF per acquisizione continua" (griglia
+              1×1) — su una griglia densa la fotocamera non riesce a leggere i codici in tempo
+              reale.</span>
+          </span>
+        </label>
+      </fieldset>
+
+      <section id="dec-manual-section">
+        <label class="dim-picker">
+          QR per immagine (deve corrispondere a come sono stati generati)
+          <select id="dec-grid-dim">
+            <option value="1">1 (nessuna griglia, un QR/immagine)</option>
+            <option value="2">2×2 = 4</option>
+            <option value="4" selected>4×4 = 16</option>
+            <option value="8">8×8 = 64</option>
+          </select>
+        </label>
+        <section id="dec-drop" class="dropzone">
+          <input type="file" id="dec-file-input" accept="image/*" capture="environment" multiple hidden>
+          <p id="dec-drop-label">Trascina una o più foto/pagine qui, oppure
+            <button id="dec-browse-btn" type="button">scegli foto</button>
+            (su telefono, apre la fotocamera)</p>
+        </section>
+        <ul id="dec-file-list" class="file-list"></ul>
       </section>
-      <ul id="dec-file-list" class="file-list"></ul>
+
+      <section id="dec-continuous-section" class="camera-view" hidden>
+        <p class="honesty">Richiede il permesso di usare la fotocamera. Inquadra la sequenza (uno
+          schermo che riproduce la GIF generata sopra) e tienila ferma: la lettura si completa da
+          sola, nessun tocco necessario.</p>
+        <video id="dec-camera-video" autoplay muted playsinline></video>
+        <p id="dec-camera-progress" class="camera-progress">Fotocamera non avviata.</p>
+        <button id="dec-camera-start-btn" type="button">Avvia fotocamera</button>
+        <button id="dec-camera-stop-btn" type="button" hidden>Ferma fotocamera</button>
+      </section>
+
       <p id="dec-status" class="status"></p>
       <label class="dim-picker" id="dec-filename-row" hidden>
         nome del file ricostruito (i byte grezzi non portano un nome — inseriscilo tu se lo conosci)

@@ -143,6 +143,12 @@ button:disabled:hover { border-color: var(--border); }
   font-size: 0.85rem;
   color: var(--muted);
 }
+/* same specificity bug already found for .qr-block (CLAUDE.md §9.9):
+   the native [hidden] rule and an unconditional class rule both have
+   specificity (0,1,0), and this author stylesheet comes after the UA
+   sheet in the cascade -- without this, toggling `hidden` on a
+   .dim-picker element does nothing visually. */
+.dim-picker[hidden] { display: none; }
 .dim-picker select {
   font: inherit;
   border-radius: 6px;
@@ -274,6 +280,7 @@ table.stats tr.part.selected td:first-child { color: #fff; }
   align-items: center;
   gap: 0.35rem;
 }
+.qr-page-item[hidden] { display: none; } /* same [hidden] specificity bug as .qr-block, §9.9 */
 .qr-page-item img {
   width: 100%;
   max-width: 160px;
@@ -561,3 +568,70 @@ footer {
   font-size: 0.85rem;
 }
 footer a { color: var(--accent); }
+
+/* trasporto-qr.html: explicit choice between generation/acquisition
+   modes, each shown as a small card with a one-line pro/con instead of
+   a bare dropdown -- the tradeoff (fewer taps vs. fewer codes needed)
+   isn't obvious from the option name alone. Named .qr-mode-picker, NOT
+   .mode-picker: that name is already used (index.html's "Sequenza
+   navigabile / File indipendenti" toggle) with different, incompatible
+   rules -- reusing it here would have silently changed that unrelated
+   toggle's appearance too. */
+.qr-mode-picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 1rem;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.qr-mode-picker legend {
+  padding: 0 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.mode-option:hover { background: var(--panel); }
+.mode-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--panel);
+}
+.mode-option input[type="radio"] { margin-top: 0.3rem; }
+.mode-option strong { display: block; font-size: 0.95rem; }
+.mode-option .mode-pro-con {
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.15rem;
+}
+
+/* continuous camera acquisition (qr-camera-scanner.js): live preview +
+   progress, shown only when that mode is selected. */
+.camera-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+}
+.camera-view[hidden] { display: none; } /* same [hidden] specificity bug as .qr-block, §9.9 */
+.camera-view video {
+  width: 100%;
+  max-width: 480px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+.camera-progress {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.camera-progress.active { color: var(--fg); }

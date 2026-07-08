@@ -836,6 +836,113 @@ stessi numeri sopra). Nessun test Python coinvolto (comportamento
 client-side puro). Verificato: sintassi JS (`node --check`), nessuna
 regressione sui test già passati con i vecchi default.
 
+### 2.4i Integrazione in `trasporto-qr.html`: scelta esplicita generazione/lettura, e un bug reale di geometria trovato dall'integrazione stessa
+
+Richiesta diretta di sessione: lasciare all'utente la scelta esplicita,
+con pro/con dichiarati in interfaccia, tra le due modalità già esistenti
+(pagine da fotografare a mano, qualunque griglia — contro GIF per
+acquisizione continua, sempre griglia 1×1) sia in **generazione** sia in
+**lettura**, mantenendo le griglie dense interamente disponibili per chi
+non usa l'acquisizione continua.
+
+**Generazione** (`trasporto-qr.html` sezione 1): un nuovo `<fieldset>`
+con due opzioni radio (`enc-mode`), ciascuna con un pro/con di una riga.
+Selezionando "GIF per acquisizione continua" il selettore di griglia
+esistente si nasconde (rimane invariato e disponibile per l'altra
+modalità) e la richiesta a `/api/qr` forza `grid_dim=1` internamente,
+indipendentemente da cosa fosse impostato prima — non un valore
+suggerito, imposto lato client perché è l'unico che l'acquisizione
+continua legge in modo affidabile (§2.4g). Sblocco necessario lato
+server: `handle_qr` clampava `grid_dim` a `[2, 8]` (una policy per lo
+scan-foto desktop, mai un limite di libreria), che rendeva `grid_dim=1`
+irraggiungibile dall'endpoint pubblico — cambiato a `[1, 8]`, con test
+espliciti sia per il nuovo valore ammesso sia per il vecchio
+comportamento di clamp dal basso (ora a 1, non più a 2).
+
+**Lettura** (`trasporto-qr.html` sezione 2): stesso principio, un
+`<fieldset>` (`dec-mode`) tra "Foto multiple (comando dell'operatore)"
+(il flusso già esistente, qualunque griglia) e "Acquisizione continua
+(fotocamera)" (nuovo, `ContinuousQrScanner` da `qr-camera-scanner.js`,
+un `<video>` live + pulsanti avvia/ferma + testo di progresso). Le due
+modalità **condividono la stessa `LiveScanner`** (nuovo parametro
+opzionale `opts.scanner` su `ContinuousQrScanner`, che di default ne
+crea una propria se non passata): un capitolo che la fotocamera non
+riesce a leggere si può coprire con una foto manuale, e viceversa, senza
+perdere ciò che l'altra via ha già trovato — stesso principio di
+accumulo già alla base del formato, ora esteso a due meccanismi di
+acquisizione invece di uno.
+
+**Bug reale trovato dall'integrazione stessa, non dalla libreria in
+isolamento**: il test di regressione della modalità "foto multiple"
+falliva in modo deterministico (stesso payload, stesso seed, sempre lo
+stesso esito) — **sia jsQR sia pyzbar** non trovavano nessun QR in
+un'immagine che, scansionata per intero senza ritaglio, decodificava
+perfettamente. Isolato passo-passo: `_tile_boxes`/`tileBoxes` provano
+`top=26` prima di `top=0`, accettando la prima ipotesi che "ricostruisce
+l'altezza abbastanza bene" — ma la tolleranza usata per "abbastanza
+bene" era `row_h/2` (centinaia di pixel), enormemente più larga del
+necessario. Su una griglia 2×2 reale a frame singolo (`top` vero = 0,
+nessuna etichetta "Frame i/N"), l'ipotesi SBAGLIATA `top=26` ricostruiva
+l'altezza con un errore di soli 26px — comodamente dentro quella
+tolleranza troppo larga — e veniva accettata per prima, spostando ogni
+ritaglio di ~26px rispetto alla posizione reale dei QR. Il risultato non
+era un rallentamento (il fallback whole-image di ZBar avrebbe comunque
+salvato la correttezza in Python) ma un **fallimento totale**: jsQR non
+ha un fallback whole-image affidabile su una griglia multi-codice (limite
+già documentato, non nuovo), quindi sia il tentativo di tiling (mal
+posizionato) sia il fallback (whole-image, jsQR intrinsecamente debole su
+più codici in un canvas) fallivano insieme.
+
+Verificato con `pyzbar` **prima** di incolpare jsQR: gli stessi identici
+ritagli mal posizionati, passati a ZBar invece che a jsQR, fallivano
+anch'essi — la prova diretta che non era un limite di jsQR ma un errore
+di geometria a monte, condiviso da entrambi i linguaggi (`_tile_boxes` in
+Python e `tileBoxes` in JS hanno esattamente lo stesso bug, stessa
+tolleranza `row_h/2` in entrambi). Fix in entrambi: tolleranza stretta
+(2px, non `row_h/2`) — quando l'ipotesi è davvero corretta la formula
+ricostruisce l'altezza **esattamente** (cell/pad/rows sono gli stessi
+interi che `_compose_grid` ha usato), qualunque errore ben oltre un paio
+di pixel di arrotondamento significa che l'ipotesi è sbagliata, non che
+serve più margine.
+
+Verificato: tutti e 4 i ritagli della griglia del test decodificano
+correttamente dopo il fix (prima: 0/4 sia con ZBar sia con jsQR); nuovo
+test di regressione in `tests/test_qr.py`
+(`test_tile_boxes_uses_the_correct_top_on_a_full_single_frame_grid`,
+payload dimensionato per forzare esattamente 4 capitoli — un frame
+singolo, griglia 2×2 piena, senza etichetta "Frame i/N", esattamente lo
+scenario del bug); suite Python 312 test, tutti verdi; verifica end-to-end
+completa con Playwright contro un devserver reale che instrada `/api/qr`
+al vero `handle_qr` — non solo le due modalità nuove, ma un round-trip
+reale con fotocamera fittizia (`--use-file-for-fake-video-capture`,
+stessa metodologia di §2.4g/§2.4h) attraverso l'interfaccia reale di
+`trasporto-qr.html` (non uno script isolato): scelta modalità GIF in
+generazione → GIF reale prodotta e verificata (magic bytes `GIF8`) →
+scelta modalità "Acquisizione continua" in lettura → scansione completa
+tramite un vero pulsante "Avvia fotocamera" → download tramite il vero
+pulsante "Scarica file ricostruito" → bit-identico (SHA256), stabile su
+run ripetuti.
+
+**Bug di CSS trovato durante la verifica, stessa causa già nota di
+§9.9**: sia `#enc-grid-dim-row` (classe `.dim-picker`) sia
+`#enc-gif-result`/`.qr-page-item` sia `#dec-continuous-section`/
+`.camera-view` hanno una regola di classe incondizionata con `display:
+... `, che — per la stessa collisione di specificità già trovata e
+corretta per `.qr-block` — vince sulla regola nativa `[hidden] {
+display: none }`. Corretto con la stessa tecnica (`.dim-picker[hidden]`,
+`.qr-page-item[hidden]`, `.camera-view[hidden]`, tutte `{ display: none;
+}`), trovato scrivendo il test Playwright (`is_visible()` restituiva
+`true` nonostante l'attributo `hidden` fosse impostato), non a occhio.
+
+**Collisione di nome CSS evitata prima che causasse un bug**: il nome
+ovvio per il nuovo contenitore delle due opzioni radio,
+`.mode-picker`, **era già usato** da `index.html` (il toggle "Sequenza
+navigabile / File indipendenti" del tab Sequenza, §2.9) con regole
+incompatibili — riusarlo avrebbe silenziosamente cambiato l'aspetto di
+quel toggle non correlato. Rinominato in `.qr-mode-picker`, verificato
+con `grep` che nessun'altra collisione di nome esiste per le classi
+nuove (`.mode-option`, `.mode-pro-con`).
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
@@ -1356,7 +1463,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-309 test, tutti verdi (`python3 -m unittest discover -s tests`):
+312 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -3811,7 +3918,7 @@ rotto, `_decode_tiled` end-to-end), 3 in
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 309 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 312 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d

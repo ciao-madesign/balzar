@@ -146,7 +146,19 @@ function tileBoxes(width, height, gridDim) {
   for (const top of [26, 0]) {
     const rows = Math.round((height - top - pad) / rowH);
     if (rows < 1) continue;
-    if (Math.abs(top + rows * rowH + pad - height) > rowH / 2) continue;
+    // Real bug found and fixed on the Python side too (balzar/qr.py's
+    // _tile_boxes): this used to compare against rowH/2 (hundreds of
+    // pixels), so the WRONG top=26 hypothesis (tried first) could get
+    // accepted whenever it happened to reconstruct the height within
+    // that huge margin -- e.g. a real single-frame 2x2 grid (top=0)
+    // whose height was only 26px off under the top=26 guess. Every crop
+    // then landed ~26px off from the real cells, and jsQR's whole-image
+    // fallback isn't reliable on a multi-code grid either, so decode
+    // failed completely, not just slower. When the hypothesis is
+    // actually right this reconstructs EXACTLY (cell/pad/rows are the
+    // same integers _compose_grid itself used) -- a couple of pixels of
+    // slack covers any real rounding, nothing close to rowH/2.
+    if (Math.abs(top + rows * rowH + pad - height) > 2) continue;
     const boxes = [];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {

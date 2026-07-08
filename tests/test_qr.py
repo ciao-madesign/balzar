@@ -385,6 +385,32 @@ class TestParallelTileDecoding(unittest.TestCase):
         expected = [{r.data for r in zbar_decode(c)} for c in crops]
         self.assertEqual([{r.data for r in res} for res in results], expected)
 
+    def test_tile_boxes_uses_the_correct_top_on_a_full_single_frame_grid(self):
+        # Real bug, found via the trasporto-qr.html UI (not hypothetical):
+        # _tile_boxes tries top=26 before top=0, and used to accept
+        # top=26 whenever it reconstructed the image height within
+        # row_h/2 (hundreds of px) -- far too loose. A genuinely full
+        # single-frame grid (no frame_label, so the real top is 0) with a
+        # smaller last chunk (a shorter QR upscaled to `cell`, changing
+        # cell/pad just enough) reconstructed within that old margin
+        # under the WRONG top=26 hypothesis, shifting every crop ~26px
+        # and making both pyzbar and jsQR fail on all of them even though
+        # the whole image decodes fine. Payload sized to force exactly 4
+        # chunks (3 full + 1 short) at grid_dim=2 -- one full 2x2 grid,
+        # single frame, no frame_label.
+        from balzar.qr import CHUNK_RAW_BYTES, _tile_boxes, payload_to_qr_frames
+        from pyzbar.pyzbar import decode as zbar_decode
+
+        payload = b"x" * (CHUNK_RAW_BYTES * 3 + 100)
+        frames = payload_to_qr_frames(payload, grid_dim=2)
+        self.assertEqual(len(frames), 1)
+        img = frames[0]
+        boxes = _tile_boxes(img.size[0], img.size[1], 2)
+        self.assertEqual(len(boxes), 4)
+        found = sum(1 for box in boxes if zbar_decode(img.crop(box)))
+        self.assertEqual(found, 4, "every crop should decode; a top-hypothesis "
+                          "geometry bug shifts all of them out of alignment")
+
     def test_decode_tiled_end_to_end_still_recovers_full_frame(self):
         # only count actual BZC1 chunks -- zbar can occasionally
         # misdetect an unrelated barcode symbology in the label-text

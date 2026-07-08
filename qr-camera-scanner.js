@@ -95,7 +95,12 @@ class ContinuousQrScanner {
     this.onError = opts.onError || (() => {});
     this.onFrameSample = opts.onFrameSample || (() => {}); // (foundCount) => void, for a "codici visti in quest'inquadratura" indicator
 
-    this.scanner = new LiveScanner();
+    // Accepts an existing LiveScanner via opts.scanner (falls back to a
+    // fresh one) so a caller running both manual photo-upload and
+    // continuous camera acquisition on the same page can share state --
+    // a chunk the camera can't get can be covered by one manual photo,
+    // and vice versa, without losing what either path already found.
+    this.scanner = opts.scanner || new LiveScanner();
     this._stream = null;
     this._canvas = document.createElement("canvas");
     this._ctx = this._canvas.getContext("2d", { willReadFrequently: true });

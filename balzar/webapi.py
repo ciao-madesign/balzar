@@ -700,10 +700,16 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
     - "pages": same frame split, returned as a list of individual PNGs
       (base64 each) -- for printing one page per frame, where
       "auto-play" has no meaning.
-    grid_dim (default 4, clamped to [2, 8]) is a property of the
+    grid_dim (default 4, clamped to [1, 8]) is a property of the
     physical output medium, not the payload -- see CLAUDE.md §2.4b for
     why 4 is the recommended default and 8 is available but not
-    recommended.
+    recommended. grid_dim=1 (one QR code per frame, no grid at all) is
+    a real, deliberate case, not just a permitted edge value: it is the
+    ONLY grid_dim a live camera can reliably decode continuously (a
+    matrix needs ~3800-4700px of live camera frame width to keep every
+    one of its codes individually readable, unrealistic at a normal
+    working distance -- CLAUDE.md §2.4g), so the "GIF per acquisizione
+    continua" delivery mode always requests grid_dim=1 here.
 
     "gif"/"pages" responses also include estimated_scan_seconds_low/high
     -- an honest ballpark for how long reading the sequence back is
@@ -722,7 +728,7 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
         grid_dim = int(body.get("grid_dim", 4))
     except (TypeError, ValueError):
         return 400, {"ok": False, "error": "grid_dim deve essere un intero"}
-    grid_dim = max(2, min(8, grid_dim))
+    grid_dim = max(1, min(8, grid_dim))
 
     try:
         import qrcode  # noqa: F401  (import check only; qr.py does the real import)
