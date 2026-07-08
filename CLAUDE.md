@@ -638,6 +638,92 @@ grid_dim=4 reale (16/16 sul frame pieno in ogni run, confermando il fix
 di geometria; 11/12 costante sul frame parziale, confermando il limite
 di affidabilità jsQR come caratteristica stabile e non rumore).
 
+### 2.4g Componente di cattura fotocamera continua (`qr-camera-scanner.js`) — nessun tocco, e un vincolo di risoluzione reale scoperto misurando
+
+`qr-camera-scanner.js` (nuovo file) — `class ContinuousQrScanner`,
+il pezzo di libreria per l'"acquisizione continua" decisa in sessione:
+punta un vero stream `getUserMedia()` a `decodeAllInImage`/`LiveScanner`
+(§2.4f) con un loop a intervallo minimo (default 350ms, guardia `busy`
+contro decodifiche sovrapposte — `requestAnimationFrame` diretto a
+~60/s accoderebbe chiamate jsQR sincrone che possono costare centinaia
+di ms), accumula i capitoli via `LiveScanner` esattamente come il flusso
+foto-singola già esistente, e chiama `onComplete` da solo appena
+l'ultimo capitolo arriva — **zero tocchi dell'operatore**, il requisito
+esplicito della sessione (rifiutato "avanza al tocco": con frame che
+cambiano ogni ~1,5s su uno schermo che cicla da solo, sincronizzare un
+tocco umano è cattiva UX). Riusa `qr-transport-core.js` **senza
+modifiche**: nessuna logica di parsing chunk o decodifica QR
+reimplementata qui, solo la plumbing della fotocamera.
+
+**Vincolo reale scoperto misurando, non assunto**: la prima verifica
+end-to-end (fotocamera fittizia via Chromium `--use-file-for-fake-video-
+capture`, vedi sotto) con una griglia `grid_dim=4` reale (lo stesso
+default usato per lo scan-foto desktop) non ha mai trovato un solo QR
+— `count: 0` a ogni risoluzione di camera realistica (1920×1080 e
+sotto). Isolato il motivo con un vero sweep di risoluzione (non
+ipotizzato): jsQR ha bisogno di circa **700-1100px di larghezza per
+singolo codice QR** per decodificare in modo affidabile — un requisito
+enormemente più alto del sweet spot ZBar già noto per lo scan-foto
+desktop (1700-2400px per l'**intera griglia** 4×4, §9.10/§2.4b). Una
+griglia `grid_dim=4` da fotocamera live avrebbe bisogno di ~3800-4700px
+di larghezza inquadratura per tenere ognuno dei 16 codici sopra quella
+soglia — irrealistico per una fotocamera puntata a distanza normale;
+`grid_dim=2` (4 codici) resta comunque sopra soglia solo a ~1900px+,
+marginale. **Solo `grid_dim=1` (un codice QR per pagina generata)** si
+è dimostrato affidabile a ogni risoluzione testata, da quella nativa
+fino a 640px — confermato con un vero sweep (`decodeAllInImage`
+chiamato su PNG ridimensionati con Pillow/LANCZOS a 1920/1600/1280/
+1080/960/800/640px, 1/1 trovato a ogni passo). Nota anche una
+sensibilità di jsQR **non monotona** al ridimensionamento: in un test
+isolato su un singolo crop, 1100px e 700px decodificavano correttamente
+ma 900px falliva — un artefatto di resample/antialiasing, non un
+degrado uniforme; qualunque margine di inquadratura scelto per la
+generazione delle pagine deve restare ben lontano da quella fascia
+intermedia, non solo "abbastanza grande".
+
+`/api/qr` (`handle_qr`) clampa `grid_dim` a `[2, 8]` (§2.9) — una
+policy pensata per lo scan-foto desktop, non un limite di libreria:
+`payload_to_qr_frames(payload, grid_dim=1)` resta chiamabile
+direttamente. La generazione della sequenza QR per l'acquisizione
+continua (lato encoding, task successivo) dovrà quindi usare un
+percorso diverso da quello che serve già gli altri tab, o un parametro
+dedicato — non ancora deciso, rimandato all'integrazione UI.
+
+**Verificato end-to-end con una fotocamera reale, non un mock**:
+Chromium lanciato con `--use-fake-device-for-media-stream
+--use-file-for-fake-video-capture=<file>.y4m`, un vero video Y4M
+scritto a mano (nessun encoder ffmpeg disponibile in questo sandbox con
+supporto Y4M/MJPEG — verificato con `ffmpeg -version`, solo encoder
+PNG/VP8 abilitati — quindi scritto direttamente via la conversione
+YCbCr già disponibile in Pillow) che simula uno schermo che cicla 5
+pagine QR reali (payload casuale 10.000 B, `grid_dim=1`) a 1,5s/pagina,
+1920×1080, letterbox con margine ridotto (0,95×, non 0,8× — un primo
+tentativo con margine 0,8× ha spinto il codice della pagina 5 esattamente
+nella fascia 800-900px non affidabile scoperta sopra, causando un
+capitolo mai trovato in 8 cicli di loop consecutivi — bug del test,
+non del componente, isolato confrontando byte per byte il frame Y4M
+sorgente [corretto, letto e verificato "Frame 5/5" visivamente] contro
+lo stesso identico PNG prima/dopo il roundtrip YUV420, che falliva
+identico anche SENZA alcun coinvolgimento della fotocamera o del video).
+Con il margine corretto: **scansione completa in ~6,3s, stabile su 3
+run consecutivi**, tutti e 20 i tentativi di decodifica hanno trovato
+esattamente 1 QR (zero tentativi a vuoto), zero errori, riassemblaggio
+**bit-identico** (SHA256 verificato) — zero tocchi dell'operatore dal
+primo all'ultimo fotogramma, esattamente il modello richiesto.
+
+**Non ancora fatto**: nessuna integrazione UI (`trasporto-qr.html`,
+Balzar Live, desktop) — questo è solo il componente di libreria,
+verificato in isolamento con una pagina di test minimale non
+committata nel repository (`getUserMedia` richiede un contesto sicuro:
+`http://127.0.0.1`/`localhost` sì, `about:blank` di `page.set_content()`
+no — verificato anche questo nel processo). Nessuna gestione UI di
+`onError` (permesso negato, nessuna fotocamera, vincoli non
+soddisfatti) oltre al callback stesso. Nessuna decisione ancora presa
+su come la generazione della sequenza QR lato encoding debba esporre
+`grid_dim=1` per questo caso d'uso specifico (endpoint dedicato?
+parametro esplicito sull'esistente? nuovo default solo per questo
+flusso?).
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
