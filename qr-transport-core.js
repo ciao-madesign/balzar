@@ -127,49 +127,65 @@ class LiveScanner {
 // rows). `rows` is instead solved from the known image height, trying
 // both possible `top` values and keeping whichever one reconstructs the
 // given height exactly.
+//
+// `cols` is NOT assumed equal to gridDim either (a second real bug,
+// found from a user report of total non-detection on a partial matrix,
+// not a hypothetical): a last frame with few enough remaining chunks
+// lays out at cols=ceil(sqrt(n)), which drops BELOW gridDim once
+// n <= (gridDim-1)**2 (e.g. 8 codes at gridDim=4 is 3x3, not 4x4). The
+// old code assumed cols=gridDim unconditionally and correctly failed
+// closed (0 boxes) when no `top` could reconstruct the height under
+// that wrong assumption -- but decodeAllViaMasking (this file's
+// whole-image fallback) ALSO came up empty on that same dense grid, so
+// the failure was total, not just a lost speedup. Fixed by also
+// searching `cols` from gridDim down to 1 (gridDim tried first, by far
+// the common case), keeping the first (cols, top) whose solved
+// cell/pad/rows reconstructs both width and height.
 
 function tileBoxes(width, height, gridDim) {
-  const cols = gridDim;
-  let cell = (width * 15) / (16 * cols + 1);
-  let pad = 12;
-  for (let i = 0; i < 4; i++) {
-    pad = Math.max(12, Math.floor(Math.floor(cell) / 15));
-    cell = (width - pad * (cols + 1)) / cols;
-  }
-  cell = Math.round(cell);
-  pad = Math.max(12, Math.floor(cell / 15));
-  if (cell < 20) return [];
-
   const labelH = 22;
-  const rowH = cell + pad + labelH;
   const slack = 3;
-  for (const top of [26, 0]) {
-    const rows = Math.round((height - top - pad) / rowH);
-    if (rows < 1) continue;
-    // Real bug found and fixed on the Python side too (balzar/qr.py's
-    // _tile_boxes): this used to compare against rowH/2 (hundreds of
-    // pixels), so the WRONG top=26 hypothesis (tried first) could get
-    // accepted whenever it happened to reconstruct the height within
-    // that huge margin -- e.g. a real single-frame 2x2 grid (top=0)
-    // whose height was only 26px off under the top=26 guess. Every crop
-    // then landed ~26px off from the real cells, and jsQR's whole-image
-    // fallback isn't reliable on a multi-code grid either, so decode
-    // failed completely, not just slower. When the hypothesis is
-    // actually right this reconstructs EXACTLY (cell/pad/rows are the
-    // same integers _compose_grid itself used) -- a couple of pixels of
-    // slack covers any real rounding, nothing close to rowH/2.
-    if (Math.abs(top + rows * rowH + pad - height) > 2) continue;
-    const boxes = [];
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const x = pad + c * (cell + pad);
-        const y = top + pad + r * rowH;
-        const left = Math.max(0, x - slack), upper = Math.max(0, y - slack);
-        const right = Math.min(width, x + cell + slack), lower = Math.min(height, y + cell + slack);
-        if (left < right && upper < lower) boxes.push([left, upper, right, lower]);
-      }
+
+  for (let cols = gridDim; cols >= 1; cols--) {
+    let cell = (width * 15) / (16 * cols + 1);
+    let pad = 12;
+    for (let i = 0; i < 4; i++) {
+      pad = Math.max(12, Math.floor(Math.floor(cell) / 15));
+      cell = (width - pad * (cols + 1)) / cols;
     }
-    if (boxes.length) return boxes;
+    cell = Math.round(cell);
+    pad = Math.max(12, Math.floor(cell / 15));
+    if (cell < 20) continue;
+
+    const rowH = cell + pad + labelH;
+    for (const top of [26, 0]) {
+      const rows = Math.round((height - top - pad) / rowH);
+      if (rows < 1) continue;
+      // Real bug found and fixed on the Python side too (balzar/qr.py's
+      // _tile_boxes): this used to compare against rowH/2 (hundreds of
+      // pixels), so the WRONG top=26 hypothesis (tried first) could get
+      // accepted whenever it happened to reconstruct the height within
+      // that huge margin -- e.g. a real single-frame 2x2 grid (top=0)
+      // whose height was only 26px off under the top=26 guess. Every crop
+      // then landed ~26px off from the real cells, and jsQR's whole-image
+      // fallback isn't reliable on a multi-code grid either, so decode
+      // failed completely, not just slower. When the hypothesis is
+      // actually right this reconstructs EXACTLY (cell/pad/rows are the
+      // same integers _compose_grid itself used) -- a couple of pixels of
+      // slack covers any real rounding, nothing close to rowH/2.
+      if (Math.abs(top + rows * rowH + pad - height) > 2) continue;
+      const boxes = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const x = pad + c * (cell + pad);
+          const y = top + pad + r * rowH;
+          const left = Math.max(0, x - slack), upper = Math.max(0, y - slack);
+          const right = Math.min(width, x + cell + slack), lower = Math.min(height, y + cell + slack);
+          if (left < right && upper < lower) boxes.push([left, upper, right, lower]);
+        }
+      }
+      if (boxes.length) return boxes;
+    }
   }
   return [];
 }

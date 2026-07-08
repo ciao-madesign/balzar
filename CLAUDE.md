@@ -3915,6 +3915,101 @@ rotto, `_decode_tiled` end-to-end), 3 in
 `tests/test_webapi.py::TestHandleQr` (nuovi campi nella risposta) —
 301 test totali.
 
+### 9.26 Matrici non complete: due bug reali distinti da una segnalazione utente, più una regressione auto-inflitta corretta nella stessa sessione
+
+Segnalazione diretta e concreta dell'utente, testata di persona sia
+sulla demo web sia sul solo trasporto QR (`trasporto-qr.html`): "le
+matrici non complete (esempio 10 code su 16 slot) provocano la non
+rilevazione dei qr code". Investigato prima di scrivere qualunque fix
+— si sono rivelati **due bug distinti**, entrambi reali, non uno solo,
+più una regressione che il fix del secondo ha introdotto e che è stata
+trovata e corretta nella stessa sessione.
+
+**Bug A — colonne assunte uguali a `grid_dim`, mai risolte.**
+`_tile_boxes`/`tileBoxes` assumevano `cols = grid_dim` incondizio-
+natamente, ma `_compose_grid` dispone davvero `len(images)` immagini a
+`cols = ceil(sqrt(len(images)))` — che scende SOTTO `grid_dim` non
+appena `n <= (grid_dim-1)**2` (es. 8 codici a `grid_dim=4` è un vero
+3×3, non 4×4). Con l'assunzione sbagliata, nessuna delle due ipotesi
+`top` riusciva a ricostruire l'altezza reale dell'immagine (più bassa
+di quella di una griglia 4×4 piena), quindi `_tile_boxes` falliva
+correttamente in modo esplicito (0 box) — ma il fallback whole-image
+di jsQR (`decodeAllViaMasking`, senza il multi-decode nativo di ZBar)
+falliva **anch'esso** su una griglia densa del genere: fallimento
+totale nel browser, non solo perdita dello speedup. Fix: `_tile_boxes`/
+`tileBoxes` ora cercano `cols` da `grid_dim` in giù fino a 1 (`grid_dim`
+tentato per primo, il caso comune), tenendo la prima combinazione
+`(cols, top)` che ricostruisce esattamente sia larghezza sia altezza.
+Verificato con misura diretta: payload forzato a esattamente 8 chunk,
+`_tile_boxes(..., grid_dim=4)` produce ora **9 box** (griglia 3×3
+reale, non 16), tutti e 8 i codici reali decodificati individualmente.
+
+**Bug B — coda vuota scartata per intero, non solo ignorata.**
+`_decode_tiled` richiedeva che **ogni singola cella**, incluse quelle
+genuinamente vuote oltre il numero reale di immagini, producesse un
+risultato. Per una segnalazione esatta come "10 di 16 slot" (10 codici
+reali a `grid_dim=4`: layout vero 4 colonne × 3 righe = 12 celle, le
+ultime 2 bianche senza alcun QR), questo è strutturalmente impossibile
+— la vecchia verifica di completezza scartava quindi SEMPRE un
+risultato tiled altrimenti perfetto, per qualunque frame parziale con
+una coda vuota. Fix: nuova verifica basata su un PREFISSO di hit/miss
+per cella (nello stesso ordine riga-maggiore in cui `_compose_grid`
+piazza le immagini) — una sequenza di successi reali seguita da una
+coda vuota è accettata (la coda vuota è la forma NORMALE di un ultimo
+frame parziale), mentre un successo che compare DOPO un fallimento fa
+scartare tutto il risultato (segno che la geometria è sbagliata, non
+solo che una cella è genuinamente vuota). Verificato: payload forzato
+a esattamente 10 chunk, `_tile_boxes(..., grid_dim=4)` produce **12
+box** (4×3 reale), `_decode_tiled` recupera ora tutti e 10 i chunk
+reali (prima: lista vuota, fallimento totale).
+
+**Regressione, auto-inflitta dal fix del Bug B, trovata ri-eseguendo la
+suite esistente — non ipotizzata.** `test_scan_image_bytes_grid_dim_hint_matches_default`
+ha iniziato a fallire con `PayloadError: not a balzar chunk (bad
+magic)`. Causa isolata con certezza, non solo sospettata: su un payload
+di test da 34 chunk decodificato a `grid_dim=6` (36 celle, 2 vuote in
+coda), la cella di indice 4 — una cella reale, non vuota — produce
+**due** risultati ZBar: uno `QRCODE` vero e uno spurio `DATABAR`
+(`b'0152941528732321'`), un artefatto di misdetection già documentato
+(ZBar può leggere per sbaglio un'altra simbologia di codice a barre nel
+margine di un ritaglio). Prima del fix del Bug B questo era invisibile:
+la vecchia verifica "tutte le celle devono avere un hit" falliva
+comunque sempre per qualunque frame parziale, quindi il chiamante
+ricadeva sempre sulla scansione whole-image (che non esibisce questo
+artefatto specifico del bordo di ritaglio). Una volta che `_decode_tiled`
+ha iniziato a riuscire anche su frame parziali, il suo loop di raccolta
+prendeva alla cieca **entrambi** i risultati di quella cella —
+compreso quello spurio non-QR — che poi falliva la verifica del magic
+byte di `assemble_chunks` a valle. Fix: `_decode_tiled` filtra ora
+`r.type == "QRCODE"` prima di qualunque cosa (sia il controllo
+hit/miss sia la raccolta finale) — un risultato non-QR non conta né
+come hit né come chunk valido. Applicato per coerenza/difesa anche al
+percorso whole-image di `scan_image_bytes` (stesso principio già usato
+da `LiveScanner.add`, che tollera già un chunk con magic byte sbagliato
+scartandolo silenziosamente) — verificato empiricamente che il
+percorso whole-image su questo stesso payload di test **non** riproduce
+lo spurio DATABAR (la scansione dell'immagine intera, senza ritaglio,
+resta a 34/34 `QRCODE` puliti), quindi il filtro lì è difensivo,
+non la correzione di un fallimento osservato.
+
+**Lato JS**: nessun fix equivalente necessario per il filtro di tipo —
+`jsQR` decodifica solo QR code, non può mai restituire un risultato di
+un'altra simbologia come DATABAR (a differenza di ZBar, multi-
+simbologia nativa). `tileBoxes` aveva già la stessa ricerca di `cols`
+del Bug A applicata in questa sessione; `decodeAllInImage` non ha mai
+avuto bisogno del fix del Bug B: il suo design "tieni sempre il
+risultato tiled parziale, non scartarlo" (già esistente per il limite
+di affidabilità per-crop di jsQR, §2.4f/§2.4i) gestiva già la coda
+vuota correttamente per costruzione — confermato con misura diretta
+(10/10 e 8/8 trovati via browser reale con fotocamera fittizia).
+
+Test aggiunti in `tests/test_qr.py::TestParallelTileDecoding`: 3 nuovi
+(`test_tile_boxes_solves_fewer_columns_for_a_sparse_partial_frame`,
+`test_decode_tiled_recovers_a_partial_frame_with_a_blank_tail`,
+`test_decode_tiled_drops_spurious_non_qr_symbology_matches` — quest'ultimo
+riproduce esattamente il payload/`grid_dim` della regressione, non un
+caso generico) — 316 test totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
