@@ -167,6 +167,14 @@ function base64ToBytes(b64) {
 function setupQrButton(prefix, getPayloadBase64) {
   const btn = document.getElementById(`${prefix}-gen-qr-btn`);
   const modeSelect = document.getElementById(`${prefix}-qr-mode`);
+  // Optional: only present on the "Apri programma" (Balzar Live) QR
+  // blocks -- absent everywhere else, so this stays a no-op for the
+  // other 5 tabs (grid_dim stays hardcoded at 4 for them, unchanged).
+  // grid_dim=1 is the only value ContinuousQrScanner (qr-camera-scanner.js)
+  // can reliably read continuously from a live camera (CLAUDE.md §2.4g);
+  // forcing mode=gif alongside it isn't optional -- "pages"/"single" at
+  // grid_dim=1 would just be a slower sequence with no auto-play benefit.
+  const continuousCheckbox = document.getElementById(`${prefix}-qr-continuous`);
   const resultEl = document.getElementById(`${prefix}-qr-result`);
   const imgEl = document.getElementById(`${prefix}-qr-img`);
   const pagesEl = document.getElementById(`${prefix}-qr-pages`);
@@ -182,7 +190,9 @@ function setupQrButton(prefix, getPayloadBase64) {
       noteEl.classList.add("error");
       return;
     }
-    const mode = modeSelect.value;
+    const continuous = !!(continuousCheckbox && continuousCheckbox.checked);
+    const mode = continuous ? "gif" : modeSelect.value;
+    const gridDim = continuous ? 1 : 4;
     const originalLabel = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Genero…";
@@ -194,7 +204,7 @@ function setupQrButton(prefix, getPayloadBase64) {
       const res = await fetch("/api/qr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload_base64: payloadB64, mode, grid_dim: 4 }),
+        body: JSON.stringify({ payload_base64: payloadB64, mode, grid_dim: gridDim }),
       });
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || "errore sconosciuto");
@@ -1420,24 +1430,21 @@ function setOpenStatus(msg, isError) {
   openStatusEl.classList.toggle("error", !!isError);
 }
 
-async function handleOpenFile(file) {
+// Shared by both ways of getting bytes into Balzar Live: a local file
+// upload (handleOpenFile below) and a QR sequence reconstructed
+// client-side (handleOpenScanBytes, further down) -- /api/render's
+// magic-byte dispatch (BZR1/BZM1/BZX1) doesn't care how the bytes
+// arrived, so neither does this function.
+async function handleOpenData(dataB64, label) {
   openResultEl.hidden = true;
   open3dResultEl.hidden = true;
   openDocsResultEl.hidden = true;
-  setOpenStatus(`Apertura di "${file.name}" in corso…`);
+  setOpenStatus(`Apertura di ${label} in corso…`);
   try {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
-    const data = dataUrl.split(",", 2)[1];
-
     const res = await fetch("/api/render", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data }),
+      body: JSON.stringify({ data: dataB64 }),
     });
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || "errore sconosciuto");
@@ -1454,7 +1461,22 @@ async function handleOpenFile(file) {
       lastOpenResult = json;
       renderOpenResult(json);
     }
-    setOpenStatus(`Fatto: ${file.name}`);
+    setOpenStatus(`Fatto: ${label}`);
+  } catch (err) {
+    setOpenStatus("Errore: " + err.message, true);
+  }
+}
+
+async function handleOpenFile(file) {
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    const data = dataUrl.split(",", 2)[1];
+    await handleOpenData(data, `"${file.name}"`);
   } catch (err) {
     setOpenStatus("Errore: " + err.message, true);
   }
@@ -1559,3 +1581,180 @@ openDlSvg.addEventListener("click", () => {
 setupQrButton("open", () => (lastOpenResult && !lastOpenResult.payload_omitted) ? lastOpenResult.payload_base64 : null);
 setupQrButton("open-3d", () => (lastOpen3dResult && !lastOpen3dResult.payload_omitted) ? lastOpen3dResult.payload_base64 : null);
 setupQrButton("open-docs", () => (lastOpenDocsResult && !lastOpenDocsResult.payload_omitted) ? lastOpenDocsResult.payload_base64 : null);
+
+// ------------------------------------- carica un file / scansiona QR (Balzar Live)
+// Two ways to get bytes for handleOpenData: a local file (handleOpenFile,
+// above) or a QR sequence reconstructed client-side via qr-transport-core.js/
+// qr-camera-scanner.js (loaded in <head>, same pattern already proven in
+// trasporto-qr.js) -- /api/render's magic-byte dispatch doesn't care which.
+
+const openLoadModeRadios = document.querySelectorAll('input[name="open-load-mode"]');
+const openScanSection = document.getElementById("open-scan-section");
+const openScanModeRadios = document.querySelectorAll('input[name="open-scan-mode"]');
+const openScanManualSection = document.getElementById("open-scan-manual-section");
+const openScanContinuousSection = document.getElementById("open-scan-continuous-section");
+const openScanGridDim = document.getElementById("open-scan-grid-dim");
+const openScanDrop = document.getElementById("open-scan-drop");
+const openScanFileInput = document.getElementById("open-scan-file-input");
+const openScanBrowseBtn = document.getElementById("open-scan-browse-btn");
+const openScanFileList = document.getElementById("open-scan-file-list");
+const openScanStatusEl = document.getElementById("open-scan-status");
+const openScanCameraVideo = document.getElementById("open-scan-camera-video");
+const openScanCameraProgress = document.getElementById("open-scan-camera-progress");
+const openScanCameraStartBtn = document.getElementById("open-scan-camera-start-btn");
+const openScanCameraStopBtn = document.getElementById("open-scan-camera-stop-btn");
+
+// Shared across BOTH manual and continuous acquisition, so a chunk the
+// camera can't get can be covered by one manual photo and vice versa,
+// same principle as trasporto-qr.js's decode section.
+let openScanScanner = new LiveScanner();
+let openScanCamScanner = null;
+
+function stopOpenScanCamera() {
+  if (openScanCamScanner) {
+    openScanCamScanner.stop();
+    openScanCamScanner = null;
+  }
+  openScanCameraStartBtn.hidden = false;
+  openScanCameraStopBtn.hidden = true;
+}
+
+function resetOpenScan() {
+  stopOpenScanCamera();
+  openScanScanner = new LiveScanner();
+  openScanFileList.innerHTML = "";
+  openScanStatusEl.classList.remove("error");
+  openScanStatusEl.textContent = "";
+  openScanCameraProgress.classList.remove("active");
+  openScanCameraProgress.textContent = "Fotocamera non avviata.";
+}
+
+function updateOpenLoadModeUI() {
+  const scan = document.querySelector('input[name="open-load-mode"]:checked').value === "scan";
+  openDrop.hidden = scan;
+  openScanSection.hidden = !scan;
+  if (!scan) stopOpenScanCamera();
+}
+openLoadModeRadios.forEach(r => r.addEventListener("change", updateOpenLoadModeUI));
+updateOpenLoadModeUI();
+
+function updateOpenScanModeUI() {
+  const continuous = document.querySelector('input[name="open-scan-mode"]:checked').value === "continuous";
+  openScanManualSection.hidden = continuous;
+  openScanContinuousSection.hidden = !continuous;
+  if (!continuous) stopOpenScanCamera();
+}
+openScanModeRadios.forEach(r => r.addEventListener("change", updateOpenScanModeUI));
+updateOpenScanModeUI();
+
+async function handleOpenScanBytes(bytes, label) {
+  resetOpenScan();
+  await handleOpenData(bytesToB64(bytes), label);
+}
+
+openScanBrowseBtn.addEventListener("click", () => openScanFileInput.click());
+openScanFileInput.addEventListener("change", () => {
+  addOpenScanImages(Array.from(openScanFileInput.files));
+  openScanFileInput.value = "";
+});
+["dragover", "dragleave", "drop"].forEach(evt => {
+  openScanDrop.addEventListener(evt, e => {
+    e.preventDefault();
+    openScanDrop.classList.toggle("dragover", evt === "dragover");
+  });
+});
+openScanDrop.addEventListener("drop", e => addOpenScanImages(Array.from(e.dataTransfer.files)));
+
+async function addOpenScanImages(files) {
+  const gridDim = parseInt(openScanGridDim.value, 10);
+  for (const file of files) {
+    const li = document.createElement("li");
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "file-name";
+    nameSpan.textContent = file.name;
+    li.appendChild(nameSpan);
+    openScanFileList.appendChild(li);
+
+    try {
+      const imgData = await loadImageData(file);
+      const texts = decodeAllInImage(imgData, gridDim);
+      let addedHere = 0;
+      for (const text of texts) {
+        const r = openScanScanner.addDecodedText(text);
+        if (r.added) addedHere++;
+      }
+      nameSpan.textContent = `${file.name} — ${texts.length} QR trovati, ${addedHere} nuovi capitoli`;
+      if (texts.length === 0) {
+        nameSpan.textContent += " (nessun QR riconosciuto: controlla la griglia impostata sopra)";
+      }
+    } catch (e) {
+      nameSpan.textContent = `${file.name} — errore: ${e.message}`;
+      openScanStatusEl.classList.add("error");
+      openScanStatusEl.textContent = "Errore leggendo " + file.name + ": " + e.message;
+      continue;
+    }
+
+    const st = openScanScanner.status();
+    if (st.total === null) {
+      openScanStatusEl.classList.remove("error");
+      openScanStatusEl.textContent = "Nessun capitolo BZC1 riconosciuto finora.";
+    } else if (st.complete) {
+      openScanStatusEl.classList.remove("error");
+      openScanStatusEl.textContent = `Completo: ${st.total}/${st.total} capitoli, apertura in corso…`;
+      await handleOpenScanBytes(openScanScanner.result(), "sequenza scansionata");
+      return;
+    } else {
+      openScanStatusEl.classList.remove("error");
+      openScanStatusEl.textContent = `${st.have}/${st.total} capitoli letti — mancano ` +
+        `${st.missing.length}. Aggiungi altre foto/pagine.`;
+    }
+  }
+}
+
+openScanCameraStartBtn.addEventListener("click", async () => {
+  openScanCameraStartBtn.hidden = true;
+  openScanCameraProgress.classList.add("active");
+  openScanCameraProgress.textContent = "Richiesta permesso fotocamera...";
+  // onFrameSample fires once per decode attempt, BEFORE onProgress in the
+  // same tick (qr-camera-scanner.js) -- captured here so onProgress can
+  // fold it into the same message, same pattern as trasporto-qr.js.
+  let lastFrameSampleCount = null;
+  openScanCamScanner = new ContinuousQrScanner({
+    video: openScanCameraVideo,
+    gridDim: 1,
+    scanner: openScanScanner,
+    onProgress: (st) => {
+      if (st.complete) {
+        openScanCameraProgress.textContent = `Completo: ${st.total}/${st.total} capitoli letti.`;
+        return;
+      }
+      const missingTxt = st.missing ? `mancano ${st.missing.length}` : "in attesa del primo QR";
+      const hint = lastFrameSampleCount === 0
+        ? " (nessun QR in questa inquadratura, avvicina/allontana la fotocamera)" : "";
+      openScanCameraProgress.textContent =
+        `${st.have}/${st.total || "?"} capitoli letti — ${missingTxt}.${hint}`;
+    },
+    onFrameSample: (n) => { lastFrameSampleCount = n; },
+    onError: (e) => {
+      openScanStatusEl.classList.add("error");
+      openScanStatusEl.textContent = "Errore fotocamera: " + (e && e.message ? e.message : String(e));
+    },
+    onComplete: async (bytes) => {
+      stopOpenScanCamera();
+      await handleOpenScanBytes(bytes, "sequenza acquisita con la fotocamera");
+    },
+  });
+  try {
+    await openScanCamScanner.start();
+    openScanCameraStopBtn.hidden = false;
+  } catch (e) {
+    openScanCameraStartBtn.hidden = false;
+    openScanCameraProgress.classList.remove("active");
+    openScanCameraProgress.textContent = "Fotocamera non avviata: " + (e && e.message ? e.message : String(e));
+  }
+});
+
+openScanCameraStopBtn.addEventListener("click", () => {
+  stopOpenScanCamera();
+  openScanCameraProgress.textContent = "Fotocamera fermata manualmente.";
+});

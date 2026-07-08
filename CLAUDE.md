@@ -943,6 +943,71 @@ quel toggle non correlato. Rinominato in `.qr-mode-picker`, verificato
 con `grep` che nessun'altra collisione di nome esiste per le classi
 nuove (`.mode-option`, `.mode-pro-con`).
 
+### 2.4j Acquisizione continua estesa a Balzar Live (tab "Apri programma")
+
+Seguito diretto di §2.4i: `trasporto-qr.html` (trasporto di byte
+grezzi arbitrari) aveva già la scelta esplicita generazione/lettura
+tra griglie dense e GIF per acquisizione continua; Balzar Live (il tab
+"Apri programma" di `index.html`, quello che apre `.bzr`/`.b3d`/`.bzx`
+tramite `/api/render`) no — un file scaricato da lì poteva essere
+riaperto solo caricandolo di nuovo da disco, mai ricostruendolo da una
+sequenza QR fotografata/ripresa dalla fotocamera. Stesso motore
+(`jsQR.min.js`/`qr-transport-core.js`/`qr-camera-scanner.js`, già
+vendorizzati e provati in §2.4d-§2.4h), nessun codice di decodifica
+nuovo — solo wiring DOM e refactoring per riusarlo su una terza
+pagina.
+
+**Generazione**: ogni bottone "genera QR" già esistente su Balzar Live
+(i tre blocchi `open`/`open-3d`/`open-docs` in `index.html`) guadagna
+lo stesso checkbox "ottimizza per acquisizione continua" già visto in
+`trasporto-qr.html` — se spuntato, `setupQrButton` (`app.js`) forza
+`mode="gif"` e `grid_dim=1` indipendentemente da cosa mostri il
+`<select>` esistente (che resta invariato e disponibile per l'altra
+modalità, esattamente come in §2.4i).
+
+**Lettura**: nuova sezione "Carica un file / Scansiona una sequenza
+QR" prima della dropzone esistente, con lo stesso doppio livello di
+scelta di `trasporto-qr.html` (foto multiple vs fotocamera continua).
+Refactoring necessario per riusarla pulitamente: `handleOpenFile`
+(che faceva sia la lettura del File sia la POST a `/api/render`) è
+stato diviso in `handleOpenData(dataB64, label)` — la parte condivisa,
+POST + dispatch su `json.kind` (2d/3d/bundle) — e un `handleOpenFile`
+ridotto a un thin wrapper FileReader-based. Una nuova
+`handleOpenScanBytes(bytes, label)` riusa `handleOpenData` esattamente
+allo stesso modo per i byte ricostruiti da una sequenza QR: `/api/render`
+tratta i byte come byte, indipendentemente da come sono arrivati.
+`LiveScanner` è condivisa tra le due modalità di lettura (foto manuali
+e fotocamera continua, tramite `opts.scanner` su `ContinuousQrScanner`,
+già supportato da §2.4i) — un capitolo mancato dalla fotocamera si può
+coprire con una foto manuale e viceversa.
+
+**Verificato con Playwright contro un devserver locale reale** (stessa
+metodologia già nota, non contro Vercel): toggle mostra/nasconde le
+sezioni giuste; upload normale di file (nessuna regressione); checkbox
+"acquisizione continua" forza davvero `mode=gif`/`grid_dim=1` nella
+richiesta reale a `/api/qr` (intercettata e verificata, non assunta);
+lettura manuale — payload aperto → pagine QR `grid_dim=2` generate →
+le stesse pagine ricaricate **in ordine invertito** tramite il file
+picker reale → file riaperto automaticamente, stessa identica
+`stats` di prima; lettura continua — sequenza `grid_dim=1` reale
+(5 pagine) mostrata a una fotocamera fittizia (`--use-file-for-fake-
+video-capture`, stessa tecnica di §2.4g/§2.4h) → file aperto **con
+zero tocchi dell'operatore**, testo del programma decodificato
+verificato carattere per carattere (non solo la dimensione).
+
+Bug reali trovati e corretti, non nel codice del progetto ma nello
+script di verifica stesso — entrambi bug della sintassi Playwright/DSL
+dello script, non del prodotto: sintassi DSL non valida nel fixture di
+test (`PALETTE 0=0,0,0 ...` invece del vero `PALETTE i=0 rgb=#...`, un
+formato chiave=valore per riga); `Request.post_data` è una proprietà
+in questa versione di Playwright, non un metodo (`req.post_data`, non
+`req.post_data()`). Nessun bug trovato nel codice di produzione durante
+questa verifica.
+
+Suite Python invariata (nessuna riga JS è testata da `unittest`, per
+costruzione — stesso principio già seguito per il resto della UI QR/3D
+di questo progetto): 315 test, tutti verdi.
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non

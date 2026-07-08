@@ -6,6 +6,9 @@
 <title>balzar — encoder deterministico</title>
 <link rel="stylesheet" href="style.css">
 <script src="model-viewer.min.js"></script>
+<script src="jsQR.min.js"></script>
+<script src="qr-transport-core.js"></script>
+<script src="qr-camera-scanner.js"></script>
 </head>
 <body>
   <header>
@@ -441,10 +444,82 @@
         base; un <code>.bzx</code> apre 3D (se presente) + ricerca allarmi + indice documenti,
         tutto insieme.</p>
 
+      <fieldset class="qr-mode-picker" id="open-load-mode-fieldset">
+        <legend>Vuoi caricare un file o scansionare una sequenza QR?</legend>
+        <label class="mode-option">
+          <input type="radio" name="open-load-mode" value="file" checked>
+          <span>
+            <strong>Carica un file</strong>
+            <span class="mode-pro-con">Il modo più diretto se il file è già sul dispositivo.</span>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="open-load-mode" value="scan">
+          <span>
+            <strong>Scansiona una sequenza QR</strong>
+            <span class="mode-pro-con">Ricostruisce il file da una foto/fotocamera senza averlo già
+              sul dispositivo — utile se arriva da un'etichetta fisica o da uno schermo altrui.</span>
+          </span>
+        </label>
+      </fieldset>
+
       <section id="open-drop" class="dropzone">
         <input type="file" id="open-file-input" accept=".bzr,.bzp,.b3d,.bzx,text/plain" hidden>
         <p>Trascina un file <code>.bzr</code>/<code>.bzp</code>/<code>.b3d</code>/<code>.bzx</code>
           qui, oppure <button id="open-browse-btn" type="button">scegli un file</button></p>
+      </section>
+
+      <section id="open-scan-section" hidden>
+        <fieldset class="qr-mode-picker" id="open-scan-mode-fieldset">
+          <legend>Come vuoi acquisire?</legend>
+          <label class="mode-option">
+            <input type="radio" name="open-scan-mode" value="manual" checked>
+            <span>
+              <strong>Foto multiple (comando dell'operatore)</strong>
+              <span class="mode-pro-con">Pro: funziona con qualunque griglia, anche densa. Contro:
+                scatti/carichi tu ogni foto, una alla volta.</span>
+            </span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="open-scan-mode" value="continuous">
+            <span>
+              <strong>Acquisizione continua (fotocamera)</strong>
+              <span class="mode-pro-con">Pro: zero tocchi, si apre da sola a lettura completata.
+                Contro: solo per sequenze generate con "acquisizione continua" (griglia 1×1, vedi
+                sopra il flag nel generatore QR).</span>
+            </span>
+          </label>
+        </fieldset>
+
+        <section id="open-scan-manual-section">
+          <label class="dim-picker">
+            QR per immagine (deve corrispondere a come è stata generata)
+            <select id="open-scan-grid-dim">
+              <option value="1">1 (nessuna griglia, un QR/immagine)</option>
+              <option value="2">2×2 = 4</option>
+              <option value="4" selected>4×4 = 16</option>
+              <option value="8">8×8 = 64</option>
+            </select>
+          </label>
+          <section id="open-scan-drop" class="dropzone">
+            <input type="file" id="open-scan-file-input" accept="image/*" capture="environment" multiple hidden>
+            <p>Trascina una o più foto/pagine qui, oppure
+              <button id="open-scan-browse-btn" type="button">scegli foto</button></p>
+          </section>
+          <ul id="open-scan-file-list" class="file-list"></ul>
+        </section>
+
+        <section id="open-scan-continuous-section" class="camera-view" hidden>
+          <p class="honesty">Richiede il permesso di usare la fotocamera. Inquadra la sequenza (uno
+            schermo che riproduce la GIF generata sopra) e tienila ferma: la lettura si completa da
+            sola, poi il file si apre automaticamente.</p>
+          <video id="open-scan-camera-video" autoplay muted playsinline></video>
+          <p id="open-scan-camera-progress" class="camera-progress">Fotocamera non avviata.</p>
+          <button id="open-scan-camera-start-btn" type="button">Avvia fotocamera</button>
+          <button id="open-scan-camera-stop-btn" type="button" hidden>Ferma fotocamera</button>
+        </section>
+
+        <p id="open-scan-status" class="status"></p>
       </section>
 
       <section id="open-status" class="status" hidden></section>
@@ -470,6 +545,11 @@
               <option value="gif">Sequenza QR — GIF animata</option>
               <option value="pages">Sequenza QR — pagine PNG</option>
             </select>
+          </label>
+          <label class="dim-picker">
+            <input type="checkbox" id="open-qr-continuous">
+            ottimizza per acquisizione continua (fotocamera) — forza GIF a griglia 1×1, una
+            sequenza più lunga ma leggibile da sola senza toccare nulla (leggila qui sotto)
           </label>
           <button id="open-gen-qr-btn" type="button">genera QR</button>
         </div>
@@ -527,6 +607,10 @@
               <option value="pages">Sequenza QR — pagine PNG</option>
             </select>
           </label>
+          <label class="dim-picker">
+            <input type="checkbox" id="open-3d-qr-continuous">
+            ottimizza per acquisizione continua (fotocamera) — forza GIF a griglia 1×1
+          </label>
           <button id="open-3d-gen-qr-btn" type="button">genera QR</button>
         </div>
         <div id="open-3d-qr-result" class="qr-block" hidden>
@@ -552,6 +636,10 @@
               <option value="gif">Sequenza QR — GIF animata</option>
               <option value="pages">Sequenza QR — pagine PNG</option>
             </select>
+          </label>
+          <label class="dim-picker">
+            <input type="checkbox" id="open-docs-qr-continuous">
+            ottimizza per acquisizione continua (fotocamera) — forza GIF a griglia 1×1
           </label>
           <button id="open-docs-gen-qr-btn" type="button">genera QR</button>
         </div>
