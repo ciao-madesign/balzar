@@ -16,36 +16,68 @@
 // reimplemented here.
 //
 // Throttling, not a fixed frame rate: jsQR decode (tiled crops +
-// decodeAllViaMasking fallback) is synchronous JS work that can take
-// anywhere from a few ms to a few hundred ms depending on image size and
-// how many codes are found. Driving decode attempts off requestAnimationFrame
-// directly (as fast as the display refreshes, ~60/s) would pile up
-// overlapping decode calls and starve the browser's render/input loop. A
-// `busy` guard plus a minimum-interval throttle (default 350ms, i.e. up to
-// ~2.9 decode attempts/s) keeps the UI responsive while still sampling
-// often enough to catch a screen cycling frames every ~1.5s multiple times.
+// decodeAllViaMasking fallback) is synchronous JS work. Driving decode
+// attempts off requestAnimationFrame directly (as fast as the display
+// refreshes, ~60/s) would pile up overlapping decode calls and starve the
+// browser's render/input loop. A `busy` guard plus a minimum-interval
+// throttle (default 60ms, effectively a floor -- see below, decode
+// latency itself ends up setting the real pace) keeps the UI responsive
+// while sampling as often as the decode cost allows.
 //
 // gridDim=1 is the ONLY grid_dim this class is realistically usable with,
 // and callers generating the QR sequence for continuous camera capture
 // MUST use grid_dim=1 -- this is a real, measured constraint, not a
-// conservative default. jsQR needs roughly 700-1100px of PIXEL WIDTH per
-// individual QR code to decode reliably (non-monotonic near ~800-1000px:
-// specific sizes in that band can fail while both smaller and larger
-// sizes succeed, a resize/antialiasing artifact, not a smooth falloff).
-// A live camera pointed at a screen/page from a normal working distance
-// delivers nowhere near the ~3800-4700px of frame width a grid_dim=4
-// grid needs for every one of its 16 codes to individually clear that
-// threshold (that number IS achievable for a static, deliberately-framed
-// PHOTO -- see balzar/qr.py's own grid_dim=4 default for the desktop
-// photo-scan/print use case -- but not for a live, continuously-panning
-// capture). Measured end to end with a real getUserMedia() call (fed by
-// Chromium's fake-video-capture device pointed at a real grid_dim=1 QR
-// sequence, not a mock): a screen cycling 5 pages at 1.5s/page, 1920x1080
-// capture, scanned start to finish in ~6.3s across 3 repeated runs, every
-// one of 20 decode attempts finding exactly 1 QR code, zero errors,
-// bit-identical reassembly. See CLAUDE.md §2.4g for the full calibration
-// writeup, including the grid_dim=2/4 resolution sweeps that ruled them
-// out for this delivery mode.
+// conservative default. jsQR needs roughly 1000-1200px of PIXEL WIDTH per
+// individual QR code to decode reliably, with a content-dependent
+// unreliable band somewhere around 700-1000px (which specific pixel
+// widths fail is NOT a fixed rule -- it shifts with the QR's own data,
+// confirmed by testing the identical resize sweep against two different
+// payloads and getting different failure points each time; treat
+// anything under ~1050px as unreliable, not just a documented magic
+// range). A live camera pointed at a screen/page from a normal working
+// distance delivers nowhere near the ~3800-4700px of frame width a
+// grid_dim=4 grid needs for every one of its 16 codes to individually
+// clear that threshold (that number IS achievable for a static,
+// deliberately-framed PHOTO -- see balzar/qr.py's own grid_dim=4 default
+// for the desktop photo-scan/print use case -- but not for a live,
+// continuously-panning capture).
+//
+// Default capture resolution (idealWidth/idealHeight = 1280x1152, not
+// 1920x1080) and default intervalMs (60, not 350) were both revised after
+// measuring, not guessed:
+//  - jsQR decode latency scales with total pixels scanned, not just
+//    per-code size: the SAME single-QR decode took ~660ms median at
+//    1920x1080 vs ~200ms median at 1280x1152 -- a >3x speed difference
+//    from capture resolution alone, before touching intervalMs at all.
+//  - 1280x960 (the "obvious" 4:3 choice) was tried first and measured
+//    WORSE than the square-ish 1280x1152: balzar's grid_dim=1 pages are
+//    close to square, so fitting them into a 960px-tall frame with
+//    reasonable margin (0.95x) pushed the code down to ~880-920px --
+//    squarely in the unreliable band above -- while the SAME pages fit
+//    into 1280x1152 land at ~1050-1170px, comfortably clear of it. This
+//    was found by testing all 5 pages of a real payload, not just page 0
+//    (which happened to be a size that decoded fine at 960px, masking
+//    the problem on a single-page smoke test).
+//  - intervalMs's job changes once decode is this fast: at ~200ms/decode
+//    and a `busy` guard, the decode latency itself becomes the real pace
+//    -setter, not the interval gate. 60ms is a floor against a
+//    hypothetically instant decode, not the expected cadence.
+//
+// Net effect, measured end to end with a real getUserMedia() call (fed
+// by Chromium's fake-video-capture device pointed at a real grid_dim=1
+// QR sequence, not a mock): a 5-page sequence scans in ~6.3s at the
+// original 1.5s/page display rate, but the SAME 5 pages scan in ~1.7-1.8s
+// (~3.6x faster) once the page-display duration is also lowered to match
+// the faster decode -- confirmed reliable at 0.5s/page (~2.3s total) down
+// to a 0.25s/page floor (limited by this session's Y4M test-harness frame
+// granularity, not by the scanner itself). Recommended page-display
+// duration for whatever generates the auto-cycling sequence (GIF/JS
+// slideshow) is ~0.5s: fast, with margin for 2+ real decode attempts to
+// land inside each page's window (0.25s leaves only one attempt's worth
+// of margin, fine in a synthetic test with zero timing jitter, riskier
+// on a real display + camera pair). See CLAUDE.md §2.4g/§2.4h for the
+// full calibration writeup and the grid_dim=2/4 resolution sweeps that
+// ruled those out for this delivery mode entirely.
 
 class ContinuousQrScanner {
   constructor(opts) {
@@ -55,7 +87,9 @@ class ContinuousQrScanner {
 
     this.video = opts.video;
     this.gridDim = opts.gridDim;
-    this.intervalMs = opts.intervalMs || 350;
+    this.intervalMs = opts.intervalMs !== undefined ? opts.intervalMs : 60;
+    this.idealWidth = opts.idealWidth || 1280;
+    this.idealHeight = opts.idealHeight || 1152;
     this.onProgress = opts.onProgress || (() => {});
     this.onComplete = opts.onComplete;
     this.onError = opts.onError || (() => {});
@@ -87,8 +121,8 @@ class ContinuousQrScanner {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width: { ideal: this.idealWidth },
+          height: { ideal: this.idealHeight },
         },
         audio: false,
       });

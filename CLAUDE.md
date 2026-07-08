@@ -724,6 +724,118 @@ su come la generazione della sequenza QR lato encoding debba esporre
 parametro esplicito sull'esistente? nuovo default solo per questo
 flusso?).
 
+### 2.4h Frequenza di acquisizione: da 6,3s a ~1,7-2,3s per la stessa sequenza, misurando due leve indipendenti
+
+Domanda diretta di sessione, seguito naturale di §2.4g: dato che
+`grid_dim=1` è obbligatorio per la fotocamera (una sola pagina per QR,
+molte più pagine della griglia desktop), si può almeno alzare la
+frequenza di acquisizione per accorciare il tempo totale? Risposta
+misurata, non stimata: **sì, e il collo di bottiglia non era
+l'intervallo di polling** (`intervalMs`, già a 350ms) ma la
+**risoluzione di cattura richiesta** — due leve distinte, entrambe
+misurate separatamente prima di combinarle.
+
+**Leva 1 — risoluzione di cattura**: `ContinuousQrScanner` chiedeva
+1920×1080 di default. Misurato il costo reale di `decodeAllInImage` su
+un singolo QR a diverse risoluzioni (stesso codice, stesso contenuto):
+
+| Larghezza richiesta | Latenza decodifica (mediana) |
+|---|---|
+| 1920px | ~660ms |
+| 1600px | ~460ms |
+| 1280px | ~260ms |
+| 1080px | ~200ms |
+| 800px | ~135ms |
+
+Il costo di jsQR scala con il numero totale di pixel scansionati, non
+solo con la dimensione del singolo codice — richiedere una risoluzione
+inferiore (ma sempre sopra la soglia di affidabilità, §2.4g) accelera
+la decodifica **prima ancora** di toccare l'intervallo di polling.
+
+**Leva 2 — aspect ratio della richiesta camera**: qui un bug reale,
+non solo un'ottimizzazione. Il primo tentativo ha richiesto 1280×960
+(il classico 4:3) — sembrava ragionevole, ma le pagine `grid_dim=1` di
+balzar sono quasi quadrate (es. 1230×1278): adattarle con margine
+(0,95×) dentro un'altezza di soli 960px comprime il codice a
+~880-920px, **esattamente nella fascia inaffidabile** già documentata
+in §2.4g. Scoperto testando **tutte e 5 le pagine** di un payload reale
+(non solo la pagina 0, che per caso aveva una dimensione che a 960px
+decodificava comunque bene, mascherando il problema in uno smoke test
+a una sola pagina): 4 pagine su 5 fallivano sistematicamente a 1280×960.
+Corretto passando a **1280×1152** (quasi quadrato, come il contenuto):
+le stesse pagine finiscono a ~1050-1170px, **5/5 affidabile**, e persino
+più veloce (meno pixel totali di 1280×1280). Nuovo default:
+`idealWidth=1280, idealHeight=1152` (parametrizzabile via
+`opts.idealWidth`/`opts.idealHeight`).
+
+**Effetto combinato su `intervalMs`**: con la decodifica a ~200-260ms
+invece di ~660ms, il vero limitatore di cadenza diventa la latenza di
+decodifica stessa (la guardia `busy` impedisce comunque sovrapposizioni)
+— l'intervallo minimo non serve più a rallentare deliberatamente, serve
+solo da pavimento di sicurezza. Default abbassato da 350ms a **60ms**.
+
+**Misurato end-to-end con una fotocamera reale** (stessa metodologia di
+§2.4g, Chromium `--use-file-for-fake-video-capture` su un video Y4M che
+cicla pagine QR reali), sullo stesso payload di test a 5 pagine:
+
+| Durata per pagina | Tempo totale di scansione |
+|---|---|
+| 1,5s (originale) | ~6,3s |
+| 1,0s | ~4,45s |
+| 0,75s | ~3,23s |
+| 0,5s | ~2,33s |
+| 0,25s (pavimento del banco di test) | ~1,7-1,8s |
+
+**~3,6× più veloce** passando da 1,5s/pagina (l'originale) a 0,5s/pagina,
+con margine per 2+ tentativi di decodifica reali dentro la finestra di
+ogni pagina — la raccomandazione per chi genera la sequenza a
+ciclo-automatico (GIF/slideshow JS) è **0,5s/pagina**, non 0,25s: quel
+pavimento è un artefatto della granularità a 4fps del banco di prova
+Y4M di questa sessione (Chromium non onora in modo affidabile un F più
+alto nell'header Y4M — misurato direttamente: la stessa struttura a 6
+frame/pagina dichiarata a F20:1 invece di F4:1 si è bloccata a metà
+sequenza per 8+ secondi reali, un artefatto del dispositivo/banco di
+prova, non una velocità raggiungibile davvero), non un limite del
+componente stesso — su un display reale 0,5s ha comunque margine di
+sicurezza contro il jitter di temporizzazione che un test sintetico non
+ha.
+
+**Onestà sul confronto con `grid_dim=4` ("con le matrici era molto più
+veloce")**: vero, e resta vero anche dopo questa ottimizzazione — 16
+codici per foto contro 1 è una differenza strutturale di un ordine di
+grandezza che nessuna ottimizzazione di frequenza cancella. Quello che
+questa sessione ha fatto è **restringere il divario**, non eliminarlo:
+un payload da 109 capitoli (lo stesso benchmark di §9.10) richiederebbe
+109 pagine invece di 7 fotogrammi da 16 — ma a 0,5s/pagina invece di
+1,5s, il tempo di sola visualizzazione scende da ~164s a ~55s, lo stesso
+ordine di grandezza della pipeline `grid_dim=4` completa (foto+lettura,
+~29-44s misurati in §2.4b/§9.10) invece di 3× più lento. Il vantaggio
+reale di `grid_dim=1` non è la velocità (che resta strutturalmente
+inferiore) ma **zero tocchi dell'operatore e nessuna necessità di
+inquadrare l'intera griglia a distanza fissa** — un compromesso
+esplicito, non un pareggio.
+
+**Un miss deterministico trovato ripetendo il test con un payload più
+grande (27 capitoli, seed fisso)**: la scansione si è fermata a 27/28
+capitoli, sempre sullo stesso capitolo, riproducibile su 3 run
+consecutivi. **Non è un bug nuovo**: è lo stesso limite di affidabilità
+per-crop di jsQR già documentato in §2.4f/§2.4g (jsQR manca
+occasionalmente un crop altrimenti valido), reso deterministico solo
+dal fatto che il video di test sintetico ripete fotogrammi
+bit-identici a ogni giro di loop — una fotocamera reale ha invece
+micro-variazioni naturali (autofocus, tremore della mano, luce) che
+danno un "secondo tiro di dadi" a ogni tentativo, esattamente il
+meccanismo per cui l'acquisizione continua (molti tentativi nel tempo)
+è più robusta di una singola foto statica, non riproducibile in un
+banco di prova a fotogrammi identici.
+
+Nessuna modifica a `qr-transport-core.js` in questa sessione — solo
+`qr-camera-scanner.js` (nuovi default `idealWidth`/`idealHeight`/
+`intervalMs`, documentati nel commento di testata del file con gli
+stessi numeri sopra). Nessun test Python coinvolto (comportamento
+client-side puro). Verificato: sintassi JS (`node --check`), nessuna
+regressione sui test già passati con i vecchi default.
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
