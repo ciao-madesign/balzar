@@ -176,10 +176,10 @@ def _compose_grid(images, labels, frame_label=None):
 
 
 def _tile_boxes(width: int, height: int, grid_dim: int):
-    """grid_dim*grid_dim cell regions covering a _compose_grid image,
-    derived by INVERTING _compose_grid's own layout formula (cols=rows=
-    grid_dim, cell+pad tiling, optional top label band) instead of
-    guessing a uniform division with a safety margin.
+    """Cell regions covering a _compose_grid image, derived by INVERTING
+    _compose_grid's own layout formula (cols=grid_dim, cell+pad tiling,
+    optional top label band) instead of guessing a uniform division with
+    a safety margin.
 
     A first version used width/grid_dim slices with a 15% margin -- that
     measured WORSE than no tiling at all (66.5s vs 39.7s baseline on a
@@ -193,15 +193,36 @@ def _tile_boxes(width: int, height: int, grid_dim: int):
     fixes this: measured 16/16 recovered, 3.03s vs 5.84s whole-image on
     the same real frame -- an actual net win, not just a smaller crop.
 
-    Only exact when the frame's actual cols/rows equal grid_dim, which
-    holds for every full frame from payload_to_qr_frames and for a last
-    (partial) frame as long as it holds more than (grid_dim-1)**2 codes
-    -- true in the real file tested (13 codes > 9). A caller whose frame
-    doesn't fit this always falls back to the whole-image scan anyway
-    (see _decode_tiled's caller), so a wrong assumption here costs
-    speed, never correctness.
+    `rows` is NOT assumed equal to grid_dim (a real bug, found while
+    porting this exact formula to JS for the browser-side QR transport,
+    CLAUDE.md SS2.4f): _compose_grid's `top` is a fixed constant (26 with
+    a frame label, 0 without one -- see payload_to_qr_frames), never
+    derived from row count, so treating rows=grid_dim as given and
+    solving `top` from height (the old code) silently computed the wrong
+    `top` whenever a frame's actual row count fell short of grid_dim --
+    which a genuine LAST (partial) frame almost always does even when
+    its column count still equals grid_dim (e.g. 12 remaining codes at
+    grid_dim=4 lays out as 4 cols x 3 rows, not 4x4). Measured directly:
+    the old code recovered only 1/16 codes on such a frame instead of
+    the true 12. Fixed by solving it the other way around -- `rows` is
+    derived from the known height for each of the two possible `top`
+    values (0 or 26; a single call has no way to know in advance which
+    applied), keeping whichever correctly reconstructs the given height.
+
+    Still only exact when the frame's actual COLUMN count equals
+    grid_dim, which holds for every full frame and for a last (partial)
+    frame as long as it holds more than (grid_dim-1)**2 codes (true in
+    the real file originally tested here, and in the common case
+    generally -- a last frame has to be quite sparse before its column
+    count itself shrinks). A caller whose frame doesn't fit even that
+    always falls back to the whole-image scan anyway (see
+    _decode_tiled's caller), so a wrong assumption here costs speed,
+    never correctness -- true for Python (ZBar decodes an arbitrary
+    untiled image directly), NOT true for a jsQR-based caller with no
+    equivalent whole-image multi-decode (see qr-transport-core.js's
+    decodeAllViaMasking for the fallback that scenario still needs).
     """
-    cols = rows = grid_dim
+    cols = grid_dim
     cell = width * 15 / (16 * cols + 1)
     pad = 12
     for _ in range(4):
@@ -209,11 +230,9 @@ def _tile_boxes(width: int, height: int, grid_dim: int):
         cell = (width - pad * (cols + 1)) / cols
     cell = round(cell)
     pad = max(12, cell // 15)
-    label_h = 22
-    top = max(0, height - (rows * (cell + pad + label_h) + pad))
 
-    # The formula above assumes the image really IS a grid_dim x
-    # grid_dim _compose_grid layout (e.g. a bare single QR -- no grid at
+    # The formula above assumes the image really IS a _compose_grid
+    # layout with this many columns (e.g. a bare single QR -- no grid at
     # all, from payload_to_qr_image's len(images)==1 shortcut -- isn't).
     # A wrong assumption can solve to a nonsensical (tiny or negative)
     # cell; fail closed with no boxes rather than handing crop() an
@@ -222,22 +241,34 @@ def _tile_boxes(width: int, height: int, grid_dim: int):
     if cell < 20:
         return []
 
-    boxes = []
+    label_h = 22
+    row_h = cell + pad + label_h
     slack = 3  # only for integer-rounding error, not layout uncertainty
-    for r in range(rows):
-        for c in range(cols):
-            x = pad + c * (cell + pad)
-            y = top + pad + r * (cell + pad + label_h)
-            left = max(0, x - slack)
-            upper = max(0, y - slack)
-            right = min(width, x + cell + slack)
-            lower = min(height, y + cell + slack)
-            # same fail-closed principle as the cell<20 guard above: a
-            # grid_dim that doesn't match this image's real layout can
-            # still push a cell entirely outside the image bounds after
-            # clamping; skip it rather than hand crop() an inverted box
-            if left < right and upper < lower:
-                boxes.append((left, upper, right, lower))
+    boxes: list[tuple[int, int, int, int]] = []
+    for top in (26, 0):
+        rows = round((height - top - pad) / row_h)
+        if rows < 1:
+            continue
+        if abs(top + rows * row_h + pad - height) > row_h / 2:
+            continue  # this (cols, top) hypothesis doesn't reconstruct the real height
+        candidate = []
+        for r in range(rows):
+            for c in range(cols):
+                x = pad + c * (cell + pad)
+                y = top + pad + r * row_h
+                left = max(0, x - slack)
+                upper = max(0, y - slack)
+                right = min(width, x + cell + slack)
+                lower = min(height, y + cell + slack)
+                # same fail-closed principle as the cell<20 guard above: a
+                # grid_dim that doesn't match this image's real layout can
+                # still push a cell entirely outside the image bounds after
+                # clamping; skip it rather than hand crop() an inverted box
+                if left < right and upper < lower:
+                    candidate.append((left, upper, right, lower))
+        if candidate:
+            boxes = candidate
+            break
     return boxes
 
 
@@ -266,30 +297,49 @@ def _decode_crops(crops: list):
 
 
 def _decode_tiled(img, grid_dim: int):
-    """Decode a _compose_grid image by cropping it into grid_dim*grid_dim
-    regions (see _tile_boxes) and running ZBar on each small crop
-    instead of the whole canvas -- measured 3.03s vs 5.84s whole-image
-    for a real 16-code frame, all 16 recovered (further cut to well
-    under 1s by decoding the crops in parallel, see _decode_crops). This
-    is a speed optimization only, never a correctness requirement:
-    callers must still fall back to a whole-image decode when this
-    doesn't recover a full grid_dim*grid_dim frame (see
+    """Decode a _compose_grid image by cropping it into the cells
+    _tile_boxes computes (see there for why that's no longer always
+    grid_dim*grid_dim -- it now solves the real row count for the
+    frame's actual layout, e.g. a partial last frame, instead of always
+    assuming grid_dim rows) and running ZBar on each small crop instead
+    of the whole canvas -- measured 3.03s vs 5.84s whole-image for a
+    real 16-code frame, all 16 recovered (further cut to well under 1s
+    by decoding the crops in parallel, see _decode_crops).
+
+    Returns the decoded results ONLY if every attempted cell decoded AT
+    LEAST one code (a strong signal the geometry hypothesis was actually
+    right), else an empty list -- this is a speed optimization only,
+    never a correctness requirement: callers must still fall back to a
+    whole-image decode when this doesn't recover every cell (see
     LiveScanner.add/scan_image_bytes: only used when the caller already
-    knows grid_dim because they generated the grid themselves)."""
+    knows grid_dim because they generated the grid themselves).
+
+    Checked per-cell (>=1 result each), not by comparing the flat total
+    result count against len(boxes): a real ZBar quirk (documented
+    elsewhere -- it can occasionally misdetect an unrelated barcode
+    symbology in a cell's label-text margin alongside the real QR code)
+    means one cell can legitimately produce two results, which a naive
+    len(results) == len(boxes) check would misread as "one cell came up
+    empty" and discard an otherwise-fully-successful decode."""
     boxes = _tile_boxes(img.size[0], img.size[1], grid_dim)
+    if not boxes:
+        return []
     crops = [img.crop(box) for box in boxes]
     per_crop_results = _decode_crops(crops)
 
     results = []
     seen_data = set()
+    cells_with_a_result = 0
     for crop_results in per_crop_results:
+        if crop_results:
+            cells_with_a_result += 1
         for r in crop_results:
             # de-dup: overlapping tile margins can find the same
             # physical code in two adjacent crops
             if r.data not in seen_data:
                 seen_data.add(r.data)
                 results.append(r)
-    return results
+    return results if cells_with_a_result == len(boxes) else []
 
 
 # Calibrated from a real, measured benchmark (CLAUDE.md SS9.24): reading
@@ -440,7 +490,7 @@ class LiveScanner:
         results = None
         if grid_dim is not None:
             tiled = _decode_tiled(img, grid_dim)
-            if len(tiled) == grid_dim * grid_dim:
+            if tiled:
                 results = tiled
         if results is None:
             results = zbar_decode(img)
@@ -488,7 +538,7 @@ def scan_image_bytes(data: bytes, grid_dim: int | None = None) -> bytes:
     results = None
     if grid_dim is not None:
         tiled = _decode_tiled(img, grid_dim)
-        if len(tiled) == grid_dim * grid_dim:
+        if tiled:
             results = tiled
     if results is None:
         results = zbar_decode(img)
