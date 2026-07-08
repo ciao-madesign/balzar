@@ -115,6 +115,13 @@ class BalzarApp:
         self._library_listbox: tk.Listbox | None = None
         self._library_entries: list = []  # parallel to _library_listbox rows
         self._raw_qr_window: tk.Toplevel | None = None
+        # continuous QR camera acquisition (balzar/live_scan_server.py):
+        # None when no scan is in progress; set while the local browser
+        # page + HTTPServer are up, waiting for the browser to POST back
+        # the reconstructed bytes
+        self._camera_scan_server = None
+        self._camera_scan_queue: "queue.Queue[bytes] | None" = None
+        self._camera_scan_workdir = None
 
         self._build_ui()
         root.after(100, self._poll_queue)
@@ -128,6 +135,9 @@ class BalzarApp:
         ttk.Button(top, text="Apri file…", command=self.open_file).pack(side="left")
         ttk.Button(top, text="Scansiona foto QR…",
                   command=self.open_qr_photo).pack(side="left", padx=(6, 0))
+        self.btn_camera_scan = ttk.Button(
+            top, text="Scansiona con fotocamera (browser)…", command=self.toggle_camera_scan)
+        self.btn_camera_scan.pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Libreria…",
                   command=self.open_library).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Trasporto file (QR)…",
@@ -248,6 +258,79 @@ class BalzarApp:
             self._dispatch_payload_bytes(job, payload)
             job.is_live_artifact = True  # a scan is always a Live consumption action
             job.stats.insert(0, ("scansionato da", os.path.basename(path)))
+        except Exception as exc:
+            job.error = f"{type(exc).__name__}: {exc}"
+        self.queue.put(job)
+
+    def toggle_camera_scan(self) -> None:
+        """Continuous QR acquisition via the system browser's camera
+        (balzar/live_scan_server.py) -- Tkinter has no camera API of its
+        own, so this opens a local page reusing the exact same jsQR/
+        ContinuousQrScanner engine already vendored and proven for
+        trasporto-qr.html and Balzar Live's own web tab (CLAUDE.md
+        SS2.4i/SS2.4j), instead of adding a native camera dependency
+        (e.g. OpenCV) never used anywhere else in this project. A second
+        click while a scan is already running cancels it instead of
+        starting a second one -- the button's own label is the toggle
+        state, no separate indicator needed."""
+        if self._camera_scan_server is not None:
+            self._stop_camera_scan("Acquisizione annullata.")
+            return
+        import tempfile
+
+        from . import live_scan_server
+        self._camera_scan_workdir = tempfile.TemporaryDirectory()
+        self._camera_scan_server, self._camera_scan_queue = \
+            live_scan_server.start_live_scan_server(self._camera_scan_workdir.name)
+        self.btn_camera_scan.configure(text="Annulla acquisizione fotocamera")
+        self.status.set("Fotocamera: apri la scheda del browser appena aperta e "
+                        "inquadra la sequenza QR (griglia 1×1)…")
+        self.root.after(200, self._poll_camera_scan)
+
+    def _poll_camera_scan(self) -> None:
+        """Non-blocking poll of the queue live_scan_server's HTTPServer
+        fills when the browser POSTs back its reconstructed bytes --
+        same root.after(...) pattern as _poll_queue, so the Tkinter main
+        thread is never blocked waiting on the browser tab."""
+        if self._camera_scan_queue is None:
+            return  # cancelled or already consumed since this was scheduled
+        try:
+            data = self._camera_scan_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(200, self._poll_camera_scan)
+            return
+        self._stop_camera_scan(None)
+        self.status.set("Scansione completata, apertura in corso…")
+        self._set_buttons(False)
+        threading.Thread(target=self._camera_scan_worker, args=(data,), daemon=True).start()
+
+    def _stop_camera_scan(self, status_message: str | None) -> None:
+        """Tears down the local HTTPServer + temp dir in a background
+        thread (server.shutdown() blocks until the OTHER thread's
+        serve_forever() notices, same reasoning as _shutdown_viewer) and
+        resets the button/queue -- shared by cancel, completion, and
+        (were the app to add one) a window-close handler."""
+        server, work_dir_obj = self._camera_scan_server, self._camera_scan_workdir
+        self._camera_scan_server = None
+        self._camera_scan_queue = None
+        self._camera_scan_workdir = None
+        self.btn_camera_scan.configure(text="Scansiona con fotocamera (browser)…")
+        if status_message is not None:
+            self.status.set(status_message)
+        if server is not None:
+            def _teardown() -> None:
+                server.shutdown()
+                server.server_close()
+                work_dir_obj.cleanup()
+            threading.Thread(target=_teardown, daemon=True).start()
+
+    def _camera_scan_worker(self, data: bytes) -> None:
+        job = Job()
+        job.source_name = "scansione fotocamera"
+        try:
+            self._dispatch_payload_bytes(job, data)
+            job.is_live_artifact = True  # a scan is always a Live consumption action
+            job.stats.insert(0, ("scansionato con", "fotocamera (browser)"))
         except Exception as exc:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)

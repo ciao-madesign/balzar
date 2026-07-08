@@ -1274,6 +1274,16 @@ Verificato con screenshot reale sotto Xvfb: apertura GIF, encoding video
 delta, anteprima animata, pannello statistiche, bottoni attivi, ciclo
 completo esporta-QR→scansiona-foto→payload bit-identico.
 
+Un secondo pulsante, "Scansiona con fotocamera (browser)…"
+(`balzar/live_scan_server.py`, sessione successiva — vedi §9.27), copre
+il caso "acquisizione continua" (zero tocchi dell'operatore, fotocamera
+live) che "Scansiona foto QR" non copre (foto singole scattate a
+parte): apre una pagina locale nel browser di sistema che riusa lo
+stesso motore jsQR/`ContinuousQrScanner` già vendorizzato per la demo
+web, e i byte ricostruiti tornano al processo desktop via un endpoint
+`POST /submit` sullo stesso server HTTP effimero — nessuna dipendenza
+nativa di cattura video (OpenCV o simili) aggiunta al progetto.
+
 ### 2.9 Demo web (solo vetrina, non il prodotto)
 
 `index.html` + `app.js` + `style.css` + sei funzioni serverless Vercel
@@ -1528,7 +1538,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-312 test, tutti verdi (`python3 -m unittest discover -s tests`):
+321 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1541,7 +1551,10 @@ ricerca/tabella allarmi del viewer 3D — vedi §9.15), `test_bundle.py`
 attraverso il chunking QR — vedi §9.16), `test_library.py` (libreria
 locale persistente di Balzar Live: logica pura file/JSON, isolata via
 `BALZAR_LIBRARY_DIR` — vedi §9.22/§9.23), `test_raw_qr_logic.py`
-(trasporto QR di byte arbitrari, nessun motore balzar — vedi §2.4d).
+(trasporto QR di byte arbitrari, nessun motore balzar — vedi §2.4d),
+`test_live_scan_server.py` (protocollo HTTP puro del ponte browser→
+desktop per l'acquisizione continua fotocamera, nessun Tkinter/browser
+reale — vedi §9.27).
 Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
@@ -4073,7 +4086,98 @@ Test aggiunti in `tests/test_qr.py::TestParallelTileDecoding`: 3 nuovi
 `test_decode_tiled_recovers_a_partial_frame_with_a_blank_tail`,
 `test_decode_tiled_drops_spurious_non_qr_symbology_matches` — quest'ultimo
 riproduce esattamente il payload/`grid_dim` della regressione, non un
-caso generico) — 316 test totali.
+caso generico) — 315 test totali.
+
+### 9.27 Acquisizione continua estesa alla GUI desktop: un ponte browser locale, non una nuova dipendenza nativa
+
+Ultimo tassello del percorso "acquisizione continua" iniziato in §2.4f:
+Balzar Studio/Live sulla demo web (§2.4i/§2.4j) avevano già la
+fotocamera continua, l'app desktop (`balzar/gui.py`) no — "Scansiona
+foto QR" resta un flusso a foto singole scattate a parte (via
+`filedialog`, `pyzbar` nativo, nessuna fotocamera live), perché Tkinter
+non ha un'API fotocamera propria.
+
+**Decisione architetturale, coerente con il resto del progetto**: non
+aggiungere OpenCV (o un'altra libreria di cattura video nativa) come
+nuova dipendenza — mai usata altrove in balzar, e ridondante rispetto a
+un motore (`jsQR`/`qr-transport-core.js`/`qr-camera-scanner.js`) già
+vendorizzato, già provato su tre superfici diverse (trasporto-qr.html,
+Balzar Live, e ora questa). Stesso principio già seguito da
+`viewer3d.py` per il 3D (nessun rasterizzatore scritto in casa, delega
+a `model-viewer` in una pagina locale): qui si delega la cattura
+fotocamera al browser di sistema, in una pagina locale minimale, invece
+di reimplementarla in Python.
+
+**`balzar/live_scan_server.py` (nuovo modulo)** — il pezzo che il tab
+web non aveva bisogno di avere: un modo di far tornare il risultato
+DAL browser AL processo desktop. `start_live_scan_server(work_dir)`
+scrive una paginetta HTML (video + `ContinuousQrScanner`, `gridDim=1`
+fisso — l'unico valore realisticamente affidabile per la cattura live,
+§2.4g) + le tre copie dei JS vendorizzati in `work_dir`, la serve su
+una porta effimera locale (stesso `http.server.HTTPServer` +
+thread daemon di `viewer3d.py`), apre il browser di sistema, e
+restituisce `(server, result_queue)`. L'unica novità rispetto al
+pattern di `viewer3d.py`: l'handler accetta anche un `POST /submit` (i
+byte ricostruiti, base64) e li mette su una `queue.Queue` — nessun
+altro modo di far arrivare il risultato dal thread del server HTTP al
+thread principale di Tkinter senza bloccarlo.
+
+**`balzar/gui.py`**: nuovo bottone "Scansiona con fotocamera
+(browser)…", toggle (un secondo click annulla una scansione in corso
+invece di aprirne una seconda — l'etichetta del bottone stesso è lo
+stato, nessun indicatore separato). `toggle_camera_scan` avvia il
+server in una `tempfile.TemporaryDirectory`; `_poll_camera_scan`
+(stesso pattern non bloccante di `_poll_queue`, `root.after(200, ...)`)
+controlla la coda senza mai bloccare il thread principale; alla
+ricezione, `_camera_scan_worker` riusa **esattamente** lo stesso
+`_dispatch_payload_bytes` già usato da `_scan_worker` per una foto
+scansionata da file (`job.is_live_artifact = True`, quindi salvataggio
+automatico in libreria, §9.22, identico a una scansione da foto).
+Teardown del server (`_stop_camera_scan`) in un thread di background,
+stessa ragione già documentata per `_shutdown_viewer` (§9.23 punto 10):
+`server.shutdown()` blocca finché l'altro thread non se ne accorge al
+prossimo tick di poll (~0,5s), farlo sul thread principale di Tkinter
+congelerebbe la GUI per quel tempo ad ogni annullamento/completamento.
+
+**Verificato end-to-end sotto Xvfb con una fotocamera fittizia reale**
+(stessa metodologia di §2.4g/§2.4h/§2.4i, non un mock): click sul
+bottone (chiamata diretta a `toggle_camera_scan`, `webbrowser.open`
+catturato invece di lanciato — nessun browser di default configurato in
+questo sandbox) → server avviato, URL catturato; un secondo click
+annulla la scansione, il bottone torna all'etichetta originale; un
+terzo avvio, stavolta guidato da un vero Chromium
+(`--use-file-for-fake-video-capture`, stesso video Y4M scritto a mano
+già usato altrove) che naviga all'URL catturato, clicca "Avvia
+fotocamera", lascia che `ContinuousQrScanner` completi la scansione di
+una sequenza `grid_dim=1` reale e la invii a `/submit` — il job arriva
+nella coda di Tkinter (`root.after` pompato con `root.update()`, stesso
+principio già consolidato in questo progetto per i test GUI sotto
+Xvfb) con il testo del programma **verificato carattere per carattere**
+(non solo la dimensione), `is_live_artifact=True`, e il server chiuso
+correttamente al completamento (`_camera_scan_server is None`). Zero
+tocchi dell'operatore dopo l'avvio della fotocamera, esattamente il
+modello già stabilito per l'acquisizione continua sulle altre due
+superfici.
+
+**Nessun numero di prestazioni nuovo da misurare**: il motore di
+decodifica è bit-per-bit lo stesso già calibrato in §2.4g/§2.4h (stessa
+risoluzione di cattura, stesso intervallo minimo, stesso limite
+`gridDim=1`) — il ponte desktop aggiunge solo un `POST /submit` finale
+(un singolo round-trip HTTP locale su `127.0.0.1`, trascurabile rispetto
+al tempo di scansione stesso) e non introduce alcuna caratteristica di
+prestazioni propria da ricalibrare.
+
+Test aggiunti: `tests/test_live_scan_server.py` (6 test, protocollo
+HTTP puro via socket reali — nessun Tkinter, nessun browser, nessuna
+fotocamera vera: apertura del browser catturata, pagina + i tre JS
+vendorizzati serviti correttamente, `/submit` valido mette i byte
+sulla coda, `/submit` con corpo non valido o base64 non valido
+risponde 400 invece di andare in crash, percorso sconosciuto risponde
+404) — 321 test totali. Nessun test Python per l'interazione
+Tkinter/browser/fotocamera stessa (comportamento verificato manualmente
+sotto Xvfb in sessione, stesso principio già seguito per il resto della
+UI browser-based di questo progetto, non nella suite `unittest`
+automatica).
 
 ## 10. Comandi utili per riprendere il lavoro
 
