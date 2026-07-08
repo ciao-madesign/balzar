@@ -539,6 +539,105 @@ e impostarlo uguale a come è stato generato — un valore sbagliato non
 corrompe nulla, semplicemente non trova QR, dichiarato esplicitamente
 nell'interfaccia).
 
+### 2.4f Allineamento pre-acquisizione-continua: motore JS condiviso + bug reale di geometria trovato portandolo
+
+Richiesta diretta di sessione, prima di iniziare la parte più ambiziosa
+("acquisizione continua" via fotocamera, vedi il piano a valle): questa
+sessione aveva proposto in autonomia `@undecaf/zbar-wasm` per la
+decodifica lato browser, basandosi solo su una ricerca sullo stato di
+manutenzione delle librerie — **senza** testarla contro le griglie QR
+reali di balzar. L'utente ha segnalato che un'altra sessione aveva già
+affrontato esattamente questo problema per il trasporto QR di byte
+grezzi (§2.4c/§2.4d): testato `@paulmillr/qr` (libreria "attivamente
+mantenuta", la stessa categoria di scelta che questa sessione stava per
+rifare), trovato un bug reale e riproducibile (3/24 QR falliti con un
+errore interno su una griglia reale), scartata in favore di **jsQR**
+(non più mantenuta ma provata 24/24 sugli stessi QR). Raccomandazione
+`zbar-wasm` **ritirata esplicitamente**: stesso errore metodologico che
+il principio guida del progetto vuole evitare ("misura, non stimare") —
+corretto riusando jsQR, già vendorizzata e già provata, invece di
+introdurre una seconda dipendenza di decodifica QR non misurata.
+
+**Estrazione, non riscrittura**: `qr-transport-core.js` (nuovo file)
+contiene ora CRC32/BZC1/`LiveScanner`/`tileBoxes`/`decodeAllInImage`,
+estratti **senza modifiche di comportamento** da `trasporto-qr.js`
+(che si accorcia da ~280 a ~100 righe, mantenendo solo il wiring DOM
+specifico della pagina) — così un secondo consumatore (l'acquisizione
+continua via fotocamera, il prossimo passo del piano) può riusare lo
+stesso motore invece di scriverne una terza copia. Verificato con un
+round-trip reale contro un devserver che instrada `/api/qr` al vero
+`handle_qr` (non un mock): upload di un file arbitrario da 52.944 B
+attraverso la UI reale di `trasporto-qr.html` (non uno script isolato),
+grid_dim=2, 7 pagine generate, rilette **in ordine invertito** — SHA256
+bit-identico all'originale, zero regressioni dall'estrazione.
+
+**Bug reale trovato portando `_tile_boxes` in JS**, non nella semplice
+traduzione ma verificandola con Playwright su una vera griglia
+grid_dim=4 (16 QR/frame, il default di balzar — il test precedente in
+§2.4d aveva esercitato solo grid_dim=2): sia `_tile_boxes` (Python) sia
+il suo porting JS assumevano `rows = grid_dim` incondizionatamente,
+ma il `top` di `_compose_grid` è una **costante fissa** (26 con
+un'etichetta "Frame i/N", 0 senza), mai derivata dal numero di righe —
+un frame parziale finale ha quasi sempre meno righe di `grid_dim` anche
+a parità di colonne (es. 12 codici residui a `grid_dim=4` sono 4
+colonne × 3 righe, non 4×4). Misurato prima del fix: `_decode_tiled`
+recuperava **1/16** invece dei 12 reali su un frame di questo tipo — un
+crollo quasi totale, non un errore marginale. **Il bug esisteva già nel
+codice Python originale**, ma era mascherato in silenzio dal fallback
+whole-image di ZBar (mai una perdita di correttezza lato Python, solo
+di velocità — l'euristica del tiling è sempre stata "solo un
+suggerimento, mai un requisito", §2.4b punto 6): la mascheratura non
+regge per jsQR, che non ha un fallback whole-image multi-decode
+altrettanto affidabile (`decodeAllViaMasking` è il tentativo JS più
+vicino, ma misurato meno affidabile — vedi sotto). Fix, in entrambi i
+linguaggi: `rows` non più assunto ma **derivato algebricamente
+dall'altezza nota dell'immagine**, provando ciascuno dei due valori
+possibili di `top` (26, 0) e tenendo quello che ricostruisce
+esattamente l'altezza data.
+
+**Un secondo bug, introdotto e corretto nella stessa sessione mentre si
+sistemava il primo**: spostando il controllo di completamento dentro
+`_decode_tiled` stesso, la prima versione confrontava il conteggio
+totale piatto (`len(results) == len(boxes)`) — che ha rotto un test
+preesistente (`test_decode_tiled_end_to_end_still_recovers_full_frame`)
+perché ZBar può legittimamente produrre **due** risultati per una sola
+cella (una lettura spuria di un'altra simbologia di codice a barre nel
+margine di testo dell'etichetta, comportamento innocuo già documentato
+altrove — filtrato a valle dal prefisso `CHUNK_MAGIC`), facendo
+apparire `len(results) > len(boxes)` e quindi far scartare un decode
+altrimenti perfettamente riuscito. Corretto controllando il
+completamento **per cella** (ogni cella tentata ha prodotto almeno un
+risultato, `cells_with_a_result == len(boxes)`) invece che sul
+conteggio piatto.
+
+**Limite di affidabilità di jsQR per singolo crop, reale e accettato,
+non un bug da inseguire**: anche con la geometria corretta, su un
+frame parziale reale da 12 QR, jsQR ne manca costantemente **1 su 12**
+(lo stesso identico crop, passato a ZBar/Python, decodifica senza
+problemi) — misurato ripetutamente (3 run consecutivi, stesso esito).
+`decodeAllInImage` (JS) gestisce questo diversamente da `_decode_tiled`
+(Python): **non scarta** i risultati parziali del tiling quando non è
+completo al 100% (a differenza del comportamento tutto-o-niente di
+Python), perché il fallback whole-image di jsQR
+(`decodeAllViaMasking`) è esso stesso inaffidabile su un'immagine
+piena — scartare 11 decodifiche buone per guadagnare 0 sarebbe una
+perdita netta. La dichiarazione di identità di ogni chunk è comunque
+autodescrittiva (indice/CRC in BZC1, via `LiveScanner`), quindi
+accumulare un risultato genuinamente parziale da un'immagine e
+completarlo da una foto/frame successivo è già il modello d'uso
+previsto per questo formato — un frame a cui manca un solo codice non
+è un fallimento, è lo stesso flusso "aggiungi un'altra foto" già
+esposto altrove nel progetto, e la ragione diretta per cui
+l'acquisizione continua (molti tentativi nel tempo, non una singola
+foto statica perfetta) è il passo naturale successivo.
+
+Verificato: suite Python invariata (309 test, tutti verdi,
+`tests/test_qr.py` incluso — 24/24), sintassi JS controllata
+(`node --check` su entrambi i file), tre run consecutivi del test
+grid_dim=4 reale (16/16 sul frame pieno in ogni run, confermando il fix
+di geometria; 11/12 costante sul frame parziale, confermando il limite
+di affidabilità jsQR come caratteristica stabile e non rumore).
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
