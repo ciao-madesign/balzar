@@ -1538,7 +1538,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-328 test, tutti verdi (`python3 -m unittest discover -s tests`):
+330 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -4417,10 +4417,113 @@ aggiornato (3 test: forma `info_table` invece di `alarm_rows`, CSV di
 test aggiornato con intestazione dato che l'header è ora obbligatorio).
 Suite completa: 328 test, tutti verdi.
 
+### 9.30 Limite reale a 65.535 vertici/strip trovato su un vero assieme pesante — corretto, non solo dichiarato
+
+L'utente ha fornito due assiemi 3DXML reali di scala/densità diverse per
+misurare dove si muove davvero la pipeline QR 3D (seguito diretto di
+§9.24/§9.25, priorità dichiarata di sessione). Il primo (500.756 B) è
+**esattamente** il secondo assieme reale già misurato in §9.10 (stessi
+88 forme/360 riferimenti/245 istanze) — nessuna nuova misura necessaria
+lì. Il secondo (9.219.625 B, "zephyr_h_230v") è territorio nuovo: **316
+forme uniche, 2.166 riferimenti, 3.520 istanze, 1.009.940 vertici totali**
+— quasi il doppio dei vertici totali della prima assieme più i suoi
+344 mesh, un ordine di grandezza sopra qualunque fixture sintetica usata
+finora per i benchmark di §9.24.
+
+**Bug reale trovato, non un limite teorico**: `encode_3dxml_file` sul
+secondo file si rifiutava con `Scene3DError: forma 'None' con 290192
+vertici: supera il limite di 65535 per gli indici a 16 bit` — un limite
+già dichiarato esplicitamente in §9.5 ("non ancora visto nella realtà,
+ma dichiarato esplicitamente") e **ora visto per davvero**. Investigando
+prima di correggere (misura, non stimare): **due** forme del file
+superano 65.535 vertici (290.192 e 153.500), e rappresentano **43,9%**
+di tutti i vertici dell'assieme (443.692 su 1.009.940) — non un caso
+limite trascurabile, quasi metà del contenuto reale. Controllando più a
+fondo è emerso un **secondo** bug distinto, mascherato dal primo (il
+controllo sui vertici falliva per primo): il conteggio delle strisce di
+triangoli per forma (`len(shape.strips)`) era anch'esso impacchettato
+come `<H>` (uint16, limite 65.535) — la stessa forma da 290.192 vertici
+ha **80.535 strisce**, oltre anche questo limite, un problema di
+*conteggio* non solo di *valore indice*, che sarebbe scattato comunque
+anche per una forma con meno di 65.535 vertici ma più di 65.535 strisce.
+
+**Fix in `balzar/scene3d.py`** (`_serialize`/`_deserialize`), niente
+troncamento silenzioso né semplificazione geometrica — solo allargare i
+campi che si sono rivelati troppo stretti:
+- `n_strips` (conteggio strisce per forma) passa da `<H>` a `<I>`
+  **incondizionatamente** — costo trascurabile (2 byte in più per forma,
+  prima della compressione) per ogni forma, anche le 314 forme normali
+  del file che non ne avrebbero bisogno.
+- I **valori** degli indici dentro ogni striscia restano `<H>` (uint16)
+  per il caso comune, e diventano `<I>` (uint32) **solo** per la forma
+  che ne ha davvero bisogno — derivato dal conteggio vertici già
+  memorizzato (`n_verts > 65535`), non un nuovo flag per-forma: zero
+  byte aggiuntivi per le forme che restano sotto il limite.
+- Versione del payload alzata da 1 a 2 (il campo esiste già nell'header
+  proprio per questo). **Mantenuta la lettura della versione 1**: la
+  libreria locale desktop (`balzar/library.py`, §9.22) persiste file
+  `.b3d` sul disco tra un aggiornamento di balzar e l'altro — un
+  payload versione 1 già salvato da un utente reale è una preoccupazione
+  concreta, non ipotetica, quindi `_deserialize` resta in grado di
+  leggerlo con la larghezza fissa originale (un payload versione 1, per
+  costruzione, non ha mai potuto contenere una forma fuori limite, visto
+  che `encode_payload` sollevava un errore invece di scriverla).
+
+**Costo reale misurato sul file già documentato** (§9.10, nessuna forma
+oltre il limite): payload 239.491 B → **239.546 B** (+55 B, +0,02%) —
+esattamente l'ordine di grandezza atteso per 88 forme × 2 byte extra su
+`n_strips`, quasi azzerato dalla compressione deflate. Nessun costo
+percepibile per l'assieme comune.
+
+**Numeri reali sul nuovo assieme, ora che l'encoding non si rifiuta
+più**: payload **5.215.937 B** in 11,7 s, **1,77×** rispetto al 3DXML
+sorgente (9.219.625 B) — un rapporto molto più basso del 2,09× già
+misurato sull'assieme più piccolo, e la ragione è chiara guardando i
+dati, non un mistero: il rapporto di instancing di questo assieme è
+più debole (3.520 istanze / 316 forme uniche ≈ 11×, contro un rapporto
+più alto sull'altro assieme), e il 43,9% dei vertici vive in due
+sole superfici tessellate non ripetute — geometria che il modello di
+deduplicazione di balzar (il cuore del suo guadagno, §9.2) non ha modo
+di comprimere, perché non si ripete da nessuna parte. Errore di
+quantizzazione medio: 0,000507 mm, ben dentro tolleranza CAD — la
+fedeltà non è in discussione, solo la dimensione.
+
+**Conclusione onesta, la parte che conta per la priorità 1 di
+sessione**: a 5,2 MB questo payload richiederebbe **1.774 capitoli QR,
+111 fotogrammi** a `grid_dim=4` (misurato con `chunk_payload` reale, non
+stimato) — ben oltre la sofferenza già nota per code di dozzine di
+fotogrammi (§9.10/§9.24), un ordine di grandezza sopra qualunque caso
+finora reso pratico. Il collo di bottiglia per un assieme di questa
+natura **non è la velocità di generazione/lettura QR** (il fronte già
+ottimizzato in §9.24/§9.25) — è che il payload stesso, anche dopo la
+deduplicazione reale di balzar, resta troppo grande per il trasporto
+fisico via QR quando la geometria non si presta alla deduplicazione
+(poche forme uniche molto dense, invece di molte istanze di forme
+piccole). Nessuna quantità di parallelizzazione nella generazione/
+lettura QR risolve un problema di dimensione del contenuto sorgente.
+La leva utile per *questa* classe di assieme è diversa da quella già
+esplorata: una **semplificazione/decimazione geometrica** delle forme
+uniche di grandi dimensioni con poco riuso (non la stessa cosa del
+punto 6 di sessione, che riguarda il nascondere sotto-assiemi per
+riservatezza, non ridurre la densità della mesh) — non ancora
+implementata, richiede una decisione di prodotto esplicita (è
+un'ulteriore perdita di fedeltà geometrica, oltre alla quantizzazione
+int16 già in uso, e va misurata/dichiarata con lo stesso principio di
+onestà già seguito per `mean_vertex_error`).
+
+Verificato: suite completa 330 test (2 nuovi + 1 riscritto in
+`tests/test_scene3d.py::TestQuantizationAndCompactTransforms` — round-trip
+di una forma sopra 65.535 vertici con indici larghi, round-trip di una
+forma sopra 65.535 strisce, lettura di un payload versione 1 genuino
+costruito a mano byte-per-byte per fissare esattamente il layout
+pre-fix), tutti verdi. Nessun file 3DXML reale committato nel repository
+(stesso motivo di copyright già visto per gli altri assiemi reali,
+§9.2/§9.10) — solo la fixture sintetica nei test.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 328 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 330 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d

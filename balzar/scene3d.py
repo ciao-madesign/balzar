@@ -26,10 +26,15 @@ CLAUDE.md SS9.2/SS9.7 for the numbers, not re-derived from scratch):
     same honesty pattern as `mean_color_error` in encoder.py: the
     self-check compares against the already-quantized source, not the
     original full-precision vertices.
-  - triangle-strip indices: uint16, not uint32 -- every real shape seen
-    so far has well under 65536 vertices; `_serialize` raises a clear
-    Scene3DError for the (so far unseen) shape that doesn't fit, rather
-    than silently truncating an index.
+  - triangle-strip indices: uint16 per shape by default (most real
+    shapes are well under 65536 vertices), widened to uint32 only for
+    the shape that actually needs it -- a real assembly (CLAUDE.md
+    SS9.30) surfaced a single tessellated surface with 290,192 vertices
+    and 80,535 strips, over BOTH the uint16 index range and the
+    original uint16 strip-count field. n_strips is now uint32
+    unconditionally (payload version 2); a version-1 payload (which by
+    construction never held an over-limit shape) still decodes correctly
+    with the old fixed widths.
   - RelativeMatrix rotation: a 2-byte code for the common case (a pure
     axis permutation with entries only in {-1,0,1} -- measured as 100%
     of leaf-level placements on the real test assembly), falling back
@@ -383,10 +388,18 @@ def _serialize(scene: Scene3D) -> bytes:
 
     out += struct.pack("<H", len(scene.shapes))
     for shape in scene.shapes:
-        if len(shape.vertices) > 65535:
-            raise Scene3DError(
-                f"forma '{shape.name}' con {len(shape.vertices)} vertici: "
-                "supera il limite di 65535 per gli indici a 16 bit")
+        # A real assembly (CLAUDE.md SS9.30) surfaced two hard limits a
+        # synthetic test fixture never approached: a single tessellated
+        # surface with 290,192 vertices (over the uint16 index range) and
+        # 80,535 strips on that same shape (over a uint16 *count*, not
+        # just index value). Fixed instead of raising: n_strips is now a
+        # uint32 count unconditionally (2 extra bytes/shape, negligible),
+        # and strip index VALUES widen to uint32 only for the rare shape
+        # that actually needs it -- derived from n_verts already stored
+        # (>65535), not a new per-shape flag, so ordinary small shapes
+        # (the vast majority) keep paying nothing for this.
+        wide = len(shape.vertices) > 65535
+        idx_fmt = "I" if wide else "H"
         out += struct.pack("<H", name_idx(shape.name))
         out += struct.pack("<BBB", *shape.color)
         out += struct.pack("<I", len(shape.vertices))
@@ -395,11 +408,11 @@ def _serialize(scene: Scene3D) -> bytes:
         out += struct.pack("<3f", *scale)
         for qx, qy, qz in quantized:
             out += struct.pack("<3h", qx, qy, qz)
-        out += struct.pack("<H", len(shape.strips))
+        out += struct.pack("<I", len(shape.strips))
         for strip in shape.strips:
             out += struct.pack("<H", len(strip))
             for idx in strip:
-                out += struct.pack("<H", idx)
+                out += struct.pack(f"<{idx_fmt}", idx)
 
     out += struct.pack("<I", len(scene.references))
     for ref in scene.references:
@@ -416,7 +429,18 @@ def _serialize(scene: Scene3D) -> bytes:
     return bytes(out)
 
 
-def _deserialize(data: bytes) -> Scene3D:
+def _deserialize(data: bytes, version: int = 2) -> Scene3D:
+    """`version` selects the on-disk shape of n_strips/strip-index width:
+    version 1 (pre-CLAUDE.md SS9.30) always wrote both as uint16 -- by
+    construction a version-1 payload never held a shape over 65535
+    vertices (encode_payload raised instead), so reading it back with the
+    OLD fixed widths is exact, no wide-index branch needed for it.
+    Version 2 widens n_strips to uint32 unconditionally and lets a
+    shape's strip index values be uint32 too, but only when its own
+    vertex count actually needs it. Kept, not dropped, because the
+    desktop app's local library (balzar/library.py, CLAUDE.md SS9.22)
+    persists .b3d files across balzar upgrades -- a real, not
+    hypothetical, reason an old-format file could still be opened."""
     names, off = _unpack_str_table(data, 0)
 
     def name_at(idx: int) -> str | None:
@@ -435,11 +459,18 @@ def _deserialize(data: bytes) -> Scene3D:
             q = struct.unpack_from("<3h", data, off); off += 6
             quantized.append(q)
         vertices = _dequantize_positions(lo, scale, quantized)
-        (n_strips,) = struct.unpack_from("<H", data, off); off += 2
+        if version >= 2:
+            (n_strips,) = struct.unpack_from("<I", data, off); off += 4
+            wide = n_verts > 65535
+        else:
+            (n_strips,) = struct.unpack_from("<H", data, off); off += 2
+            wide = False
+        idx_fmt = "I" if wide else "H"
+        idx_size = 4 if wide else 2
         strips = []
         for _ in range(n_strips):
             (slen,) = struct.unpack_from("<H", data, off); off += 2
-            idxs = list(struct.unpack_from(f"<{slen}H", data, off)); off += 2 * slen
+            idxs = list(struct.unpack_from(f"<{slen}{idx_fmt}", data, off)); off += idx_size * slen
             strips.append(idxs)
         shapes.append(Shape(name=name_at(name_i), color=color, vertices=vertices, strips=strips))
 
@@ -467,7 +498,7 @@ def _deserialize(data: bytes) -> Scene3D:
 
 def encode_payload(scene: Scene3D) -> bytes:
     body = _serialize(scene)
-    header = MAGIC + struct.pack("<HII", 1, len(body), zlib.crc32(body))
+    header = MAGIC + struct.pack("<HII", 2, len(body), zlib.crc32(body))
     return header + zlib.compress(body, 9)
 
 
@@ -475,7 +506,7 @@ def decode_payload(data: bytes) -> Scene3D:
     if len(data) < 14 or data[:4] != MAGIC:
         raise Scene3DError("non e' un payload balzar 3D (magic BZM1 non valido)")
     version, length, crc = struct.unpack_from("<HII", data, 4)
-    if version != 1:
+    if version not in (1, 2):
         raise Scene3DError(f"versione BZM1 non supportata: {version}")
     try:
         body = zlib.decompress(data[14:])
@@ -483,7 +514,7 @@ def decode_payload(data: bytes) -> Scene3D:
         raise Scene3DError(f"corpo del payload corrotto: {exc}") from None
     if len(body) != length or zlib.crc32(body) != crc:
         raise Scene3DError("controllo di integrita' del payload fallito (lunghezza/CRC)")
-    return _deserialize(body)
+    return _deserialize(body, version)
 
 
 # ------------------------------------------------------------- top level

@@ -463,16 +463,92 @@ class TestQuantizationAndCompactTransforms(unittest.TestCase):
         for a, b in zip(decoded, arbitrary):
             self.assertAlmostEqual(a, b, places=5)
 
-    def test_shape_over_65535_vertices_rejected_not_truncated(self):
+    def test_shape_over_65535_vertices_round_trips_with_wide_indices(self):
+        # a real assembly (CLAUDE.md SS9.30) had a single tessellated
+        # surface with 290,192 vertices/80,535 strips -- over BOTH the
+        # uint16 index range and the original uint16 strip-count field.
+        # This used to raise; now it round-trips via uint32 strip
+        # indices for just this shape (ordinary shapes stay uint16).
         from balzar.scene3d import Reference, Scene3D, Shape
 
-        shape = Shape(name="TooBig", color=(1, 2, 3),
-                     vertices=[(float(i), 0.0, 0.0) for i in range(65536)],
-                     strips=[])
+        n = 70000  # over 65535, forces the wide-index path
+        vertices = [(float(i % 1000), float(i // 1000), 0.0) for i in range(n)]
+        # a strip that references a vertex index only reachable with a
+        # wide (uint32) index -- the real bug: <H silently can't hold 69999
+        strips = [[0, 1, 2], [n - 3, n - 2, n - 1]]
+        shape = Shape(name="TooBigForUint16", color=(4, 5, 6), vertices=vertices, strips=strips)
         ref = Reference(name="Leaf", shape_index=0, children=[])
         scene = Scene3D(shapes=[shape], references=[ref], root=0)
-        with self.assertRaises(Scene3DError):
-            encode_payload(scene)
+
+        payload = encode_payload(scene)
+        rebuilt = decode_payload(payload)
+        magic, version = struct.unpack_from("<4sH", payload, 0)
+        self.assertEqual(version, 2)
+        self.assertEqual(len(rebuilt.shapes[0].vertices), n)
+        self.assertEqual(rebuilt.shapes[0].strips, strips)
+
+    def test_shape_over_65535_strips_round_trips(self):
+        # the second real bug on the same assembly: n_strips itself (not
+        # just index values) overflowed the old uint16 count field even
+        # for shapes whose own vertex count fits in uint16.
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        n_strips = 70000
+        vertices = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+        strips = [[0, 1, 2] for _ in range(n_strips)]
+        shape = Shape(name="ManyStrips", color=(7, 8, 9), vertices=vertices, strips=strips)
+        ref = Reference(name="Leaf", shape_index=0, children=[])
+        scene = Scene3D(shapes=[shape], references=[ref], root=0)
+
+        payload = encode_payload(scene)
+        rebuilt = decode_payload(payload)
+        self.assertEqual(len(rebuilt.shapes[0].strips), n_strips)
+
+    def test_version_1_payload_without_a_wide_shape_still_decodes(self):
+        # a version-1 payload (pre-SS9.30) is a real thing that could
+        # still be sitting in a user's local library (balzar/library.py)
+        # across a balzar upgrade -- by construction it never held a
+        # shape over the old limits (encode_payload used to raise
+        # instead), so the OLD fixed uint16 n_strips/index layout must
+        # still decode correctly. _serialize itself always writes the
+        # new (version 2) layout now, so the old body is hand-built here
+        # to pin down exactly the bytes a pre-fix encoder used to emit.
+        from balzar.scene3d import _pack_str_table, _quantize_positions
+        import zlib as _zlib
+
+        vertices = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+        strips = [[0, 1, 2]]
+
+        out = bytearray()
+        out += _pack_str_table(["Small", "Leaf"])  # name table: 0=Small, 1=Leaf
+        out += struct.pack("<H", 1)  # n_shapes
+        out += struct.pack("<H", 0)  # shape name index -> "Small"
+        out += struct.pack("<BBB", 1, 2, 3)  # color
+        out += struct.pack("<I", len(vertices))
+        lo, scale, quantized = _quantize_positions(vertices)
+        out += struct.pack("<3f", *lo)
+        out += struct.pack("<3f", *scale)
+        for qx, qy, qz in quantized:
+            out += struct.pack("<3h", qx, qy, qz)
+        out += struct.pack("<H", len(strips))  # old: uint16 n_strips
+        for strip in strips:
+            out += struct.pack("<H", len(strip))
+            for idx in strip:
+                out += struct.pack("<H", idx)  # old: uint16 index, unconditional
+        out += struct.pack("<I", 1)  # n_refs
+        out += struct.pack("<H", 1)  # ref name index -> "Leaf"
+        out += struct.pack("<BH", 1, 0)  # has_shape=1, shape_index=0
+        out += struct.pack("<I", 0)  # n_children
+        out += struct.pack("<I", 0)  # root
+
+        body = bytes(out)
+        header = b"BZM1" + struct.pack("<HII", 1, len(body), _zlib.crc32(body))
+        legacy_payload = header + _zlib.compress(body, 9)
+
+        rebuilt = decode_payload(legacy_payload)
+        self.assertEqual(rebuilt.shapes[0].vertices, vertices)
+        self.assertEqual(rebuilt.shapes[0].strips, strips)
+        self.assertEqual(rebuilt.shapes[0].name, "Small")
 
 
 class TestGltfExport(unittest.TestCase):
