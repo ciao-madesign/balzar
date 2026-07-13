@@ -37,27 +37,49 @@ constraint on 2-colour content) or one PNG file per frame (for printing
 on paper, where "animated" has no meaning). Both are read the same way,
 through LiveScanner -- the bundle format is a write-side choice only.
 
-Reading speed: LiveScanner.add/scan_image_bytes hand the whole image to
-ZBar by default, which has to search the entire canvas for finder
-patterns -- measured 5.84s to decode a real 16-code grid this way.
-Passing grid_dim (when the caller already knows the image is a
-payload_to_qr_frames(grid_dim=N) grid) tries _decode_tiled first:
-cropping into grid_dim*grid_dim regions, by SOLVING _compose_grid's own
-layout formula for the real cell/pad rather than guessing a uniform
-division, measured 3.03s for the same frame, all 16 codes recovered.
-This is a speed optimization only, never a correctness one: it's used
-solely when tiling recovers a complete grid_dim*grid_dim frame, and
-falls back to the exact same whole-image scan otherwise (a partial last
-frame with too few remaining codes, or any image that isn't actually a
-matching grid) -- so a wrong or absent hint never loses a code, it only
-forgoes the speedup. A first attempt at this used a uniform grid_dim
-division with a 15% safety margin instead of solving the real formula;
-it only recovered 11-14 of 16 codes per frame, which meant the
-whole-image fallback fired almost every time *on top of* the tiling
-attempt -- measured 66.5s vs the 39.7s baseline on a real file, a
-genuine regression later found and fixed by solving the exact geometry
-instead of approximating it (see _tile_boxes).
-"""
+Reading speed: LiveScanner.add/scan_image_bytes try the tiled fast path
+(_decode_tiled) BY DEFAULT, before ever falling back to a whole-image
+ZBar scan (which has to search the entire canvas for finder patterns --
+measured 5.84s for a real 16-code grid). Tiling crops into regions by
+SOLVING _compose_grid's own layout formula for the real cell/pad/cols/
+rows rather than guessing a uniform division -- measured 3.03s for the
+same frame, all 16 codes recovered. This is a speed optimization only,
+never a correctness one: it's used solely when tiling recovers a
+matching set of chunks, and falls back to the exact same whole-image
+scan otherwise (a partial last frame with too few remaining codes, or
+any image that isn't actually a matching grid) -- so a wrong or absent
+hint never loses a code, it only forgoes the speedup. A first attempt
+at this used a uniform grid_dim division with a 15% safety margin
+instead of solving the real formula; it only recovered 11-14 of 16
+codes per frame, which meant the whole-image fallback fired almost
+every time *on top of* the tiling attempt -- measured 66.5s vs the
+39.7s baseline on a real file, a genuine regression later found and
+fixed by solving the exact geometry instead of approximating it (see
+_tile_boxes).
+
+grid_dim is now an OPTIONAL override, not something the reading side
+needs to know or match: omitting it (the default) auto-detects, trying
+the tiled fast path with a fixed ceiling (_AUTO_GRID_DIM_CEILING = 8,
+the largest grid_dim any generator in this project ever offers) instead
+of the caller having to know what grid_dim the sequence was generated
+with -- _tile_boxes already searches cols downward from whatever
+ceiling it's given until the real layout reconstructs exactly (see its
+own docstring), so passing the maximum plausible ceiling finds the true
+layout regardless of what was actually used at generation time.
+Verified safe, not just assumed, across every grid_dim/chunk-count
+combination this project's own generator can produce (136 real frames):
+a small minority (5/136) hit a genuine geometry coincidence where a
+WRONG (cols, top) hypothesis also satisfies the tight reconstruction
+tolerance before the true one is reached in the ceiling-8 search order
+-- but in every one of those cases _decode_tiled's own hit/miss check
+still came back empty (the wrong crops don't contain a real chunk, so
+nothing decodes), correctly falling through to the safe whole-image
+scan, never returning wrong data. Passing grid_dim explicitly is only
+useful to force a value outside that default ceiling (e.g. a
+non-standard deployment using grid_dim > 8) or to skip auto-detection's
+few extra cheap arithmetic iterations in a tight loop (this is why
+qr-camera-scanner.js's ContinuousQrScanner still hardcodes gridDim=1
+itself -- it already knows the answer, no need to search for it)."""
 
 from __future__ import annotations
 
@@ -67,6 +89,14 @@ import struct
 
 from .payload import (CHUNK_MAGIC, QR_V40_BINARY_CAPACITY, _CHUNK_HEADER,
                       assemble_chunks, chunk_payload, from_base64, to_base64)
+
+# The largest grid_dim any generator in this project offers anywhere
+# (CLI, GUI, web demo). Reading defaults to this as a search ceiling
+# when grid_dim isn't given, instead of requiring the caller to know or
+# match whatever value was actually used at generation time -- see the
+# module docstring above for why this is safe (_tile_boxes searches
+# downward from the ceiling until the real layout reconstructs exactly).
+_AUTO_GRID_DIM_CEILING = 8
 
 # base64 expands 3 raw bytes -> 4 text chars; leave a small safety margin
 # under the QR's binary capacity for the text-mode overhead
@@ -534,30 +564,24 @@ class LiveScanner:
         set. Returns (done, missing): missing is the sorted list of
         chunk indices not seen yet (None once done).
 
-        grid_dim is an optional speed hint, not a correctness
-        requirement: pass it ONLY when you already know this image came
-        from payload_to_qr_frames(grid_dim=N) (e.g. reading back your
-        own generated frames, not an arbitrary photo) -- it tries the
-        much faster tiled decode (_decode_tiled) first, and only falls
-        back to the full whole-image scan when tiling didn't recover a
-        complete grid_dim*grid_dim frame (the common case for every
-        frame except a partial last one). Omit it (default) for the
-        general case -- an actual photograph, or any image whose layout
-        isn't known in advance -- which always uses the original
-        whole-image scan."""
+        grid_dim is an optional override, not something the caller
+        needs to know or match: omitted (the default), this auto-
+        detects by trying the much faster tiled decode (_decode_tiled)
+        with a fixed ceiling (_AUTO_GRID_DIM_CEILING) that finds the
+        real layout regardless of what grid_dim the image was actually
+        generated with (see the module docstring for why this is safe),
+        falling back to the full whole-image scan only when tiling
+        didn't recover anything (an arbitrary photo that isn't one of
+        this project's own composed grids, or a genuine geometry miss).
+        Pass grid_dim explicitly only to force a specific ceiling."""
         import io as _io
 
         from PIL import Image
         from pyzbar.pyzbar import decode as zbar_decode
 
         img = Image.open(_io.BytesIO(image_bytes)).convert("RGB")
-        results = None
-        if grid_dim is not None:
-            tiled = _decode_tiled(img, grid_dim)
-            if tiled:
-                results = tiled
-        if results is None:
-            results = zbar_decode(img)
+        tiled = _decode_tiled(img, grid_dim if grid_dim is not None else _AUTO_GRID_DIM_CEILING)
+        results = tiled if tiled else zbar_decode(img)
         for result in results:
             chunk = from_base64(result.data.decode("ascii"))
             if len(chunk) < _CHUNK_HEADER or chunk[:4] != CHUNK_MAGIC:
@@ -587,11 +611,11 @@ def scan_image_bytes(data: bytes, grid_dim: int | None = None) -> bytes:
     Uses ZBar (pyzbar), not OpenCV's native detector: verified far more
     reliable at reading many QR codes from one shot.
 
-    grid_dim is the same optional speed hint as LiveScanner.add: pass it
-    only when this image is known to be a full payload_to_qr_image-style
-    grid of exactly grid_dim*grid_dim codes (tiled decode, falls back to
-    the whole-image scan otherwise -- never less correct, just slower
-    when the hint doesn't fit).
+    grid_dim is the same optional override as LiveScanner.add: omitted
+    (the default), this auto-detects the real layout via the tiled fast
+    path's ceiling search instead of requiring the caller to know or
+    match whatever grid_dim the image was generated with -- never less
+    correct than a whole-image scan, just slower when nothing tiles.
     """
     import io as _io
 
@@ -599,13 +623,8 @@ def scan_image_bytes(data: bytes, grid_dim: int | None = None) -> bytes:
     from pyzbar.pyzbar import decode as zbar_decode
 
     img = Image.open(_io.BytesIO(data)).convert("RGB")
-    results = None
-    if grid_dim is not None:
-        tiled = _decode_tiled(img, grid_dim)
-        if tiled:
-            results = tiled
-    if results is None:
-        results = zbar_decode(img)
+    tiled = _decode_tiled(img, grid_dim if grid_dim is not None else _AUTO_GRID_DIM_CEILING)
+    results = tiled if tiled else zbar_decode(img)
     # ZBar can occasionally misdetect an unrelated barcode symbology (e.g.
     # DATABAR) overlapping a real QR code -- _decode_tiled already filters
     # this internally, but the whole-image path here hadn't been shown to

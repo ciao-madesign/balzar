@@ -746,9 +746,10 @@ def main(argv: list[str] | None = None) -> int:
                         "interpretarli come payload balzar — controparte di "
                         "'chunks --raw', richiede -o esplicito")
     p.add_argument("--grid-dim", type=int, default=None,
-                   help="suggerimento di velocita' opzionale: passalo solo "
-                        "se le immagini vengono da 'chunks --grid-dim N' "
-                        "(mai un requisito di correttezza, vedi CLAUDE.md §2.4b)")
+                   help="di norma non serve: la lettura rileva automaticamente "
+                        "la griglia usata in generazione (ricerca su un "
+                        "tetto fisso, vedi CLAUDE.md §9.28). Passalo solo per "
+                        "forzare un valore diverso da quello auto-rilevato")
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("assemble",

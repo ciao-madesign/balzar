@@ -1593,7 +1593,6 @@ const openScanSection = document.getElementById("open-scan-section");
 const openScanModeRadios = document.querySelectorAll('input[name="open-scan-mode"]');
 const openScanManualSection = document.getElementById("open-scan-manual-section");
 const openScanContinuousSection = document.getElementById("open-scan-continuous-section");
-const openScanGridDim = document.getElementById("open-scan-grid-dim");
 const openScanDrop = document.getElementById("open-scan-drop");
 const openScanFileInput = document.getElementById("open-scan-file-input");
 const openScanBrowseBtn = document.getElementById("open-scan-browse-btn");
@@ -1666,7 +1665,6 @@ openScanFileInput.addEventListener("change", () => {
 openScanDrop.addEventListener("drop", e => addOpenScanImages(Array.from(e.dataTransfer.files)));
 
 async function addOpenScanImages(files) {
-  const gridDim = parseInt(openScanGridDim.value, 10);
   for (const file of files) {
     const li = document.createElement("li");
     const nameSpan = document.createElement("span");
@@ -1677,7 +1675,7 @@ async function addOpenScanImages(files) {
 
     try {
       const imgData = await loadImageData(file);
-      const texts = decodeAllInImage(imgData, gridDim);
+      const texts = decodeAllInImage(imgData);  // grid_dim auto-rilevato
       let addedHere = 0;
       for (const text of texts) {
         const r = openScanScanner.addDecodedText(text);
@@ -1685,7 +1683,7 @@ async function addOpenScanImages(files) {
       }
       nameSpan.textContent = `${file.name} — ${texts.length} QR trovati, ${addedHere} nuovi capitoli`;
       if (texts.length === 0) {
-        nameSpan.textContent += " (nessun QR riconosciuto: controlla la griglia impostata sopra)";
+        nameSpan.textContent += " (nessun QR riconosciuto in questa immagine)";
       }
     } catch (e) {
       nameSpan.textContent = `${file.name} — errore: ${e.message}`;

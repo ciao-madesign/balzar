@@ -235,6 +235,17 @@ function loadImageData(file) {
 // (see tileBoxes for the bug this fixed -- a partial last frame used to
 // silently decode 0 codes).
 //
+// gridDim is optional: omitted (or falsy), it defaults to 8 (the same
+// _AUTO_GRID_DIM_CEILING as the Python side) -- tileBoxes already
+// searches cols downward from whatever ceiling it's given until the
+// real layout reconstructs exactly, so passing the maximum plausible
+// ceiling auto-detects the true layout regardless of what gridDim the
+// sequence was actually generated with. The caller no longer needs to
+// know or match it. Pass gridDim=1 explicitly to skip the tiling
+// attempt entirely (used by ContinuousQrScanner's tight capture loop,
+// which already knows every frame is a single ungridded code -- no
+// benefit from searching for an answer it already has).
+//
 // Unlike the Python side, an incomplete tiled result here is NOT
 // discarded: jsQR occasionally fails to decode one otherwise-valid crop
 // even with correct geometry (measured: 11/12 on a real partial-frame
@@ -244,13 +255,19 @@ function loadImageData(file) {
 // whole-image scan" would throw away 11 good decodes to gain nothing).
 // The tiled texts found are always kept; decodeAllViaMasking is run in
 // addition (not instead) whenever the tiled pass wasn't 100% complete,
-// to recover anything tiling missed. Chunk identity is self-describing
-// (BZC1's own index/crc, see LiveScanner), so accumulating a genuinely
-// partial result from one image and completing it from a later photo/
-// frame is already how this format is meant to be used -- one frame
-// missing a single code is not a failure, it's the same "add another
-// photo" flow already exposed to the operator elsewhere.
+// to recover anything tiling missed -- this is also what keeps a wrong
+// geometry guess (the auto-ceiling search hitting a coincidental match,
+// same real risk already found and handled on the Python side) safe:
+// a mis-cropped region essentially never contains a real QR finder
+// pattern, so tiledTexts stays empty/incomplete and the whole-image
+// fallback still runs. Chunk identity is self-describing (BZC1's own
+// index/crc, see LiveScanner), so accumulating a genuinely partial
+// result from one image and completing it from a later photo/frame is
+// already how this format is meant to be used -- one frame missing a
+// single code is not a failure, it's the same "add another photo" flow
+// already exposed to the operator elsewhere.
 function decodeAllInImage(imgData, gridDim) {
+  const effectiveGridDim = gridDim || 8;
   const seen = new Set();
   const texts = [];
   const addUnique = (found) => {
@@ -260,8 +277,8 @@ function decodeAllInImage(imgData, gridDim) {
   };
 
   let tiledComplete = false;
-  if (gridDim > 1) {
-    const boxes = tileBoxes(imgData.width, imgData.height, gridDim);
+  if (effectiveGridDim > 1) {
+    const boxes = tileBoxes(imgData.width, imgData.height, effectiveGridDim);
     const tiledTexts = [];
     for (const box of boxes) {
       const region = cropImageData(imgData, box);

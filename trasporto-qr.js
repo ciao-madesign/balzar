@@ -151,7 +151,6 @@ const decContinuousSection = document.getElementById("dec-continuous-section");
 const decDrop = document.getElementById("dec-drop");
 const decFileInput = document.getElementById("dec-file-input");
 const decBrowseBtn = document.getElementById("dec-browse-btn");
-const decGridDim = document.getElementById("dec-grid-dim");
 const decFileList = document.getElementById("dec-file-list");
 const decStatus = document.getElementById("dec-status");
 const decDownloadBtn = document.getElementById("dec-download-btn");
@@ -255,7 +254,6 @@ function renderSharedStatus() {
 }
 
 async function addDecodeImages(files) {
-  const gridDim = parseInt(decGridDim.value, 10);
   for (const file of files) {
     const li = document.createElement("li");
     const nameSpan = document.createElement("span");
@@ -267,7 +265,7 @@ async function addDecodeImages(files) {
 
     try {
       const imgData = await loadImageData(file);
-      const texts = decodeAllInImage(imgData, gridDim);
+      const texts = decodeAllInImage(imgData);  // grid_dim auto-rilevato
       let addedHere = 0;
       for (const text of texts) {
         const r = scanner.addDecodedText(text);
@@ -276,7 +274,7 @@ async function addDecodeImages(files) {
       nameSpan.textContent = `${file.name} — ${texts.length} QR trovati, ${addedHere} nuovi capitoli`;
       if (texts.length === 0) {
         li.classList.add("status");
-        nameSpan.textContent += " (nessun QR riconosciuto: controlla il numero QR/griglia impostato sopra)";
+        nameSpan.textContent += " (nessun QR riconosciuto in questa immagine)";
       }
     } catch (e) {
       nameSpan.textContent = `${file.name} — errore: ${e.message}`;

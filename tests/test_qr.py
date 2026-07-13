@@ -511,6 +511,85 @@ class TestParallelTileDecoding(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
+class TestAutoGridDimDetection(unittest.TestCase):
+    """grid_dim on the reading side (LiveScanner.add/scan_image_bytes) is
+    now an optional override, not something the operator needs to know
+    or match at scan time: omitting it auto-detects via a fixed ceiling
+    search (_AUTO_GRID_DIM_CEILING) instead of requiring the exact value
+    used at generation. Verified safe (not just assumed) across every
+    grid_dim/chunk-count combination the system's own generator can
+    produce -- 136 real frames swept manually in session, reproduced
+    here as focused regression cases for the 4 that hit a genuine
+    geometry coincidence (a WRONG (cols, top) hypothesis also satisfying
+    the tight reconstruction tolerance before the true one is reached)."""
+
+    def test_scan_image_bytes_without_grid_dim_reads_a_grid_dim_2_sequence(self):
+        # the auto-detect ceiling (8) must still find a sequence
+        # generated with a SMALLER grid_dim -- not just the ceiling
+        # itself -- proving this is real detection, not a fluke that
+        # only works when generation happened to also use 8
+        from balzar.qr import LiveScanner, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=2)
+        self.assertGreater(len(frames), 2)
+
+        scanner = LiveScanner()
+        for frame in frames:
+            buf = io.BytesIO()
+            frame.save(buf, format="PNG")
+            scanner.add(buf.getvalue())  # no grid_dim: must auto-detect
+        self.assertEqual(scanner.result(), payload)
+
+    def test_auto_ceiling_never_returns_wrong_chunks_on_known_geometry_coincidences(self):
+        # Real cases found by an exhaustive sweep (not hypothetical):
+        # searching cols from the ceiling (8) downward can hit a WRONG
+        # (cols, top) hypothesis that also satisfies the tight
+        # reconstruction tolerance before reaching the true, smaller
+        # cols -- e.g. a tiny single-QR frame (real cols=1) where cols=8
+        # also happens to reconstruct the image's small width/height
+        # exactly. This must NEVER translate into wrong decoded data:
+        # the mis-cropped regions must fail to decode (empty result),
+        # correctly falling through to the safe whole-image scan.
+        from balzar.qr import CHUNK_RAW_BYTES, _AUTO_GRID_DIM_CEILING, _decode_tiled, payload_to_qr_frames
+        from balzar.payload import CHUNK_MAGIC, chunk_payload, from_base64
+
+        cases = [(1, 2, 1), (1, 3, 2), (1, 5, 4), (2, 5, 1)]  # (real_grid_dim, n_chunks, frame_index)
+        for real_grid_dim, n_chunks, frame_index in cases:
+            with self.subTest(real_grid_dim=real_grid_dim, n_chunks=n_chunks):
+                payload = b"x" * (CHUNK_RAW_BYTES * (n_chunks - 1) + 100)
+                expected = {bytes(c) for c in chunk_payload(payload, chunk_size=CHUNK_RAW_BYTES)}
+                frames = payload_to_qr_frames(payload, grid_dim=real_grid_dim)
+                img = frames[frame_index]
+
+                result = _decode_tiled(img, grid_dim=_AUTO_GRID_DIM_CEILING)
+                got = {from_base64(r.data.decode("ascii")) for r in result
+                      if from_base64(r.data.decode("ascii"))[:4] == CHUNK_MAGIC}
+                self.assertTrue(got.issubset(expected),
+                                "auto-ceiling geometry mismatch must never fabricate wrong chunks")
+
+    def test_scan_image_bytes_default_still_recovers_the_known_coincidence_frame(self):
+        # end-to-end version of the case above: even where the tiled
+        # ceiling search hits the geometry coincidence and comes back
+        # empty, scan_image_bytes's whole-image fallback must still
+        # recover the correct payload with zero operator input
+        from balzar.qr import CHUNK_RAW_BYTES, payload_to_qr_frames, scan_image_bytes
+
+        payload = b"x" * (CHUNK_RAW_BYTES * 1 + 100)  # exactly 2 chunks, grid_dim=1
+        frames = payload_to_qr_frames(payload, grid_dim=1)
+        self.assertEqual(len(frames), 2)
+        buf = io.BytesIO()
+        frames[1].save(buf, format="PNG")  # the frame with the known geometry coincidence
+
+        from balzar.qr import LiveScanner
+        scanner = LiveScanner()
+        scanner.add(buf.getvalue())
+        buf0 = io.BytesIO()
+        frames[0].save(buf0, format="PNG")
+        scanner.add(buf0.getvalue())
+        self.assertEqual(scanner.result(), payload)
+
+
+@unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
 class TestEstimateScanSeconds(unittest.TestCase):
     """estimate_scan_seconds: an honestly-labelled ballpark, calibrated
     from a real decode benchmark (CLAUDE.md §9.24), not a promise."""

@@ -1538,7 +1538,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-321 test, tutti verdi (`python3 -m unittest discover -s tests`):
+324 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -4179,10 +4179,112 @@ sotto Xvfb in sessione, stesso principio già seguito per il resto della
 UI browser-based di questo progetto, non nella suite `unittest`
 automatica).
 
+### 9.28 Rilevamento automatico di grid_dim in lettura: l'operatore non deve più saperlo né impostarlo
+
+Richiesta diretta di sessione, seguito del lavoro §9.26: ovunque nel
+progetto la lettura di una sequenza QR richiedeva che l'operatore
+sapesse e impostasse lo stesso `grid_dim` usato in generazione (un
+`<select>` 1/2/4/8 sia in `trasporto-qr.html` sia nella sezione di
+lettura manuale di Balzar Live), nonostante `grid_dim` fosse già
+dichiarato ovunque nel codice "solo un suggerimento di velocità, mai un
+requisito di correttezza" — un requisito manuale che l'utente doveva
+comunque rispettare per ottenere lo speedup, o la lettura ricadeva
+(più lenta ma corretta) sulla scansione whole-image.
+
+**L'intuizione che rende il rilevamento automatico possibile quasi
+gratis**: `_tile_boxes`/`tileBoxes` già cercano `cols` da `grid_dim` in
+giù fino a 1 (§2.4b/§9.26) — il valore di `grid_dim` passato non è mai
+stato "il valore vero", è sempre stato solo il **tetto** da cui iniziare
+la ricerca. Passare sempre il tetto massimo che qualunque generatore di
+questo progetto usa (8) invece di un valore scelto dall'utente fa
+trovare lo stesso `cols` reale a prescindere da come la sequenza è stata
+generata — l'utente non deve più saperlo.
+
+**Verificato che questo è sicuro, non solo assunto — e la verifica ha
+trovato un rischio reale non ovvio.** Uno sweep esaustivo (136 frame
+reali, ogni `grid_dim` di generazione supportato × un ampio ventaglio
+di conteggi di capitoli, incluse code piccole/parziali) confronta
+`_tile_boxes(width, height, grid_dim_vero)` con
+`_tile_boxes(width, height, 8)`: **5 casi su 136 non trovano la stessa
+geometria** — una vera coincidenza aritmetica dove un'ipotesi `(cols,
+top)` SBAGLIATA soddisfa comunque la tolleranza stretta di 2px prima
+che la ricerca raggiunga quella vera (misurato su un frame minuscolo a
+360×408px, un singolo QR piccolo con etichetta: `cols=1,top=26` è
+l'ipotesi vera con errore 0, ma `cols=8,top=0` — provata per prima
+nell'ordine di ricerca dall'alto — ha ANCH'ESSA errore 0). Prima di
+concludere che il tetto=8 fosse sicuro da usare come default, verificato
+il comportamento di `_decode_tiled` su tutti e 136 i casi, non solo la
+geometria: **zero esiti scorretti**. Nei 5 casi di geometria sbagliata,
+i ritagli mal posizionati non contengono mai un QR reale decodificabile,
+quindi `_decode_tiled` torna vuoto (nessun hit) e il chiamante ricade
+correttamente sulla scansione whole-image già esistente — mai dati
+sbagliati, solo lo speedup perso in quei 5 casi su 136. Lato JS,
+`decodeAllInImage` ha una rete di sicurezza equivalente per costruzione
+(non modificata in questa sessione): un risultato tiled incompleto non
+viene mai scartato ma la scansione whole-image viene comunque eseguita
+in aggiunta finché il tiled non è sicuro sia caso: un ritaglio mal
+posizionato quasi certamente non contiene un vero pattern finder QR,
+quindi il pass tiled resta vuoto/incompleto e il fallback whole-image
+scatta comunque.
+
+**Implementazione**: nuova costante `_AUTO_GRID_DIM_CEILING = 8` in
+`balzar/qr.py`. `LiveScanner.add`/`scan_image_bytes`/`scan_image_file`
+ora tentano **sempre** il percorso tiled veloce (prima: solo se
+`grid_dim` era esplicitamente passato) — `grid_dim=None` (il default)
+usa il tetto automatico invece di saltare direttamente alla scansione
+whole-image. `grid_dim` resta un parametro accettato solo per forzare
+un valore diverso dal tetto di default (es. un deployment non standard
+con `grid_dim>8`) — nessun caso d'uso reale nel progetto lo richiede
+oggi. Lato JS, `decodeAllInImage(imgData, gridDim)` — `gridDim` diventa
+opzionale, `gridDim || 8` di default; `gridDim=1` esplicito resta
+intatto per `ContinuousQrScanner` (che già sa che ogni fotogramma è un
+singolo QR non in griglia, nessun beneficio a cercare una risposta già
+nota nel suo loop di cattura ravvicinato).
+
+**Superfici aggiornate**: rimosso il `<select>` "QR per immagine" dalla
+sezione di lettura manuale sia di `trasporto-qr.html` (`#dec-grid-dim`)
+sia di Balzar Live (`#open-scan-grid-dim`, tab "Apri programma") —
+`decodeAllInImage(imgData)` chiamato senza secondo argomento in
+entrambi i punti di chiamata (`trasporto-qr.js`, `app.js`). La CLI
+(`balzar scan --grid-dim`) e la GUI desktop ("Scansiona foto QR",
+`gui.py`'s `_scan_worker` → `scan_image_file(path)`) **non hanno
+richiesto alcuna modifica di codice**: chiamavano già `grid_dim=None`
+di default, quindi ereditano il rilevamento automatico gratis dal
+cambio di semantica in `qr.py` — solo il testo di help di `--grid-dim`
+è stato aggiornato per riflettere che ora è un override opzionale, non
+un suggerimento da passare di norma. Il selettore `grid_dim` in
+**generazione** (`enc-grid-dim` in `trasporto-qr.html`, e ogni altro
+punto che genera una sequenza) resta invariato e obbligatorio — è una
+proprietà del supporto fisico/dello schermo scelto dall'utente, non
+qualcosa che si può auto-rilevare a monte, e questa richiesta riguardava
+solo la lettura.
+
+Verificato con Playwright contro un devserver locale reale (stessa
+metodologia già nota): payload da 76.800 byte grezzi (trasporto QR di
+byte arbitrari) codificato a `grid_dim=4` → 3 pagine reali con più QR
+per pagina ciascuna → lette in `trasporto-qr.html` **senza alcun
+selettore `grid_dim` visibile nella pagina** → byte ricostruiti
+bit-identici; un programma DSL codificato a `grid_dim=2` → aperto in
+Balzar Live allo stesso modo, senza selettore, testo del programma
+verificato carattere per carattere. Nessuna regressione: la suite
+Python esistente già copriva involontariamente questo percorso
+(`tests/test_cli.py::test_chunks_raw_qr_grid_dim_and_scan_raw_roundtrip`
+genera con `--grid-dim 2` e legge con `balzar scan` **senza**
+`--grid-dim`, un roundtrip bit-identico già verde prima di questa
+sessione).
+
+Test aggiunti in `tests/test_qr.py::TestAutoGridDimDetection` (3 test):
+lettura senza `grid_dim` di una sequenza generata a `grid_dim=2` (non
+solo al tetto stesso); i 4 casi reali di coincidenza geometrica trovati
+dallo sweep, verificando che `_decode_tiled` al tetto automatico non
+fabbrichi mai un capitolo sbagliato; il roundtrip end-to-end sullo
+stesso frame di coincidenza, a conferma che il fallback whole-image
+recupera comunque il payload corretto. 324 test totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 312 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 324 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
