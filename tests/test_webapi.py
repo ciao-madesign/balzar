@@ -407,6 +407,22 @@ class TestHandleEncode3D(unittest.TestCase):
         self.assertGreater(len(resp["glb_base64"]), 0)
         self.assertIn("payload_base64", resp)
 
+    def test_merge_names_field_is_optional_and_defaults_to_unchanged(self):
+        status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)
+        status2, resp2 = handle_encode_3d(
+            {"data": _b64(_make_3dxml_bytes()), "merge_names": ""}, LOCAL_LIMITS)
+        self.assertEqual(status2, 200)
+        self.assertEqual(resp2["payload_base64"], resp["payload_base64"])
+
+    def test_merge_names_field_merges_named_group(self):
+        status, resp = handle_encode_3d(
+            {"data": _b64(_make_3dxml_bytes()), "merge_names": "Root"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        # Root's two Bullone-M6 instances concatenated into one merged
+        # shape -- still valid, self-consistent output, no crash
+        self.assertEqual(resp["shape_count"], 1)
+
     def test_missing_data(self):
         status, resp = handle_encode_3d({}, LOCAL_LIMITS)
         self.assertEqual(status, 400)

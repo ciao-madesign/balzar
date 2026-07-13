@@ -17,8 +17,8 @@ import zipfile
 
 from balzar.gltf import scene3d_to_glb
 from balzar.scene3d import (Scene3DError, _decode_matrix, _encode_matrix,
-                            _quantized_copy, decode_payload, encode_3dxml_file,
-                            encode_payload, parse_3dxml)
+                            _IDENTITY_MATRIX, _quantized_copy, decode_payload,
+                            encode_3dxml_file, encode_payload, parse_3dxml)
 
 _MANIFEST = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Manifest xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -621,6 +621,174 @@ class TestGltfExport(unittest.TestCase):
         # but distinct materials, so a click can select just one
         material_indices = {m["primitives"][0]["material"] for m in partA_meshes}
         self.assertEqual(len(material_indices), 2)
+
+
+class TestMergeNamedGroups(unittest.TestCase):
+    """merge_named_groups: an OPT-IN reserve tool (CLAUDE.md SS9.31),
+    independent from generate_bom's collapse_names -- this one actually
+    concatenates geometry into fewer Shape/Reference entries to shrink
+    the BZM1 payload, not just group the BOM/highlight display."""
+
+    def _two_bolts_under_a_named_group(self):
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        bolt = Shape(name="Bolt", color=(9, 9, 9),
+                    vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+                    strips=[[0, 1, 2]])
+        bolt_ref = Reference(name="BoltDef", shape_index=0, children=[])
+        # two placements of the same bolt shape under a group named
+        # "Fasteners" -- one at the origin, one translated by (10,0,0)
+        group = Reference(
+            name="Fasteners", shape_index=None,
+            children=[
+                (1, "bolt_1", (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)),
+                (1, "bolt_2", (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 10.0, 0.0, 0.0)),
+            ])
+        root = Reference(name="Root", shape_index=None,
+                         children=[(2, "fasteners_inst",
+                                   (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0))])
+        scene = Scene3D(shapes=[bolt], references=[root, bolt_ref, group], root=0)
+        return scene
+
+    def test_no_merge_names_returns_the_same_scene_unchanged(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        self.assertIs(merge_named_groups(scene, None), scene)
+        self.assertIs(merge_named_groups(scene, set()), scene)
+
+    def test_merge_concatenates_geometry_at_correct_world_positions(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        merged = merge_named_groups(scene, {"Fasteners"})
+
+        # only one shape and one reference left: the two separate bolt
+        # placements + their own def/group refs are pruned away
+        self.assertEqual(len(merged.shapes), 1)
+        self.assertEqual(len(merged.references), 2)  # Root + merged Fasteners
+
+        merged_shape = merged.shapes[0]
+        self.assertEqual(merged_shape.name, "Fasteners")
+        self.assertEqual(len(merged_shape.vertices), 6)  # 3 verts x 2 bolts
+        # first bolt at the origin, second translated by (10,0,0) -- both
+        # transforms correctly composed and applied, not just concatenated
+        self.assertEqual(merged_shape.vertices[:3], [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+        self.assertEqual(merged_shape.vertices[3:], [(10.0, 0.0, 0.0), (11.0, 0.0, 0.0), (10.0, 1.0, 0.0)])
+        self.assertEqual(merged_shape.strips, [[0, 1, 2], [3, 4, 5]])
+
+    def test_merged_scene_still_round_trips_through_the_payload(self):
+        # the int16-per-shape quantization the encoder already applies
+        # is itself lossy (CLAUDE.md SS9.5/mean_vertex_error) -- compare
+        # against the already-quantized scene, the same honesty pattern
+        # encode_3dxml_file's own self-check already uses, not raw
+        # pre-quantization equality (which a real float like 1.0 has no
+        # guarantee of surviving unchanged through int16 round-tripping).
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        merged = merge_named_groups(scene, {"Fasteners"})
+        quantized_merged, _ = _quantized_copy(merged)
+        payload = encode_payload(merged)
+        rebuilt = decode_payload(payload)
+        self.assertEqual(rebuilt, quantized_merged)
+
+    def test_merge_reduces_payload_size_for_many_distinct_unrepeated_parts(self):
+        # the case this tool actually helps: many DISTINCT small parts
+        # (each used only once, e.g. small brackets/covers) grouped
+        # under one named sub-assembly the caller doesn't need to see
+        # individually -- merging removes their per-part Reference/
+        # ReferenceRep/InstanceRep/Instance3D overhead (names, structure)
+        # WITHOUT losing any deduplication benefit, because there was
+        # none to lose: each shape was already used exactly once.
+        from balzar.scene3d import Reference, Scene3D, Shape, merge_named_groups
+
+        n = 50
+        shapes = [Shape(name=f"Bracket{i}", color=(i % 255, 10, 20),
+                        vertices=[(float(i), 0.0, 0.0), (float(i) + 1, 0.0, 0.0), (float(i), 1.0, 0.0)],
+                        strips=[[0, 1, 2]]) for i in range(n)]
+        refs = [Reference(name="Root", shape_index=None, children=[])]
+        group_children = []
+        for i in range(n):
+            ref_idx = len(refs)
+            refs.append(Reference(name=f"BracketDef{i}", shape_index=i, children=[]))
+            group_children.append((ref_idx, f"inst_{i}", _IDENTITY_MATRIX))
+        group_idx = len(refs)
+        refs.append(Reference(name="Brackets", shape_index=None, children=group_children))
+        refs[0] = Reference(name="Root", shape_index=None,
+                            children=[(group_idx, "brackets_inst", _IDENTITY_MATRIX)])
+        scene = Scene3D(shapes=shapes, references=refs, root=0)
+
+        unmerged_payload = encode_payload(scene)
+        merged_payload = encode_payload(merge_named_groups(scene, {"Brackets"}))
+        self.assertLess(len(merged_payload), len(unmerged_payload))
+
+    def test_merge_can_be_counterproductive_for_many_repeated_instances(self):
+        # the opposite, equally real finding, measured not assumed: for
+        # many REPEATED instances of the SAME shape (the classic "bolts"
+        # case one might expect this tool to target), merging is a
+        # regression, not a win -- it duplicates the already-deduplicated
+        # vertex data N times (baking each instance's world position
+        # into distinct quantized coordinates) in exchange for removing
+        # cheap per-instance transform records that DEFLATE already
+        # compresses extremely well (near-identical structured bytes).
+        # Documented in CLAUDE.md SS9.31 so this isn't rediscovered as
+        # a surprise later -- merge_names is opt-in specifically so a
+        # caller can choose NOT to use it here.
+        from balzar.scene3d import Reference, Scene3D, Shape, merge_named_groups
+
+        bolt = Shape(name="Bolt", color=(9, 9, 9),
+                    vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+                    strips=[[0, 1, 2]])
+        bolt_ref = Reference(name="BoltDef", shape_index=0, children=[])
+        n = 200
+        group_children = [
+            (1, f"bolt_{i}", (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, float(i), 0.0, 0.0))
+            for i in range(n)
+        ]
+        group = Reference(name="Fasteners", shape_index=None, children=group_children)
+        root = Reference(name="Root", shape_index=None,
+                         children=[(2, "fasteners_inst", _IDENTITY_MATRIX)])
+        scene = Scene3D(shapes=[bolt], references=[root, bolt_ref, group], root=0)
+
+        unmerged_payload = encode_payload(scene)
+        merged_payload = encode_payload(merge_named_groups(scene, {"Fasteners"}))
+        self.assertGreater(len(merged_payload), len(unmerged_payload))
+
+    def test_unmatched_merge_name_is_silently_ignored(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        merged = merge_named_groups(scene, {"DoesNotExist"})
+        self.assertEqual(len(merged.shapes), 1)  # unchanged
+        self.assertEqual(len(merged.references), 3)  # unchanged
+
+    def test_merge_name_matching_a_leaf_with_no_children_is_a_no_op(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        # "BoltDef" is a leaf (has a shape, no children) -- nothing to
+        # concatenate, must not crash or corrupt anything
+        merged = merge_named_groups(scene, {"BoltDef"})
+        self.assertEqual(len(merged.shapes), 1)
+        self.assertEqual(len(merged.references), 3)
+
+    def test_encode_3dxml_file_accepts_optional_merge_names(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        path = os.path.join(self.tmpdir.name, "fixture.3dxml")
+        _write_fixture_3dxml(path)
+
+        # default (no merge_names) behaves exactly as before
+        baseline = encode_3dxml_file(path)
+        same = encode_3dxml_file(path, merge_names=None)
+        self.assertEqual(baseline.payload, same.payload)
+
+        # merging "SubGroup" (a real group in the fixture) doesn't crash
+        # and produces a self-consistent result (encode_3dxml_file's own
+        # internal self-check already raises on any inconsistency)
+        merged_result = encode_3dxml_file(path, merge_names={"SubGroup"})
+        self.assertIsInstance(merged_result.payload, bytes)
 
 
 if __name__ == "__main__":

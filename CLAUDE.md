@@ -1538,7 +1538,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-330 test, tutti verdi (`python3 -m unittest discover -s tests`):
+342 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -4520,10 +4520,142 @@ pre-fix), tutti verdi. Nessun file 3DXML reale committato nel repository
 (stesso motivo di copyright già visto per gli altri assiemi reali,
 §9.2/§9.10) — solo la fixture sintetica nei test.
 
+### 9.31 Scala target realistica misurata (~14 KB sorgente) + `merge_names`, strumento di riserva opzionale
+
+Seguito diretto di sessione a §9.30: l'utente ha chiarito che la
+semplificazione principale di un assieme pesante **avviene fuori da
+balzar**, in una fase preliminare CAD (unendo in singoli oggetti le
+istanze e i sotto-assiemi che non servono mostrare individualmente,
+prima ancora di esportare il 3DXML) — balzar riceve già un file
+tipicamente nell'ordine di **10-100 KB**, non i 9,2 MB dell'assieme
+zephyr_h_230v misurato in §9.30. Due filoni di lavoro distinti, in
+sequenza, come richiesto esplicitamente ("entrambi").
+
+**1) Validazione reale sulla scala target.** Costruito un 3DXML
+sintetico rappresentativo (12 parti uniche piccole — bulloni,
+rondelle, staffe, non superfici dense — con ripetizione realistica:
+viti/rondelle/dadi ripetuti fino a 24 volte, parti strutturali 1-4
+volte, **111 istanze totali**, nessun file CAD reale coinvolto, stesso
+principio di copyright già seguito altrove) e misurata l'intera
+pipeline reale, non stimata:
+
+| Passo | Tempo | Risultato |
+|---|---|---|
+| Sorgente 3DXML | — | 14.011 B |
+| Encode (`encode_3dxml_file`) | 0,009 s | payload 5.339 B (2,62× vs sorgente) |
+| Generazione QR (`payload_to_qr_frames`, grid_dim=4) | 0,541 s | **1 solo fotogramma** (2 capitoli) |
+| Lettura (`LiveScanner`) | 0,257 s | bit-identico |
+| Decodifica + export GLB | 0,003 s | 62.240 B, 12 forme/12 parti BOM |
+
+**Tempo totale pipeline (esclusa l'acquisizione fisica): meno di un
+secondo** — non i 43-92 secondi già misurati per l'assieme da 9,2 MB in
+§9.24/§9.25/§9.30, e ben sotto la stima "ordine dei secondi, non
+minuti" fatta prima di misurare. Conferma diretta, con numeri reali,
+che per la scala che l'utente prevede di usare in produzione (post-
+semplificazione esterna) la pipeline QR è già pienamente pratica senza
+alcuna ulteriore ottimizzazione — il lavoro di parallelizzazione già
+fatto in §9.24/§9.25 resta rilevante solo per il caso limite (assiemi
+grandi non ancora semplificati), non per il flusso di produzione atteso.
+
+**2) `merge_named_groups` — strumento di riserva opzionale, NON il
+percorso principale.** Anche se la semplificazione principale avviene
+altrove, l'utente ha chiesto uno strumento equivalente dentro balzar
+per i casi non coperti da quel processo esterno. Decisioni tecniche
+confermate esplicitamente prima di scrivere codice:
+1. **Parametro indipendente** da `collapse_names` (generate_bom/
+   scene3d_to_glb, §9.21) — quel meccanismo raggruppa solo la vista
+   (BOM/evidenziazione), la geometria nel payload resta quella
+   originale; `merge_names` invece **concatena davvero** vertici e
+   triangoli in un'unica `Shape`, eliminando le voci Reference/
+   Instance3D separate — due liste distinte, tipicamente uguali in
+   pratica ma non vincolate a esserlo.
+2. **Solo concatenazione, zero perdita aggiuntiva** — nessuna
+   decimazione/riduzione poligoni. Le parti mantengono la propria
+   posizione reale (le RelativeMatrix vengono composte dal gruppo verso
+   ogni foglia e applicate ai vertici), zero perdita oltre la
+   quantizzazione int16 già esistente nell'encoder.
+
+**Implementazione** (`balzar/scene3d.py`): `_compose_matrices`/
+`_apply_matrix` (composizione affine standard, stessa convenzione
+riga-maggiore già verificata algebricamente per `gltf.py` in §9.7,
+non una nuova convenzione) + `merge_named_groups(scene, merge_names)`
+— per ogni `Reference` di gruppo (ha figli, non è già una foglia) il
+cui nome è in `merge_names`, cammina l'albero sotto di essa componendo
+i trasformi, concatena la geometria di ogni foglia raggiunta in
+**un'unica** `Shape` nel sistema di coordinate proprio del gruppo (così
+il risultato si muove correttamente ovunque il gruppo stesso sia
+istanziato), e sostituisce il `Reference` del gruppo con una foglia
+pura (`shape_index` impostato, `children=[]`). Un nome che non
+corrisponde a nulla, o che corrisponde a una foglia già atomica (senza
+figli), viene **ignorato silenziosamente** — stessa convenzione già
+usata da `collapse_names`. Nuova `_prune_unreachable(scene)`:
+indispensabile, non opzionale — senza di essa i vecchi Reference/Shape
+resi orfani dalla fusione resterebbero comunque serializzati nel
+payload, vanificando il motivo stesso della fusione (i loro byte non
+spariscono da soli). Mai forzato: `merge_names=None` (il default)
+restituisce la scena **invariata** (stesso oggetto), zero costo/rischio
+per chi non lo usa.
+
+**Scoperta reale, non assunta, e opposta all'intuizione iniziale**:
+misurato l'effetto della fusione su due scenari sintetici distinti,
+non uno solo, perché il primo tentativo di test ha rivelato che
+l'ipotesi di partenza era sbagliata:
+- **Molte parti DISTINTE usate una sola volta ciascuna** (es. 50
+  staffe/coperchi unici sotto un sotto-assieme, mai ripetuti): la
+  fusione **aiuta davvero** — 1.319 B → 650 B, **2,03×** più piccolo,
+  perché rimuove l'overhead per-parte (nome, struttura Reference/
+  ReferenceRep/InstanceRep/Instance3D) senza perdere alcun beneficio di
+  deduplicazione, dato che non ce n'era nessuno da perdere (ogni forma
+  era già usata una sola volta).
+- **Molte istanze RIPETUTE della stessa forma** (es. 200 bulloni
+  identici, il caso "viti" che sembrava il bersaglio naturale): la
+  fusione **peggiora**, non migliora — misurato direttamente (non
+  assunto): payload sale da 1.512 B a 2.346 B. Il motivo è chiaro
+  misurando, non ipotizzando: la rappresentazione non fusa sfrutta già
+  al massimo la deduplicazione di balzar (1 sola forma memorizzata +
+  200 trasformi economici, quasi identici byte-per-byte e quindi
+  compressi benissimo da DEFLATE); fondere **duplica** i dati di
+  vertice già deduplicati in 600 posizioni uniche quantizzate — dati ad
+  alta entropia che DEFLATE comprime molto peggio di 200 record quasi
+  identici. **Il caso in cui questo strumento aiuta davvero è quindi
+  l'opposto di quello intuitivo**: parti uniche non ripetute, non parti
+  ripetute come viti/bulloni (quelle, balzar le comprime già meglio da
+  solo).
+
+**Superfici collegate, tutte opzionali, mai forzate**:
+`encode_3dxml_file(path, merge_names=None)`; CLI
+`balzar encode-3d file.3dxml --merge-names "Nome1,Nome2"`; web API
+`handle_encode_3d` accetta un campo `merge_names` (stringa separata da
+virgole) opzionale; GUI desktop — `open_file()` chiede (solo per un
+`.3dxml`, un `simpledialog.askstring` sul thread principale, **prima**
+di avviare il thread di encoding in background, dato che i dialog
+Tkinter non possono girare dal worker thread) un elenco opzionale di
+nomi da fondere, lasciato vuoto per il comportamento di sempre.
+**Non wired sulla demo web** (`index.html`/`app.js`): nessun campo
+frontend per digitare `merge_names` — scelta deliberata, non
+dimenticanza, dato che è uno strumento di riserva secondario e la demo
+web è dichiaratamente "solo vetrina, non il prodotto" (§1); il campo
+backend esiste ed è testato, raggiungibile da chi chiama l'API
+direttamente.
+
+Verificato: 8 nuovi test in `tests/test_scene3d.py::TestMergeNamedGroups`
+(fusione con posizioni mondo corrette, round-trip attraverso il payload
+— confrontato contro la scena già quantizzata, stesso principio del
+self-check di `encode_3dxml_file`, non contro l'originale a piena
+precisione — riduzione di dimensione per parti distinte, **aumento** di
+dimensione per parti ripetute misurato esplicitamente non solo
+menzionato, nome non corrispondente ignorato, nome su una foglia già
+atomica è un no-op, `encode_3dxml_file` accetta il parametro opzionale),
+2 in `tests/test_cli.py`, 2 in
+`tests/test_webapi.py::TestHandleEncode3D`. Smoke test manuale sotto
+Xvfb per il dialog GUI (dialog monkeypatchato, mainloop reale pompato):
+prompt mostrato solo per `.3dxml`, nomi passati correttamente fino a
+`encode_3dxml_file`, job completato senza errori. 342 test totali.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 330 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 342 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d

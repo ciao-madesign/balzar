@@ -677,8 +677,151 @@ def _quantized_copy(scene: Scene3D) -> tuple[Scene3D, float]:
     return Scene3D(shapes=quantized_shapes, references=scene.references, root=scene.root), mean_error
 
 
-def encode_3dxml_file(path: str) -> Scene3DEncodeResult:
+_IDENTITY_MATRIX = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+
+
+def _compose_matrices(parent: tuple[float, ...], child: tuple[float, ...]) -> tuple[float, ...]:
+    """Composes two RelativeMatrix transforms (9 rotation row-major + 3
+    translation, same convention as _matrix_to_gltf/_apply_matrix) so
+    that applying the result to a point equals applying `child` first,
+    then `parent`: compose(parent, child).apply(p) == parent.apply(
+    child.apply(p)). Standard affine composition (R_p@R_c, R_p@t_c+t_p),
+    not a new convention -- verified against the documented row-major
+    rotation layout, same one CLAUDE.md SS9.7 already checked
+    algebraically for gltf.py's own matrix handling."""
+    pr, pt = parent[:9], parent[9:12]
+    cr, ct = child[:9], child[9:12]
+    r = tuple(
+        pr[3 * i + 0] * cr[3 * 0 + j] + pr[3 * i + 1] * cr[3 * 1 + j] + pr[3 * i + 2] * cr[3 * 2 + j]
+        for i in range(3) for j in range(3)
+    )
+    t = tuple(
+        pr[3 * i + 0] * ct[0] + pr[3 * i + 1] * ct[1] + pr[3 * i + 2] * ct[2] + pt[i]
+        for i in range(3)
+    )
+    return r + t
+
+
+def _apply_matrix(m: tuple[float, ...], p: tuple[float, float, float]) -> tuple[float, float, float]:
+    r, t = m[:9], m[9:12]
+    x, y, z = p
+    return (r[0] * x + r[1] * y + r[2] * z + t[0],
+           r[3] * x + r[4] * y + r[5] * z + t[1],
+           r[6] * x + r[7] * y + r[8] * z + t[2])
+
+
+def merge_named_groups(scene: Scene3D, merge_names: set[str] | None) -> Scene3D:
+    """Optional, opt-in geometry concatenation for named group
+    References -- a reserve tool inside balzar, NOT the primary
+    simplification path (that happens outside balzar, in the source
+    CAD tool, before the 3DXML balzar reads even exists -- see
+    CLAUDE.md SS9.31). Never runs unless merge_names is non-empty:
+    scene is returned completely unchanged (same object) for the
+    default None/empty case, so every existing caller that doesn't ask
+    for this keeps byte-for-byte identical behavior.
+
+    Every leaf reachable under a Reference whose name is in
+    merge_names gets its geometry (vertices+triangle-strip indices)
+    transformed into the group's OWN local frame (composing
+    RelativeMatrix edges from the group down to each leaf, never
+    including the group's own placement in ITS parent -- so the merged
+    result still moves correctly wherever the group itself is
+    instanced) and concatenated into one new Shape; the group's own
+    Reference becomes that single leaf (shape_index set, children
+    cleared) -- no more separate small Reference/Instance3D entries
+    each paying their own per-instance overhead in the payload. Pure
+    concatenation only, zero further precision loss beyond the int16
+    quantization the encoder already applies (no mesh decimation,
+    explicit product choice confirmed in session -- decimation would be
+    a second, independent lossy step with its own error metric to
+    disclose, not bundled into this one).
+
+    Disclosed cost, not a silent one: a merged group loses its own
+    multi-color identity (one merged Shape has exactly one color --
+    the first leaf's, encountered in traversal order) and its
+    individual part names vanish from the BOM (the group's own name is
+    what remains). A name in merge_names that doesn't match any
+    Reference, or matches a leaf that has no children to merge, is
+    silently skipped -- same "unmatched candidate is ignored, not an
+    error" convention already used by generate_bom's collapse_names.
+    """
+    if not merge_names:
+        return scene
+
+    new_shapes = list(scene.shapes)
+    new_references = list(scene.references)
+
+    def merge_group(ref_index: int) -> int:
+        merged_vertices: list[tuple[float, float, float]] = []
+        merged_strips: list[list[int]] = []
+        merged_color: tuple[int, int, int] | None = None
+
+        def walk(idx: int, accum: tuple[float, ...]) -> None:
+            nonlocal merged_color
+            r = new_references[idx]
+            if r.shape_index is not None:
+                shape = new_shapes[r.shape_index]
+                if merged_color is None:
+                    merged_color = shape.color
+                base = len(merged_vertices)
+                merged_vertices.extend(_apply_matrix(accum, v) for v in shape.vertices)
+                merged_strips.extend([base + i for i in strip] for strip in shape.strips)
+            for target, _inst_name, m in r.children:
+                walk(target, _compose_matrices(accum, m))
+
+        walk(ref_index, _IDENTITY_MATRIX)
+        merged = Shape(name=new_references[ref_index].name,
+                      color=merged_color or (128, 128, 128),
+                      vertices=merged_vertices, strips=merged_strips)
+        new_shapes.append(merged)
+        return len(new_shapes) - 1
+
+    for i, ref in enumerate(new_references):
+        if ref.name in merge_names and ref.children:
+            shape_idx = merge_group(i)
+            new_references[i] = Reference(name=ref.name, shape_index=shape_idx, children=[])
+
+    return _prune_unreachable(Scene3D(shapes=new_shapes, references=new_references, root=scene.root))
+
+
+def _prune_unreachable(scene: Scene3D) -> Scene3D:
+    """Drops shapes/references no longer reachable from root -- needed
+    after merge_named_groups collapses a group's children into one
+    merged shape, otherwise the orphaned old sub-references/shapes
+    would still be serialized into the payload despite being pointless,
+    defeating the entire point of merging (their bytes never go away
+    unless something actually removes them from the lists _serialize
+    walks)."""
+    reachable_refs: set[int] = set()
+
+    def walk(idx: int) -> None:
+        if idx in reachable_refs:
+            return
+        reachable_refs.add(idx)
+        for target, _, _ in scene.references[idx].children:
+            walk(target)
+
+    walk(scene.root)
+
+    ref_remap = {old: new for new, old in enumerate(sorted(reachable_refs))}
+    reachable_shapes = {scene.references[old].shape_index
+                        for old in reachable_refs if scene.references[old].shape_index is not None}
+    shape_remap = {old: new for new, old in enumerate(sorted(reachable_shapes))}
+
+    new_shapes = [scene.shapes[old] for old in sorted(reachable_shapes)]
+    new_references = []
+    for old in sorted(reachable_refs):
+        r = scene.references[old]
+        new_shape_idx = shape_remap[r.shape_index] if r.shape_index is not None else None
+        new_children = [(ref_remap[t], n, m) for t, n, m in r.children]
+        new_references.append(Reference(name=r.name, shape_index=new_shape_idx, children=new_children))
+
+    return Scene3D(shapes=new_shapes, references=new_references, root=ref_remap[scene.root])
+
+
+def encode_3dxml_file(path: str, merge_names: set[str] | None = None) -> Scene3DEncodeResult:
     scene = parse_3dxml(path)
+    scene = merge_named_groups(scene, merge_names)
     payload = encode_payload(scene)
     quantized_scene, mean_vertex_error = _quantized_copy(scene)
 

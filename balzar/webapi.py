@@ -330,6 +330,16 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
 
     from .scene3d import Scene3DError, encode_3dxml_file
 
+    # optional reserve tool (CLAUDE.md SS9.31), independent from
+    # collapse_names above: a comma-separated list of group names whose
+    # geometry gets concatenated into one Shape in the PAYLOAD itself
+    # (fewer Reference/Instance3D entries), not just grouped for BOM/
+    # highlight display. Opt-in, never forced -- omitted, encoding is
+    # unchanged from before this field existed.
+    merge_names_raw = body.get("merge_names")
+    merge_names = ({n.strip() for n in merge_names_raw.split(",") if n.strip()}
+                  if merge_names_raw else None)
+
     import os
     import tempfile
     with tempfile.TemporaryDirectory() as td:
@@ -337,7 +347,7 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         with open(path, "wb") as fh:
             fh.write(raw)
         try:
-            result = encode_3dxml_file(path)
+            result = encode_3dxml_file(path, merge_names=merge_names)
         except Scene3DError as exc:
             return 400, {"ok": False, "error": str(exc)}
 

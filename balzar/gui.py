@@ -25,7 +25,7 @@ import queue
 import threading
 import tkinter as tk
 import uuid
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .imageio import load_frames, save_gif
 from .interpreter import render as render_program
@@ -233,9 +233,26 @@ class BalzarApp:
                        ("Tutti i file", "*.*")])
         if not path:
             return
+        merge_names = None
+        if path.endswith(".3dxml"):
+            # Optional reserve tool (CLAUDE.md SS9.31), never forced:
+            # the primary simplification/merge happens outside balzar,
+            # in the source CAD tool, before this file even exists --
+            # left blank (the default), encoding is unchanged. Must be
+            # asked here on the main thread (Tkinter dialogs can't run
+            # from the background worker thread _worker runs on).
+            raw = simpledialog.askstring(
+                "Fondi sotto-assiemi (opzionale)",
+                "Nomi di sotto-assiemi da fondere in una sola geometria, separati da virgola.\n"
+                "Lascia vuoto per non fondere nulla (comportamento di sempre).\n"
+                "Utile solo per parti DISTINTE usate una sola volta ciascuna -- per parti "
+                "RIPETUTE (es. viti) puo' aumentare la dimensione, gia' ben deduplicata.",
+                parent=self.root)
+            if raw:
+                merge_names = {n.strip() for n in raw.split(",") if n.strip()}
         self.status.set(f"Elaborazione di {os.path.basename(path)}…")
         self._set_buttons(False)
-        threading.Thread(target=self._worker, args=(path,), daemon=True).start()
+        threading.Thread(target=self._worker, args=(path, merge_names), daemon=True).start()
 
     def open_qr_photo(self) -> None:
         """Scan a photo of one QR code or a printed grid of many: same
@@ -379,12 +396,12 @@ class BalzarApp:
         self._job_from_payload(job, job.source_name, data)
         return "2d"
 
-    def _worker(self, path: str) -> None:
+    def _worker(self, path: str, merge_names: set[str] | None = None) -> None:
         job = Job()
         job.source_name = os.path.basename(path)
         try:
             if path.endswith(".3dxml"):
-                self._job_from_3dxml(job, path)
+                self._job_from_3dxml(job, path, merge_names=merge_names)
             else:
                 with open(path, "rb") as fh:
                     data = fh.read()
@@ -419,13 +436,19 @@ class BalzarApp:
              f"no ({_fmt(len(chunk_payload(job.payload)))} capitoli)"),
         ]
 
-    def _job_from_3dxml(self, job: Job, path: str) -> None:
+    def _job_from_3dxml(self, job: Job, path: str, merge_names: set[str] | None = None) -> None:
         """3DXML -> BZM1 payload (balzar/scene3d.py): the 3D 'zip'. No 2D
         preview exists for this at all (see Job.is_3d) -- stats + BOM are
-        the whole picture until 'Visualizza in 3D' opens a real one."""
+        the whole picture until 'Visualizza in 3D' opens a real one.
+
+        `merge_names` (optional, CLAUDE.md SS9.31): a reserve tool, not
+        the primary simplification path -- that happens outside balzar,
+        in the source CAD tool, before this file exists. Left None (the
+        default), behavior is unchanged from before this parameter
+        existed."""
         from .scene3d import encode_3dxml_file
 
-        result = encode_3dxml_file(path)
+        result = encode_3dxml_file(path, merge_names=merge_names)
         job.payload = result.payload
         self._finish_3d_job(job, result.payload, result.bom, extra_stats=[
             ("forme uniche", _fmt(result.shape_count)),

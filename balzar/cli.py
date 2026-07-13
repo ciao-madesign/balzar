@@ -200,8 +200,10 @@ def cmd_encode_3d(args: argparse.Namespace) -> int:
     allineate agli assi -- vedi CLAUDE.md SS9 per le misure reali."""
     from .scene3d import Scene3DError, encode_3dxml_file
 
+    merge_names = ({n.strip() for n in args.merge_names.split(",") if n.strip()}
+                  if args.merge_names else None)
     try:
-        result = encode_3dxml_file(args.input)
+        result = encode_3dxml_file(args.input, merge_names=merge_names)
     except Scene3DError as exc:
         print(f"errore: {exc}", file=sys.stderr)
         return 1
@@ -653,6 +655,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--output", default=None)
     p.add_argument("--bom", action="store_true",
                    help="stampa la distinta base completa (nome parte x quantita')")
+    p.add_argument("--merge-names", default=None,
+                   help="nomi di sotto-assiemi (separati da virgola) da fondere in una "
+                        "sola geometria opzionale, strumento di riserva: la semplificazione "
+                        "principale avviene di norma fuori da balzar, prima dell'export "
+                        "3DXML -- vedi CLAUDE.md SS9.31. Utile solo per parti DISTINTE usate "
+                        "una sola volta ciascuna; per parti RIPETUTE (es. viti) puo' "
+                        "peggiorare la dimensione, gia' ben deduplicata da balzar")
     p.set_defaults(func=cmd_encode_3d)
 
     p = sub.add_parser("render-3d",

@@ -284,6 +284,23 @@ class TestCli(unittest.TestCase):
         with open(glb_path, "rb") as fh:
             self.assertEqual(fh.read(4), b"glTF")
 
+    def test_encode_3d_merge_names_is_optional_and_defaults_to_unchanged(self):
+        # --merge-names is opt-in (CLAUDE.md SS9.31): omitted, behavior
+        # is identical to before the flag existed
+        path = self._write_minimal_3dxml("assembly.3dxml")
+        code, out, err = _run(["encode-3d", path])
+        self.assertEqual(code, 0)
+        self.assertIn("forme uniche: 1", out)
+
+    def test_encode_3d_merge_names_flag_merges_named_group(self):
+        path = self._write_minimal_3dxml("assembly.3dxml")
+        code, out, err = _run(["encode-3d", path, "--merge-names", "Root"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("Traceback", err)
+        # Root merged into one leaf shape -- still exactly 1 unique part
+        # in the BOM, same visible content, no crash from the new flag
+        self.assertIn("distinta base: 1 parti uniche", out)
+
     def test_encode_3d_missing_manifest_gives_clean_error(self):
         import zipfile
         bad_path = self._path("bad.3dxml")
