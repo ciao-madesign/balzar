@@ -944,6 +944,7 @@ function createSceneViewerController(ids) {
   const searchInput = document.getElementById(ids.searchInput);
   const searchBtn = document.getElementById(ids.searchBtn);
   const searchNote = document.getElementById(ids.searchNote);
+  const searchResultsEl = document.getElementById(ids.searchResults);
   const docsBlock = document.getElementById(ids.docsBlock);
   const docsIndex = document.getElementById(ids.docsIndex);
 
@@ -951,9 +952,15 @@ function createSceneViewerController(ids) {
     originalColors: null, // Map<Material, [r,g,b,a]>, cached on model load
     selectedNames: [],    // names currently highlighted -- 0, 1 or many
     selectedCount: null,  // BOM count, only meaningful for exactly 1 name
-    // alarm code (trimmed, uppercased) -> [component name, ...]; an alarm
-    // can affect several components at once, hence an array per code
-    alarmMap: new Map(),
+    // The component info table: arbitrary headers/rows (no assumption
+    // about column meaning -- real tables have whatever columns the
+    // maintenance team already keeps, in whatever order). Which column
+    // drives the 3D highlight is auto-detected once per table load (see
+    // detectComponentColumn) by testing content against real BOM part
+    // names, not by header wording or position.
+    tableHeaders: [],
+    tableRows: [],
+    componentColumnIndex: -1,
     // display label (BOM row name, e.g. "RESERVOIR1") -> exact glTF
     // material names to highlight for it -- a single-item array equal to
     // the label itself for an ordinary leaf row, or a whole collapsed
@@ -1034,37 +1041,101 @@ function createSceneViewerController(ids) {
     exportBtn.disabled = (state.selectedNames.length !== 1);
   }
 
-  function setAlarmRows(rows) {
-    state.alarmMap = new Map();
-    (rows || []).forEach(([code, name]) => {
-      const key = code.trim().toUpperCase();
-      if (!state.alarmMap.has(key)) state.alarmMap.set(key, []);
-      state.alarmMap.get(key).push(name);
+  function allPartNames() {
+    return Array.from(bomTable.querySelectorAll("tr.part")).map(row => row.dataset.partName);
+  }
+
+  // For each column, count how many of its (trimmed, case-insensitive)
+  // values match a real BOM part name -- the column with the most
+  // matches is "the component column" for highlighting purposes. Not
+  // header wording or position: real tables call this column anything
+  // ("componente", "nome componente", "parte"...), and testing content
+  // instead of the header name means zero configuration and zero
+  // assumption about column order. -1 (no highlight-driving column)
+  // when nothing matches -- rows still search/display fine.
+  function detectComponentColumn(headers, rows) {
+    if (!headers.length || !rows.length) return -1;
+    const partNameSet = new Set(allPartNames().map(n => n.toLowerCase()));
+    let bestCol = -1, bestCount = 0;
+    for (let col = 0; col < headers.length; col++) {
+      let count = 0;
+      rows.forEach(row => {
+        const v = (row[col] || "").trim().toLowerCase();
+        if (v && partNameSet.has(v)) count++;
+      });
+      if (count > bestCount) { bestCount = count; bestCol = col; }
+    }
+    return bestCount > 0 ? bestCol : -1;
+  }
+
+  function setInfoTable(table) {
+    state.tableHeaders = (table && table.headers) || [];
+    state.tableRows = (table && table.rows) || [];
+    state.componentColumnIndex = detectComponentColumn(state.tableHeaders, state.tableRows);
+  }
+
+  function renderResultsTable(headers, rows) {
+    if (!searchResultsEl) return;
+    if (!headers || !rows || !rows.length) {
+      searchResultsEl.innerHTML = "";
+      searchResultsEl.classList.remove("open");
+      return;
+    }
+    let html = "<table><thead><tr>" +
+      headers.map(h => `<th>${escapeHtml(h)}</th>`).join("") + "</tr></thead><tbody>";
+    rows.forEach(row => {
+      html += "<tr>" + row.map(c => `<td>${escapeHtml(c)}</td>`).join("") + "</tr>";
     });
+    html += "</tbody></table>";
+    searchResultsEl.innerHTML = html;
+    searchResultsEl.classList.add("open");
   }
 
   function runSearch(query) {
     query = (query || "").trim();
-    if (!query) { resetSelection(); return; }
-    const key = query.toUpperCase();
-    if (state.alarmMap.has(key)) {
-      const names = state.alarmMap.get(key);
-      highlightNames(names);
-      searchNote.textContent =
-        `Allarme ${query}: ${names.length} componente/i evidenziato/i (${names.join(", ")}).`;
-      return;
-    }
-    const allNames = Array.from(bomTable.querySelectorAll("tr.part"))
-      .map(row => row.dataset.partName);
+    if (!query) { resetSelection(); renderResultsTable(null, null); return; }
     const qLower = query.toLowerCase();
+
+    if (state.tableHeaders.length && state.tableRows.length) {
+      const matchedRows = state.tableRows.filter(row =>
+        row.some(cell => cell.toLowerCase().includes(qLower)));
+      if (matchedRows.length) {
+        const componentValues = new Set();
+        if (state.componentColumnIndex >= 0) {
+          matchedRows.forEach(row => {
+            const v = row[state.componentColumnIndex];
+            if (v) componentValues.add(v);
+          });
+        }
+        if (componentValues.size) {
+          highlightNames(Array.from(componentValues));
+        } else {
+          // a purely informational row (no recognized component value)
+          // is not a failed search -- show it, just without touching
+          // the 3D view, rather than dimming the whole model for no
+          // reason.
+          resetSelection();
+        }
+        renderResultsTable(state.tableHeaders, matchedRows);
+        searchNote.textContent = `${matchedRows.length} riga/e trovata/e per "${query}".`;
+        return;
+      }
+    }
+
+    // no table loaded, or nothing matched in it -- fall back to
+    // searching BOM part names directly, same as before this table
+    // existed at all.
+    const allNames = allPartNames();
     const exact = allNames.filter(n => n.toLowerCase() === qLower);
     const matches = exact.length ? exact : allNames.filter(n => n.toLowerCase().includes(qLower));
     if (matches.length) {
       highlightNames(matches);
+      renderResultsTable(null, null);
       searchNote.textContent = `${matches.length} componente/i trovato/i per "${query}".`;
     } else {
       resetSelection();
-      searchNote.textContent = `Nessun componente o codice allarme trovato per "${query}".`;
+      renderResultsTable(null, null);
+      searchNote.textContent = `Nessuna corrispondenza trovata per "${query}".`;
     }
   }
 
@@ -1147,7 +1218,7 @@ function createSceneViewerController(ids) {
 
   return {
     viewer, statsTable, bomTable, searchNote,
-    resetSelection, highlightNames, selectByName, setAlarmRows, renderDocsIndex,
+    resetSelection, highlightNames, selectByName, setInfoTable, renderDocsIndex,
     clearSelectionState, setBomMaterialMap,
   };
 }
@@ -1188,11 +1259,12 @@ function renderScenePanel(ctrl, r) {
 
   ctrl.clearSelectionState(); // new model: colors/selection recached on its own 'load' event
 
-  ctrl.setAlarmRows(r.alarm_rows);
-  if (r.alarm_rows && r.alarm_rows.length) {
+  ctrl.setInfoTable(r.info_table);
+  if (r.info_table && r.info_table.rows && r.info_table.rows.length) {
     ctrl.searchNote.textContent =
-      `Tabella allarmi disponibile (${r.alarm_rows.length} riga/e, ` +
-      `${new Set(r.alarm_rows.map(x => x[0])).size} codici) -- cerca subito per nome o codice.`;
+      `Tabella disponibile (${r.info_table.rows.length} riga/e, ` +
+      `${r.info_table.headers.length} colonne: ${r.info_table.headers.join(", ")}) -- ` +
+      `cerca subito un valore.`;
   } else {
     ctrl.searchNote.textContent = "";
   }
@@ -1218,38 +1290,46 @@ const threedCtrl = createSceneViewerController({
   viewer: "threed-viewer", statsTable: "threed-stats-table", bomTable: "threed-bom-table",
   resetBtn: "threed-reset-btn", exportBtn: "threed-export-btn",
   searchInput: "threed-search-input", searchBtn: "threed-search-btn", searchNote: "threed-search-note",
+  searchResults: "threed-search-results",
   docsBlock: "threed-docs-block", docsIndex: "threed-docs-index",
 });
 
 let lastThreedResult = null;
 let lastThreedGlbUrl = null;
 
+// Generic CSV -> {headers, rows}, arbitrary columns -- no quoted-comma
+// support (a full RFC4180 parser is overkill client-side, declared
+// honestly rather than silently mishandling an edge case nobody asked
+// for). The first row is ALWAYS the header: with free-form columns
+// (component name, alarm code, spare part, "cleans every 6 months"...)
+// there is no way to know what a column means without one, so unlike
+// the old fixed two-column format this is a hard requirement now.
+function parseComponentTableCsv(text) {
+  const lines = String(text).split(/\r?\n/).filter(l => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = lines[0].split(",").map(h => h.trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    let cells = lines[i].split(",").map(c => c.trim());
+    while (cells.length < headers.length) cells.push("");
+    if (cells.length > headers.length) cells = cells.slice(0, headers.length);
+    rows.push(cells);
+  }
+  return { headers, rows };
+}
+
 threedAlarmCsvInput.addEventListener("change", () => {
   const file = threedAlarmCsvInput.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    // manual CSV upload path (client-side only, not from a bundle): same
-    // simple two-column parser (codice_allarme,nome_componente), no
-    // quoted-comma support -- a full RFC4180 parser is overkill for a
-    // two-field lookup table, declared honestly rather than silently
-    // mishandling an edge case nobody asked for. name is parts[1] alone
-    // (a third column -- e.g. a linked procedure document -- is accepted
-    // and ignored), not every trailing part joined: joining would glue a
-    // real third column onto the name instead, found on a real alarm
-    // table that has one.
-    const rows = [];
-    String(reader.result).split(/\r?\n/).forEach((line, i) => {
-      if (!line.trim()) return;
-      const parts = line.split(",");
-      if (parts.length < 2) return;
-      const code = parts[0].trim();
-      if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
-      rows.push([code, parts[1].trim()]);
-    });
-    threedCtrl.setAlarmRows(rows);
-    threedCtrl.searchNote.textContent =
-      `Tabella allarmi caricata: ${new Set(rows.map(x => x[0].trim().toUpperCase())).size} codici allarme.`;
+    // manual CSV upload path (client-side only, not from a bundle)
+    const table = parseComponentTableCsv(String(reader.result));
+    threedCtrl.setInfoTable(table);
+    threedCtrl.searchNote.textContent = table.rows.length
+      ? `Tabella caricata: ${table.rows.length} riga/e, ${table.headers.length} colonne ` +
+        `(${table.headers.join(", ")}).`
+      : "Nessuna riga trovata (serve una riga di intestazione seguita dai dati).";
   };
   reader.readAsText(file);
 });
@@ -1353,9 +1433,9 @@ function renderThreedResult(r) {
   // previous bundle upload in this same session, so search doesn't
   // silently use stale data from an unrelated model
   renderScenePanel(threedCtrl, r);
-  if (r.bundled && r.alarm_rows && r.alarm_rows.length) {
+  if (r.bundled && r.info_table && r.info_table.rows && r.info_table.rows.length) {
     threedCtrl.searchNote.textContent =
-      `Bundle: tabella allarmi già inclusa -- cerca subito per nome o codice.`;
+      `Bundle: tabella già inclusa -- cerca subito un valore.`;
   }
 }
 
@@ -1399,6 +1479,7 @@ const open3dCtrl = createSceneViewerController({
   viewer: "open-3d-viewer", statsTable: "open-3d-stats-table", bomTable: "open-3d-bom-table",
   resetBtn: "open-3d-reset-btn", exportBtn: "open-3d-export-btn",
   searchInput: "open-3d-search-input", searchBtn: "open-3d-search-btn", searchNote: "open-3d-search-note",
+  searchResults: "open-3d-search-results",
   docsBlock: "open-3d-docs-block", docsIndex: "open-3d-docs-index",
 });
 let lastOpen3dGlbUrl = null;

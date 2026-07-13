@@ -35,21 +35,31 @@ technician who's found a defective part and wants a one-image reference
 to request the replacement, the simplest version of that: a picture and
 a code, not a full report generator.
 
-Search bar + alarm table (maintenance flow): typing a component name
-reuses the exact same highlight path as clicking a BOM row (now
-generalized to a *set* of names, not one, since one alarm can affect
-several components at once). An optional two-column CSV
-(codice_allarme,nome_componente, see parse_alarm_csv) maps an alarm
-code to the component name(s) it affects -- an operator reads a code
-off the machine, types it here, and sees exactly which part lit up
-without knowing the CAD component name in advance. The mapping can be
-uploaded by hand in the browser (client-side, no server round-trip) or
-baked into the page at generation time via open_glb_in_browser's
-alarm_rows parameter, which is what makes automation possible: a page
-generated once with the current alarm table embedded can be re-opened
-with a `?q=<code>` URL parameter (from a script, an HMI button, a QR
-code) and the highlight happens with zero typing -- see CLAUDE.md for
-the proposed automation mechanisms this enables.
+Search bar + component info table (maintenance flow): typing ANY value
+searches every column of an uploaded CSV, not just a fixed
+codice_allarme/nome_componente pair -- real tables in the field have
+whatever columns the maintenance team already keeps (component name,
+alarm code, function, spare part number, "cleans every 6 months"...),
+in whatever order, under whatever header names. parse_component_table
+(below) makes no assumption about column meaning beyond requiring a
+header row (there is no way to know what an arbitrary column like
+"info" means otherwise); the ONE column tied to the 3D model -- the
+one used to drive highlightNames -- is auto-detected in JS at load
+time by testing which column's values match the most real BOM part
+names, not by column position or header wording, so a "componente" and
+a "nome_componente" column both work with zero configuration and zero
+assumption about where it sits in the row. A search match shows the
+WHOLE matching row(s), not just a highlighted part: the searchNote
+line stays a short summary, the new #search-results panel renders the
+full row(s) with the table's own column headers as labels. The mapping
+can be uploaded by hand in the browser (client-side, no server
+round-trip) or baked into the page at generation time via
+open_glb_in_browser's info_table parameter, which is what makes
+automation possible: a page generated once with the current table
+embedded can be re-opened with a `?q=<code>` URL parameter (from a
+script, an HMI button, a QR code) and the search happens with zero
+typing -- see CLAUDE.md for the proposed automation mechanisms this
+enables.
 """
 
 from __future__ import annotations
@@ -100,9 +110,16 @@ model-viewer{{width:100%;height:100%}}
                              background:rgba(20,20,20,0.85);color:#eee;font:inherit;
                              cursor:pointer;font-size:13px}}
 #search-btn:hover,#alarm-csv-label:hover{{border-color:#c77a2e}}
-#search-note{{position:absolute;bottom:52px;left:12px;right:12px;margin:0;color:#eee;
-             font-size:12px;background:rgba(20,20,20,0.7);padding:4px 8px;border-radius:4px;
-             max-height:60px;overflow-y:auto}}
+#search-panel{{position:absolute;bottom:52px;left:12px;right:12px;display:flex;
+              flex-direction:column;gap:6px;max-height:50vh}}
+#search-note{{margin:0;color:#eee;font-size:12px;background:rgba(20,20,20,0.7);
+             padding:4px 8px;border-radius:4px;flex-shrink:0;max-height:60px;overflow-y:auto}}
+#search-results{{overflow:auto;background:rgba(20,20,20,0.92);border-radius:6px;display:none}}
+#search-results.open{{display:block}}
+#search-results table{{width:100%;border-collapse:collapse;font-size:12px}}
+#search-results th,#search-results td{{padding:4px 8px;border-bottom:1px solid #333;
+                                       text-align:left;color:#eee}}
+#search-results th{{background:#2a2a2a;position:sticky;top:0}}
 #doc-index{{position:absolute;top:54px;left:12px;max-width:260px;max-height:60vh;overflow-y:auto;
            background:rgba(20,20,20,0.85);color:#eee;padding:8px 12px;border-radius:6px;
            font-size:13px}}
@@ -140,7 +157,7 @@ body.no-3d #doc-index{{top:12px}}
   <div id="doc-overlay-body"></div>
 </div>
 <script>
-window.__BALZAR_ALARM_ROWS__ = {alarm_rows_json};
+window.__BALZAR_INFO_TABLE__ = {info_table_json};
 window.__BALZAR_DOCS__ = {docs_json};
 {select_js}
 {doc_js}
@@ -156,11 +173,14 @@ _THREED_SECTION = """<model-viewer id="mv" src="model.glb" camera-controls auto-
              shadow-intensity="0.6" exposure="1.1" field-of-view="30deg"></model-viewer>
 <button id="reset-btn" type="button">Mostra tutto</button>
 <button id="export-btn" type="button" disabled>Esporta scheda ricambio</button>
-<p id="search-note"></p>
+<div id="search-panel">
+  <div id="search-results"></div>
+  <p id="search-note"></p>
+</div>
 <div id="search-bar">
-  <input id="search-input" type="text" placeholder="Cerca componente o codice allarme…">
+  <input id="search-input" type="text" placeholder="Cerca in qualunque colonna della tabella…">
   <button id="search-btn" type="button">Cerca</button>
-  <label id="alarm-csv-label" for="alarm-csv-input">Carica tabella allarmi (CSV)</label>
+  <label id="alarm-csv-label" for="alarm-csv-input">Carica tabella componenti (CSV)</label>
   <input id="alarm-csv-input" type="file" accept=".csv,text/csv" style="display:none">
 </div>"""
 
@@ -176,14 +196,23 @@ _SELECT_JS = """
   var searchBtn = document.getElementById('search-btn');
   var searchNote = document.getElementById('search-note');
   var alarmCsvInput = document.getElementById('alarm-csv-input');
+  var searchResultsEl = document.getElementById('search-results');
   var HIGHLIGHT = [1.0, 0.55, 0.05, 1.0];
   var DIM_ALPHA = 0.12;
   var originalColors = null;
   var selectedNames = [];   // names currently highlighted -- 0, 1 or many
   var selectedCount = null; // BOM count, only meaningful for exactly 1 name
-  // alarm code (trimmed, uppercased) -> [component name, ...]. A code can
-  // map to several components (one alarm, several affected parts).
-  var alarmMap = new Map();
+  // The component info table: arbitrary headers/rows (parse_component_table
+  // on the Python side), no assumption about which column means what.
+  // componentColumnIndex is auto-detected once per table load (see
+  // detectComponentColumn) by testing which column's values match the
+  // most real BOM part names -- not by header wording or position, so a
+  // "componente"/"nome componente"/"nome_componente" column all work with
+  // zero configuration, and a table with no component-like column at all
+  // still searches/displays fine, just without 3D highlighting.
+  var tableHeaders = [];
+  var tableRows = [];
+  var componentColumnIndex = -1;
   var allPartNames = Array.prototype.map.call(
       document.querySelectorAll('#bom tr.part'), function(row){ return row.dataset.partName; });
   // display label (BOM row name, e.g. "RESERVOIR1") -> exact glTF
@@ -201,12 +230,57 @@ _SELECT_JS = """
     names.forEach(function(n){ materialNameToLabel.set(n, row.dataset.partName); });
   });
 
-  function loadAlarmRows(rows){
-    (rows || []).forEach(function(pair){
-      var key = String(pair[0]).trim().toUpperCase();
-      if (!alarmMap.has(key)) alarmMap.set(key, []);
-      alarmMap.get(key).push(pair[1]);
+  // For each column, count how many of its (trimmed, case-insensitive)
+  // values match a real BOM part name -- the column with the most
+  // matches is "the component column" for highlighting purposes. Not
+  // header wording or position: real tables call this column anything
+  // ("componente", "nome componente", "parte"...), and testing content
+  // instead of the header name means zero configuration is needed and
+  // zero assumption about column order. A table with no column that
+  // matches any real part name returns -1 -- rows still search/display
+  // fine, they just never drive a 3D highlight.
+  function detectComponentColumn(headers, rows){
+    if (!headers.length || !rows.length) return -1;
+    var partNameSet = new Set(allPartNames.map(function(n){ return n.toLowerCase(); }));
+    var bestCol = -1, bestCount = 0;
+    for (var col = 0; col < headers.length; col++){
+      var count = 0;
+      rows.forEach(function(row){
+        var v = (row[col] || '').trim().toLowerCase();
+        if (v && partNameSet.has(v)) count++;
+      });
+      if (count > bestCount){ bestCount = count; bestCol = col; }
+    }
+    return bestCount > 0 ? bestCol : -1;
+  }
+
+  function loadInfoTable(table){
+    tableHeaders = (table && table.headers) || [];
+    tableRows = (table && table.rows) || [];
+    componentColumnIndex = detectComponentColumn(tableHeaders, tableRows);
+  }
+
+  function escapeHtml(s){
+    var d = document.createElement('div');
+    d.textContent = String(s == null ? '' : s);
+    return d.innerHTML;
+  }
+
+  function renderResultsTable(headers, rows){
+    if (!headers || !rows || !rows.length){
+      searchResultsEl.innerHTML = '';
+      searchResultsEl.classList.remove('open');
+      return;
+    }
+    var html = '<table><thead><tr>' + headers.map(function(h){
+      return '<th>' + escapeHtml(h) + '</th>';
+    }).join('') + '</tr></thead><tbody>';
+    rows.forEach(function(row){
+      html += '<tr>' + row.map(function(c){ return '<td>' + escapeHtml(c) + '</td>'; }).join('') + '</tr>';
     });
+    html += '</tbody></table>';
+    searchResultsEl.innerHTML = html;
+    searchResultsEl.classList.add('open');
   }
 
   function cacheColors(){
@@ -214,7 +288,11 @@ _SELECT_JS = """
     mv.model.materials.forEach(function(m){
       originalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
     });
-    loadAlarmRows(window.__BALZAR_ALARM_ROWS__);
+    loadInfoTable(window.__BALZAR_INFO_TABLE__);
+    if (tableRows.length){
+      searchNote.textContent = 'Tabella disponibile (' + tableRows.length + ' riga/e, ' +
+        tableHeaders.length + ' colonne: ' + tableHeaders.join(', ') + ') -- cerca subito un valore.';
+    }
     var q = new URLSearchParams(location.search).get('q');
     if (q){ searchInput.value = q; runSearch(q); }
   }
@@ -272,54 +350,75 @@ _SELECT_JS = """
     exportBtn.disabled = (selectedNames.length !== 1);
   }
 
-  function parseAlarmCsv(text){
-    // Simple two-column CSV (codice_allarme,nome_componente), no quoted-
-    // comma support -- a full RFC4180 parser is overkill for a two-field
-    // lookup table, declared honestly rather than silently mishandling
-    // an edge case nobody asked for. name is parts[1] alone (a third
-    // column -- e.g. a linked procedure document, CLAUDE.md SS9.19 --
-    // is accepted and ignored), not every trailing part joined: joining
-    // would glue a real third column onto the name instead of just
-    // tolerating a raw unquoted comma inside it -- it can't tell the two
-    // apart, and a real alarm table with a third column showed this
-    // corrupting the name.
-    var map = new Map();
-    text.split(/\\r?\\n/).forEach(function(line, i){
-      if (!line.trim()) return;
-      var parts = line.split(',');
-      if (parts.length < 2) return;
-      var code = parts[0].trim();
-      if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
-      var name = parts[1].trim();
-      var key = code.toUpperCase();
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(name);
-    });
-    return map;
+  function parseComponentTable(text){
+    // Generic CSV, arbitrary columns -- no quoted-comma support (a full
+    // RFC4180 parser is overkill client-side, declared honestly rather
+    // than silently mishandling an edge case nobody asked for). The
+    // first row is ALWAYS the header: with free-form columns (component
+    // name, alarm code, spare part, "cleans every 6 months"...) there is
+    // no way to know what a column means without one, so unlike the old
+    // fixed two-column format this is a hard requirement now, not a
+    // heuristic guess.
+    var lines = text.split(/\\r?\\n/).filter(function(l){ return l.trim().length > 0; });
+    if (!lines.length) return {headers: [], rows: []};
+    var headers = lines[0].split(',').map(function(h){ return h.trim(); });
+    var rows = [];
+    for (var i = 1; i < lines.length; i++){
+      var cells = lines[i].split(',').map(function(c){ return c.trim(); });
+      while (cells.length < headers.length) cells.push('');
+      if (cells.length > headers.length) cells = cells.slice(0, headers.length);
+      rows.push(cells);
+    }
+    return {headers: headers, rows: rows};
   }
 
   function runSearch(query){
     query = (query || '').trim();
-    if (!query){ resetAll(); return; }
-    var key = query.toUpperCase();
-    if (alarmMap.has(key)){
-      var names = alarmMap.get(key);
-      highlightNames(names);
-      searchNote.textContent = 'Allarme ' + query + ': ' + names.length +
-        ' componente/i evidenziato/i (' + names.join(', ') + ').';
-      return;
-    }
+    if (!query){ resetAll(); renderResultsTable(null, null); return; }
     var qLower = query.toLowerCase();
+
+    if (tableHeaders.length && tableRows.length){
+      var matchedRows = tableRows.filter(function(row){
+        return row.some(function(cell){ return cell.toLowerCase().indexOf(qLower) !== -1; });
+      });
+      if (matchedRows.length){
+        var componentValues = new Set();
+        if (componentColumnIndex >= 0){
+          matchedRows.forEach(function(row){
+            var v = row[componentColumnIndex];
+            if (v) componentValues.add(v);
+          });
+        }
+        if (componentValues.size){
+          highlightNames(Array.from(componentValues));
+        } else {
+          // a purely informational row (no recognized component value)
+          // is not a failed search -- show it, just without touching
+          // the 3D view, rather than dimming the whole model for no
+          // reason.
+          resetAll();
+        }
+        renderResultsTable(tableHeaders, matchedRows);
+        searchNote.textContent = matchedRows.length + ' riga/e trovata/e per "' + query + '".';
+        return;
+      }
+    }
+
+    // no table loaded, or nothing matched in it -- fall back to
+    // searching BOM part names directly, same as before this table
+    // existed at all.
     var exact = allPartNames.filter(function(n){ return n.toLowerCase() === qLower; });
     var matches = exact.length ? exact : allPartNames.filter(function(n){
       return n.toLowerCase().indexOf(qLower) !== -1;
     });
     if (matches.length){
       highlightNames(matches);
+      renderResultsTable(null, null);
       searchNote.textContent = matches.length + ' componente/i trovato/i per "' + query + '".';
     } else {
       resetAll();
-      searchNote.textContent = 'Nessun componente o codice allarme trovato per "' + query + '".';
+      renderResultsTable(null, null);
+      searchNote.textContent = 'Nessuna corrispondenza trovata per "' + query + '".';
     }
   }
 
@@ -379,8 +478,10 @@ _SELECT_JS = """
     if (!file) return;
     var reader = new FileReader();
     reader.onload = function(){
-      alarmMap = parseAlarmCsv(String(reader.result));
-      searchNote.textContent = 'Tabella allarmi caricata: ' + alarmMap.size + ' codici allarme.';
+      loadInfoTable(parseComponentTable(String(reader.result)));
+      renderResultsTable(null, null);
+      searchNote.textContent = 'Tabella caricata: ' + tableRows.length + ' riga/e, ' +
+        tableHeaders.length + ' colonne (' + tableHeaders.join(', ') + ').';
     };
     reader.readAsText(file);
   });
@@ -514,51 +615,83 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass  # the desktop app has no console for this to usefully go to
 
 
-def parse_alarm_csv_text(text: str) -> list[tuple[str, str]]:
-    """Two-column CSV (codice_allarme,nome_componente) -> [(code, name), ...].
-    One alarm code can appear on several rows (several affected
-    components); an optional header row is detected and skipped by the
-    same heuristic as the browser-side parser (first cell mentions
-    "code"/"codice"/"allarme"/"alarm"), not required. Uses the stdlib
-    `csv` module here (unlike the client-side JS parser, which is a
-    plain split() -- a real CSV reader is cheap in Python and handles
-    quoted commas correctly, so no need to declare the same limitation
-    twice). Takes text directly (not a path) so it works equally on a
-    CSV loaded from disk or one unpacked from a bundle (balzar/bundle.py)
-    in memory.
+class ComponentTable:
+    """A generic component/maintenance info table: whatever columns a
+    real CSV actually has (component name, alarm code, function, spare
+    part, "cleans every 6 months"...), in whatever order, under whatever
+    header names -- no assumption about column meaning baked into the
+    data model itself. Which column (if any) drives the 3D highlight is
+    decided later, client-side, by testing content against the model's
+    own BOM part names (detectComponentColumn in the JS templates
+    below); this class only carries the parsed rows."""
 
-    A third (or later) column -- e.g. a linked procedure document, see
-    CLAUDE.md SS9.19's Bridge scoping -- is accepted and ignored here:
-    `name` is `cells[1]` alone, not every trailing cell joined together.
-    An earlier version joined `cells[1:]` (meant to tolerate an
-    unquoted comma inside the name), which silently glued a third
-    column's content onto the component name instead -- a real
-    corruption on any file that actually uses a third column, found
-    reviewing a real alarm table with one. A name containing a comma
-    must be quoted in the source CSV (csv.reader already handles that
-    correctly); joining trailing cells is not the right way to support
-    it, since it can't tell "one name with a raw comma" apart from "two
-    genuinely different columns"."""
+    def __init__(self, headers: list[str], rows: list[list[str]]):
+        self.headers = headers
+        self.rows = rows
+
+    def all_values(self) -> set[str]:
+        """Every non-empty cell across the whole table -- used as the
+        candidate set for scene3d.generate_bom's collapse_names. There's
+        no way to know which column is "the component" before the BOM
+        exists (collapse_names is an INPUT to building it), so instead
+        of guessing a column, every cell value is offered as a
+        candidate; a candidate that doesn't match any real group name is
+        simply ignored downstream (generate_bom's documented behavior),
+        so this is safe, not just convenient."""
+        return {cell for row in self.rows for cell in row if cell.strip()}
+
+    def to_json_dict(self) -> dict:
+        return {"headers": self.headers, "rows": self.rows}
+
+
+def parse_component_table_text(text: str) -> ComponentTable:
+    """Generic CSV -> ComponentTable(headers, rows). Uses the stdlib
+    `csv` module (unlike the client-side JS parser, which is a plain
+    split() -- a real CSV reader is cheap in Python and handles quoted
+    commas correctly, so no need to declare the same limitation twice).
+    Takes text directly (not a path) so it works equally on a CSV loaded
+    from disk or one unpacked from a bundle (balzar/bundle.py) in
+    memory.
+
+    The first row is ALWAYS the header (declared column names) --
+    unlike the old fixed two-column format (codice_allarme,
+    nome_componente), which could heuristically guess whether row 0 was
+    a header or already data, arbitrary columns give no such anchor: a
+    column named "info" or "ricambio" is meaningless without a header
+    saying so. A file with no rows at all (blank) returns an empty
+    table rather than raising -- an ordinary "nothing uploaded yet"
+    state, not an error condition."""
     import io as _io
 
-    rows: list[tuple[str, str]] = []
-    for i, cells in enumerate(csv.reader(_io.StringIO(text))):
-        if len(cells) < 2 or not cells[0].strip():
+    reader = csv.reader(_io.StringIO(text))
+    try:
+        first = next(reader)
+    except StopIteration:
+        return ComponentTable(headers=[], rows=[])
+    headers = [h.strip() for h in first]
+    if not any(headers):
+        raise ValueError("la tabella componenti richiede una riga di intestazione "
+                         "(i nomi delle colonne) come prima riga del CSV")
+    rows: list[list[str]] = []
+    for cells in reader:
+        cells = [c.strip() for c in cells]
+        if not any(cells):
             continue
-        code = cells[0].strip()
-        if i == 0 and any(w in code.lower() for w in ("code", "codice", "allarme", "alarm")):
-            continue
-        rows.append((code, cells[1].strip()))
-    return rows
+        if len(cells) < len(headers):
+            cells += [""] * (len(headers) - len(cells))
+        elif len(cells) > len(headers):
+            cells = cells[:len(headers)]
+        rows.append(cells)
+    return ComponentTable(headers=headers, rows=rows)
 
 
-def parse_alarm_csv(path: str) -> list[tuple[str, str]]:
-    """parse_alarm_csv_text, reading from a file path."""
+def parse_component_table(path: str) -> ComponentTable:
+    """parse_component_table_text, reading from a file path."""
     with open(path, encoding="utf-8") as fh:
-        return parse_alarm_csv_text(fh.read())
+        return parse_component_table_text(fh.read())
 
 
-def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
+def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
                         work_dir: str) -> http.server.HTTPServer:
     """Write model.glb (if any) + viewer.html + a copy of
     model-viewer.min.js, then serve `work_dir` on an ephemeral localhost
@@ -575,17 +708,20 @@ def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
     if glb is not None:
         with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
             fh.write(glb)
-    # </script> inside a name/label would otherwise close the tag early --
-    # escape the slash so embedded JSON stays inert text to the HTML
-    # parser (same mitigation for the alarm rows and every doc's label).
-    alarm_rows_json = json.dumps(alarm_rows or []).replace("</", "<\\/")
+    # </script> inside a cell value or label would otherwise close the
+    # tag early -- escape the slash so embedded JSON stays inert text to
+    # the HTML parser (same mitigation for the info table and every
+    # doc's label).
+    info_table_json = json.dumps(
+        info_table.to_json_dict() if info_table else {"headers": [], "rows": []}
+    ).replace("</", "<\\/")
     docs_json = json.dumps(documents or []).replace("</", "<\\/")
     html_out = _PAGE_TEMPLATE.format(
         body_class="" if glb is not None else "no-3d",
         threed_section=_THREED_SECTION if glb is not None else "",
         bom_html=_bom_html(bom_lines) if glb is not None else "",
         doc_index_html=_doc_index_html(documents),
-        alarm_rows_json=alarm_rows_json,
+        info_table_json=info_table_json,
         docs_json=docs_json,
         select_js=_SELECT_JS if glb is not None else "",
         doc_js=_DOC_JS)
@@ -606,7 +742,7 @@ def _render_viewer_page(glb: bytes | None, bom_lines, alarm_rows, documents,
 
 def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] | None,
                         work_dir: str,
-                        alarm_rows: list[tuple[str, str]] | None = None,
+                        info_table: ComponentTable | None = None,
                         documents: list[dict] | None = None) -> "http.server.HTTPServer":
     """Write model.glb + viewer.html + a copy of model-viewer.min.js into
     `work_dir`, serve it on an ephemeral localhost port, open the default
@@ -615,19 +751,19 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] 
     function does not clean up after itself, since the HTTP server keeps
     serving from it for the life of the background thread).
 
-    `alarm_rows` (optional, from parse_alarm_csv or built by hand) gets
-    baked into the page as a JS literal so the alarm-code search works
+    `info_table` (optional, from parse_component_table or built by hand)
+    gets baked into the page as a JS literal so the search works
     immediately on load, with no manual CSV upload step -- the piece that
     makes automation possible: a page generated once can be re-opened
-    with `?q=<code>` (from a script, an HMI button, a QR code) and the
-    matching component highlights with zero typing.
+    with `?q=<value>` (from a script, an HMI button, a QR code) and the
+    matching row(s)/component highlight with zero typing.
 
     `documents` (optional, each {role, label, b64}) adds a navigable
     index of consultable documents alongside the model -- see
     open_bundle_in_browser, which builds it from a bundle's doc items.
 
     Returns the running server (see _render_viewer_page)."""
-    return _render_viewer_page(glb, bom_lines, alarm_rows, documents, work_dir)
+    return _render_viewer_page(glb, bom_lines, info_table, documents, work_dir)
 
 
 def _render_2d_item(item) -> list[dict]:
@@ -731,14 +867,25 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HT
 
     documents = _documents_from_items(items)
 
-    alarm_rows: list[tuple[str, str]] = []
+    # a bundle with more than one alarm-marked CSV is valid (the format
+    # doesn't forbid it) but they could have entirely different columns
+    # -- concatenating rows across mismatched schemas the way the old
+    # fixed two-column format safely could doesn't generalize, so only
+    # the first one becomes the info table, same "first one wins, not
+    # silently merged" principle already used below for multiple 3D items
+    info_table = None
     for it in items:
         if is_alarm_kind(it.kind):
-            alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
-    # an alarm component name collapses its own BOM/GLB entry into a
-    # single row/highlight group instead of expanding to every leaf part
-    # underneath -- see scene3d.generate_bom's collapse_names
-    collapse_names = {name for _code, name in alarm_rows} or None
+            info_table = parse_component_table_text(it.data.decode("utf-8"))
+            break
+    # any cell value across the whole table is offered as a candidate to
+    # collapse its own BOM/GLB entry into a single row/highlight group
+    # instead of expanding to every leaf part underneath -- see
+    # scene3d.generate_bom's collapse_names; a candidate that doesn't
+    # match a real group name is simply ignored, so this doesn't need to
+    # know which column is "the component" (that's decided later,
+    # client-side, once the BOM this very call produces actually exists)
+    collapse_names = info_table.all_values() if info_table else None
 
     three_d_items = [it for it in items if it.kind == KIND_3D]
     if not three_d_items:
@@ -758,5 +905,5 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HT
     glb = scene3d_to_glb(scene, collapse_names=collapse_names)
     bom_lines = [(e.name, e.count, e.material_names)
                 for e in generate_bom(scene, collapse_names)]
-    return open_glb_in_browser(glb, bom_lines, work_dir, alarm_rows=alarm_rows or None,
+    return open_glb_in_browser(glb, bom_lines, work_dir, info_table=info_table,
                                documents=documents or None)

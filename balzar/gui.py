@@ -66,11 +66,11 @@ class Job:
         self.bom_lines: list[tuple[str, int, list[str]]] = []
         # a multi-document bundle (balzar/bundle.py) is still a 3D job
         # (is_3d=True) but saves as .bzx instead of .b3d, and carries its
-        # own alarm table -- distinct from BalzarApp.alarm_rows, which is
-        # loaded manually via "Carica tabella allarmi" and applies across
-        # whichever job is open
+        # own info table -- distinct from BalzarApp.info_table, which is
+        # loaded manually via "Carica tabella componenti" and applies
+        # across whichever job is open
         self.is_bundle = False
-        self.alarm_rows: list[tuple[str, str]] = []
+        self.info_table = None  # ComponentTable | None (balzar/viewer3d.py)
         # True only for a job that decoded/scanned an EXISTING artifact
         # (Balzar Live's consumption side) -- opening a .b3d/.bzx/.bzp or
         # scanning a QR photo -- never for a fresh encode (Balzar Studio:
@@ -98,11 +98,12 @@ class BalzarApp:
         self._frame_count = 1
         self._playing = True
         self._photo_refs: list = []  # keep PhotoImage references alive
-        # alarm code -> component name table for the 3D viewer's search bar
-        # (balzar/viewer3d.py); independent of which job is loaded -- a
-        # technician can load this once and reuse it across several 3D
-        # files, so it lives on the app, not on Job.
-        self.alarm_rows: list[tuple[str, str]] = []
+        # component info table for the 3D viewer's search bar
+        # (balzar/viewer3d.py, ComponentTable | None); independent of
+        # which job is loaded -- a technician can load this once and
+        # reuse it across several 3D files, so it lives on the app, not
+        # on Job.
+        self.info_table = None
         # library entry id (or a job's own fallback id) -> (the running
         # http.server.HTTPServer already serving it, its temp work_dir)
         # (balzar/library.py) -- avoids spawning a second
@@ -210,11 +211,11 @@ class BalzarApp:
         self.btn_view3d = ttk.Button(btns, text="Visualizza in 3D (browser)",
                                      command=self.view_3d, state="disabled")
         self.btn_view3d.pack(fill="x", pady=2)
-        # not tied to job state: the alarm table is independent of which
+        # not tied to job state: the info table is independent of which
         # 3D file is open, can be loaded before or after opening one, and
         # is reused across files until replaced by loading another CSV
         self.btn_load_alarms = ttk.Button(
-            btns, text="Carica tabella allarmi (CSV)", command=self.load_alarm_csv)
+            btns, text="Carica tabella componenti (CSV)", command=self.load_alarm_csv)
         self.btn_load_alarms.pack(fill="x", pady=2)
         # also independent of the currently open job -- picks its own
         # files rather than combining whatever is already loaded
@@ -483,27 +484,35 @@ class BalzarApp:
         """Re-open (or receive freshly built by create_bundle) a
         multi-document bundle (.bzx, balzar/bundle.py): unpack the 3D
         item (if any) into the usual glb/BOM view, any alarm item into
-        job.alarm_rows, and every alarm/doc item into job.documents for
+        job.info_table, and every alarm/doc item into job.documents for
         the navigable index. A bundle with NO 3D item is valid -- it
         stays is_bundle but not is_3d, and 'Visualizza documenti' opens
         an index-only page."""
         from .bundle import KIND_3D, decode_bundle, is_alarm_kind
         from .scene3d import decode_payload, generate_bom
-        from .viewer3d import parse_alarm_csv_text
+        from .viewer3d import parse_component_table_text
 
         items = decode_bundle(data)
         job.is_bundle = True
         job.payload = data
-        job.alarm_rows = []
+        # a bundle with more than one alarm-marked CSV is valid but they
+        # could have entirely different columns -- only the first one
+        # becomes the info table (see viewer3d.open_bundle_in_browser
+        # for the same "first one wins" reasoning)
+        job.info_table = None
         for it in items:
             if is_alarm_kind(it.kind):
-                job.alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
+                job.info_table = parse_component_table_text(it.data.decode("utf-8"))
+                break
         n_docs = sum(1 for it in items if it.kind != KIND_3D)
         bundle_stat = ("bundle", f"{len(items)} elementi ({', '.join(it.kind for it in items)})")
-        # an alarm component name collapses its own BOM/GLB entry into a
-        # single row/highlight group instead of expanding to every leaf
-        # part underneath -- see scene3d.generate_bom's collapse_names
-        collapse_names = {name for _code, name in job.alarm_rows} or None
+        # any cell value across the whole table is offered as a candidate
+        # to collapse its own BOM/GLB entry into a single row/highlight
+        # group instead of expanding to every leaf part underneath -- see
+        # scene3d.generate_bom's collapse_names; safe even though we
+        # don't yet know which column is "the component" (that's decided
+        # client-side later, once the BOM this call produces exists)
+        collapse_names = job.info_table.all_values() if job.info_table else None
 
         three_d_items = [it for it in items if it.kind == KIND_3D]
         if three_d_items:
@@ -638,7 +647,7 @@ class BalzarApp:
         else:
             from .viewer3d import open_glb_in_browser
             server = open_glb_in_browser(job.glb, job.bom_lines, work_dir,
-                                         alarm_rows=self.alarm_rows or None)
+                                         info_table=self.info_table)
         self._open_viewers[key] = (server, work_dir)
         self.status.set("Aperto nel browser predefinito")
 
@@ -852,30 +861,34 @@ class BalzarApp:
         self.queue.put(job)
 
     def load_alarm_csv(self) -> None:
-        """Load a codice_allarme,nome_componente CSV for the 3D viewer's
+        """Load a component info CSV (any columns: component name, alarm
+        code, spare part, maintenance notes...) for the 3D viewer's
         search bar (balzar/viewer3d.py) -- baked into the page the next
         time 'Visualizza in 3D' opens one, so the operator can search by
-        alarm code with no manual upload step in the browser itself."""
+        any value with no manual upload step in the browser itself."""
         path = filedialog.askopenfilename(
-            title="Carica tabella allarmi (codice_allarme,nome_componente)",
+            title="Carica tabella componenti (CSV, con intestazione)",
             filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
         if not path:
             return
-        from .viewer3d import parse_alarm_csv
+        from .viewer3d import parse_component_table
         try:
-            rows = parse_alarm_csv(path)
+            table = parse_component_table(path)
         except OSError as exc:
             messagebox.showerror("balzar", f"Impossibile leggere {os.path.basename(path)}:\n{exc}")
             return
-        if not rows:
+        except ValueError as exc:
+            messagebox.showerror("balzar", f"{os.path.basename(path)}: {exc}")
+            return
+        if not table.rows:
             messagebox.showwarning(
                 "balzar", f"Nessuna riga valida trovata in {os.path.basename(path)}.\n"
-                "Formato atteso: codice_allarme,nome_componente (una riga per coppia).")
+                "Formato atteso: una riga di intestazione (nomi di colonna) seguita "
+                "dai dati, colonne libere.")
             return
-        self.alarm_rows = rows
-        n_codes = len({code for code, _ in rows})
-        self.status.set(f"Tabella allarmi caricata: {n_codes} codici, {len(rows)} righe "
-                        f"({os.path.basename(path)})")
+        self.info_table = table
+        self.status.set(f"Tabella caricata: {len(table.rows)} righe, "
+                        f"{len(table.headers)} colonne ({os.path.basename(path)})")
 
     def save_program(self) -> None:
         if not self.job:

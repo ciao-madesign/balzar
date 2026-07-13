@@ -363,13 +363,17 @@
                  style="position:absolute;top:10px;left:10px">Mostra tutto</button>
           <button id="threed-export-btn" type="button" disabled
                  style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
-          <p id="threed-search-note" style="position:absolute;bottom:52px;left:10px;right:10px;
-             margin:0;color:#eee;font-size:12px;background:rgba(20,20,20,0.7);padding:4px 8px;
-             border-radius:4px;max-height:60px;overflow-y:auto"></p>
+          <div style="position:absolute;bottom:52px;left:10px;right:10px;display:flex;
+               flex-direction:column;gap:6px;max-height:50vh">
+            <p id="threed-search-note" style="margin:0;color:#eee;font-size:12px;
+               background:rgba(20,20,20,0.7);padding:4px 8px;border-radius:4px;
+               flex-shrink:0;max-height:60px;overflow-y:auto"></p>
+            <div id="threed-search-results" class="search-results-table"></div>
+          </div>
           <div style="position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:8px;
                align-items:center;flex-wrap:wrap">
             <input id="threed-search-input" type="text"
-                   placeholder="Cerca componente o codice allarme…"
+                   placeholder="Cerca in qualunque colonna della tabella…"
                    style="flex:1;min-width:200px;padding:6px 10px;border-radius:6px;
                           border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
                           font:inherit">
@@ -377,7 +381,7 @@
             <label id="threed-alarm-csv-label" for="threed-alarm-csv-input"
                    style="padding:6px 10px;border-radius:6px;border:1px solid #555;
                           background:rgba(20,20,20,0.85);color:#eee;font-size:13px;cursor:pointer">
-              Carica tabella allarmi (CSV)
+              Carica tabella componenti (CSV)
               <input id="threed-alarm-csv-input" type="file" accept=".csv,text/csv" hidden>
             </label>
           </div>
@@ -388,13 +392,16 @@
           distinta base per evidenziare tutte le istanze di quel tipo di parte. Con una parte
           selezionata, "esporta scheda ricambio" scarica un'immagine con la vista isolata più
           nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.
-          La barra di ricerca cerca per nome componente o, se hai caricato una tabella
-          allarmi (CSV a due colonne: codice_allarme,nome_componente — nel bundle sopra,
-          o qui sotto), per codice allarme — utile per un operatore che legge un codice
-          sulla macchina e vuole vedere subito il componente coinvolto senza conoscerne
-          il nome CAD. Differenza tra le due vie: quella sopra (prima dell'upload) entra
-          nel bundle scaricabile/QR, questa qui sotto è solo per questa sessione del
-          browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
+          La barra di ricerca cerca in <strong>qualunque colonna</strong> di una tabella
+          componenti caricata (CSV libero, con intestazione: nome componente, codice, allarme,
+          ricambio, note di manutenzione… in qualunque ordine — nel bundle sopra, o qui sotto) e
+          mostra l'intera riga trovata; se il valore cercato compare anche nella colonna che la
+          tabella usa per il nome del componente (rilevata automaticamente confrontando i valori
+          con la distinta base, non per posizione o intestazione), il componente si evidenzia
+          anche sul modello 3D. Senza tabella caricata, la ricerca cade sul solo nome
+          componente. Differenza tra le due vie di caricamento: quella sopra (prima
+          dell'upload) entra nel bundle scaricabile/QR, questa qui sotto è solo per questa
+          sessione del browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
 
         <table class="stats" id="threed-stats-table"></table>
 
@@ -566,13 +573,17 @@
                  style="position:absolute;top:10px;left:10px">Mostra tutto</button>
           <button id="open-3d-export-btn" type="button" disabled
                  style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
-          <p id="open-3d-search-note" style="position:absolute;bottom:52px;left:10px;right:10px;
-             margin:0;color:#eee;font-size:12px;background:rgba(20,20,20,0.7);padding:4px 8px;
-             border-radius:4px;max-height:60px;overflow-y:auto"></p>
+          <div style="position:absolute;bottom:52px;left:10px;right:10px;display:flex;
+               flex-direction:column;gap:6px;max-height:50vh">
+            <p id="open-3d-search-note" style="margin:0;color:#eee;font-size:12px;
+               background:rgba(20,20,20,0.7);padding:4px 8px;border-radius:4px;
+               flex-shrink:0;max-height:60px;overflow-y:auto"></p>
+            <div id="open-3d-search-results" class="search-results-table"></div>
+          </div>
           <div style="position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:8px;
                align-items:center;flex-wrap:wrap">
             <input id="open-3d-search-input" type="text"
-                   placeholder="Cerca componente o codice allarme…"
+                   placeholder="Cerca in qualunque colonna della tabella…"
                    style="flex:1;min-width:200px;padding:6px 10px;border-radius:6px;
                           border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
                           font:inherit">

@@ -322,6 +322,38 @@ table.stats tr.part.selected td:first-child { color: #fff; }
   border-radius: 4px;
   padding: 0 0.35rem;
 }
+
+/* full matched row(s) from a component info table search (3D viewer
+   search bar) -- overlays a dark model-viewer panel regardless of the
+   page's own light/dark theme, same reasoning as the other overlays in
+   this same panel (search-note, BOM, doc-index). Empty/no match: no
+   content, no border, invisible. */
+.search-results-table {
+  overflow: auto;
+  background: rgba(20, 20, 20, 0.92);
+  border-radius: 6px;
+  display: none;
+}
+.search-results-table.open {
+  display: block;
+}
+.search-results-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.search-results-table th,
+.search-results-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #333;
+  text-align: left;
+  color: #eee;
+}
+.search-results-table th {
+  background: #2a2a2a;
+  position: sticky;
+  top: 0;
+}
 .doc-preview {
   margin-top: 0.5rem;
   border: 1px solid var(--border);

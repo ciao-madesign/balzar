@@ -1538,7 +1538,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-324 test, tutti verdi (`python3 -m unittest discover -s tests`):
+328 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -4281,10 +4281,146 @@ fabbrichi mai un capitolo sbagliato; il roundtrip end-to-end sullo
 stesso frame di coincidenza, a conferma che il fallback whole-image
 recupera comunque il payload corretto. 324 test totali.
 
+### 9.29 Tabella componenti a contenuto libero: colonna "componente" auto-rilevata, ricerca su tutta la riga
+
+Richiesta diretta di sessione: la tabella allarmi (§9.15/§9.21) aveva
+uno schema fisso a 2-3 colonne (`codice_allarme,nome_componente[,documento_procedura]`).
+Nella realtà il file può avere colonne arbitrarie in ordine arbitrario
+(`nome componente,codice,funzione,allarme,procedure,ricambio,info` — dove
+`info` può essere ore di utilizzo dal contaore o una nota di manutenzione
+programmata), e la ricerca deve funzionare per qualunque colonna, non
+solo allarme/componente, mostrando **sempre la riga intera trovata**, non
+solo un'evidenziazione. Quattro decisioni di design proposte e confermate
+esplicitamente dall'utente prima di scrivere codice (tutte le opzioni
+"Consigliato"):
+
+1. **Colonna componente auto-rilevata per contenuto, non per
+   intestazione**: dopo il caricamento, si conta per ogni colonna quanti
+   valori (trim + lowercase) corrispondono esattamente a un nome reale
+   nella distinta base 3D — la colonna con più corrispondenze vince,
+   nessuna corrispondenza → nessuna colonna component-driving (le righe
+   restano comunque cercabili/visualizzabili, solo senza evidenziazione
+   3D). Zero configurazione, funziona con qualunque intestazione/ordine.
+2. **Ricerca su tutta la riga, mostra tutte le righe corrispondenti**:
+   cercare un valore presente in una qualunque cella di una qualunque
+   colonna mostra tutte le righe che lo contengono, con l'unione dei
+   valori della colonna-componente di quelle righe evidenziata insieme
+   sul modello (stesso principio già in uso per un allarme
+   multi-componente, generalizzato a "qualunque ricerca
+   multi-riga"). Una riga puramente informativa (nessun valore
+   riconosciuto in colonna-componente) non è una ricerca fallita: si
+   mostra comunque, semplicemente senza toccare la vista 3D, invece di
+   attenuare tutto il modello senza motivo.
+3. **Colonna "procedure" resta solo testo mostrato nella riga**: nessuna
+   apertura automatica di un documento collegato — più semplice, non
+   presuppone che il valore corrisponda esattamente al nome di un
+   documento nel bundle (l'idea di apertura automatica, mai
+   implementata, resta così, non riesumata).
+4. **Riga di intestazione obbligatoria**: niente più euristica che
+   indovina se la prima riga è intestazione o dato (il vecchio parser
+   guardava parole chiave tipo "codice"/"allarme" nella prima riga) — con
+   colonne a piacere non c'è modo di sapere cosa significhi una colonna
+   senza un'intestazione dichiarata. Un'intestazione mancante/vuota
+   solleva un errore chiaro invece di indovinare.
+
+**`ComponentTable` (nuova classe, `balzar/viewer3d.py`)**: modello
+tabellare generico — `.headers: list[str]`, `.rows: list[list[str]]`,
+`.all_values() -> set[str]` (ogni cella non vuota, usata come candidati
+per `collapse_names`), `.to_json_dict()`. `parse_component_table_text`/
+`parse_component_table` sostituiscono `parse_alarm_csv_text`/
+`parse_alarm_csv`: riga 0 è **sempre** l'intestazione (mai indovinata),
+un'intestazione vuota solleva `ValueError` con "intestazione" nel
+messaggio; righe corte vengono riempite con celle vuote, righe lunghe
+troncate alla larghezza dell'intestazione; righe vuote saltate.
+
+**Il problema uovo-e-gallina con `collapse_names`**: `generate_bom`/
+`scene3d_to_glb` hanno bisogno di `collapse_names` come **input** prima
+che BOM/GLB esistano, ma l'auto-rilevamento della colonna componente ha
+bisogno della BOM già pronta (per sapere i nomi reali da confrontare).
+Risolto usando `ComponentTable.all_values()` — letteralmente ogni
+valore non vuoto di ogni cella dell'intera tabella, indipendentemente
+dalla colonna — come insieme di candidati per `collapse_names`: un
+candidato che non corrisponde a un vero nome di gruppo `Reference3D`
+viene silenziosamente ignorato a valle (comportamento già esistente e
+documentato in `scene3d.py`/`gltf.py`), quindi passare ogni cella è
+sicuro, non solo comodo — aggira il bisogno di sapere "quale colonna è
+il componente" prima che la BOM esista.
+
+**Solo il primo CSV marcato allarme in un bundle diventa la tabella
+informazioni** (comportamento cambiato deliberatamente rispetto al
+design precedente, che concatenava le righe di TUTTI i CSV marcati
+allarme perché condividevano per costruzione lo stesso schema a 2
+colonne): con schemi arbitrari, concatenare righe tra CSV con colonne
+diverse non generalizza in modo sicuro, quindi vince il primo (stesso
+principio "il primo vince" già usato altrove nella stessa funzione per
+il primo elemento 3D).
+
+**Rinominato**: `window.__BALZAR_ALARM_ROWS__` →
+`window.__BALZAR_INFO_TABLE__` (forma `{headers:[...], rows:[[...]]}`,
+non più `[[codice,nome],...]`); il campo di risposta web `alarm_rows` →
+`info_table` in `handle_encode_3d`/`_handle_render_3d`/
+`_handle_render_bundle` (`balzar/webapi.py`) — il campo di **input**
+`alarm_csv` (il base64 del CSV da marcare come tabella informazioni)
+resta invariato, solo l'output analizzato è stato rinominato, dato che
+il concetto "marca questo CSV come tabella allarmi/informazioni" non è
+cambiato, è cambiato solo il modello del suo contenuto.
+
+**UI**: nuovo pannello `#search-panel`/`.search-results-table`
+(`style.css`, e l'equivalente incorporato in `viewer3d.py`) — una
+tabella di risultati sotto la nota di ricerca esistente, aperta/chiusa
+con la classe `.open` (non l'attributo `[hidden]`, per evitare
+esattamente la collisione di specificità CSS già documentata più volte
+in questo progetto). Stessa logica duplicata (non condivisibile come
+file, una è incorporata in un f-string Python, l'altra è `app.js`
+statico) in `_SELECT_JS`/`app.js`: `detectComponentColumn`,
+`loadInfoTable`/`setInfoTable`, `renderResultsTable`, `runSearch`
+riscritta per cercare ogni cella e mostrare le righe intere, con
+fallback alla vecchia ricerca per nome BOM se non c'è tabella o niente
+corrisponde in essa.
+
+**Bug di parità trovato durante la verifica Playwright del percorso
+desktop, non nel percorso web**: aprendo un bundle con una tabella già
+incorporata (senza upload manuale), il percorso web
+(`renderScenePanel` in `app.js`) mostra subito una nota "Tabella
+disponibile (N righe, M colonne: ...)" al caricamento, ma il percorso
+desktop (`cacheColors()` in `_SELECT_JS`, `balzar/viewer3d.py`) chiamava
+`loadInfoTable(window.__BALZAR_INFO_TABLE__)` senza impostare alcuna
+nota — zero feedback che una tabella fosse pronta finché l'utente non
+eseguiva una ricerca. Corretto specchiando lo stesso testo del percorso
+web in `cacheColors()`.
+
+Verificato con Playwright su entrambi i percorsi, contro server reali
+(non mock): **web** (devserver locale che instrada `/api/encode_3d` al
+vero `handle_encode_3d`) — upload 3DXML sintetico (due istanze di
+"Bullone-M6") + CSV a 7 colonne con "componente" come **seconda**
+colonna e intestazione non convenzionale (non "nome_componente") →
+tabella caricata (nota corretta) → ricerca per codice allarme mostra la
+riga intera (tutte e 7 le colonne) → ricerca per un valore presente solo
+nella colonna libera "info" trova comunque la riga → ricerca diretta per
+nome componente evidenzia la riga BOM (prova diretta dell'auto-
+rilevamento content-based, non per posizione/intestazione) → ricerca
+senza corrispondenza chiude il pannello onestamente. **Desktop**
+(`open_bundle_in_browser` con lo stesso bundle sintetico, servito
+realmente, driver Playwright sotto Xvfb) — stessi 4 scenari, più
+`?q=<codice>` nell'URL che lancia la ricerca da solo al caricamento
+(automazione zero-click, invariata dalla generalizzazione). Nessun bug
+di prodotto trovato oltre alla lacuna di parità sopra, corretta durante
+la stessa verifica.
+
+Test riscritti: `tests/test_viewer3d.py` (12 test, `TestParseComponentTable`
+— colonne arbitrarie in qualunque ordine, intestazione sempre riga 0 senza
+euristica, intestazione mancante solleva errore chiaro, righe corte
+riempite/lunghe troncate, un valore su più righe, virgola nel nome
+preservata dal parser CSV, righe vuote saltate, file vuoto non è un
+errore, `all_values()`/`to_json_dict()`). `tests/test_webapi.py`
+aggiornato (3 test: forma `info_table` invece di `alarm_rows`, CSV di
+test aggiornato con intestazione dato che l'header è ora obbligatorio).
+Suite completa: 328 test, tutti verdi.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 324 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 328 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d

@@ -534,15 +534,24 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   tecnico che ha trovato un pezzo difettoso e deve richiedere il
   ricambio (vedi CLAUDE.md §9.14 per la scelta API dietro la cattura).
   Stessa funzione nella GUI desktop (`balzar/viewer3d.py`). Una **barra
-  di ricerca** cerca per nome componente o, se carichi una tabella
-  allarmi (CSV a due colonne `codice_allarme,nome_componente` — una
-  terza colonna, es. un documento di procedura, è accettata e
-  ignorata, mai incollata al nome), per codice allarme — un operatore
-  che legge un codice sulla macchina lo digita qui e vede subito il
-  componente coinvolto, senza conoscerne il nome CAD (un allarme può
-  coinvolgere più componenti: tutti si evidenziano insieme, "esporta
-  scheda ricambio" resta disabilitato in quel caso — una scheda è la
-  foto di una parte sola). Se `nome_componente` è il nome di un intero
+  di ricerca** cerca **in qualunque colonna** di una tabella componenti
+  caricata (CSV con **contenuto libero**: intestazioni e ordine delle
+  colonne a piacere — `componente`, `nome componente`, `codice`,
+  `funzione`, `allarme`, `procedure`, `ricambio`, `info`... qualunque
+  nome, in qualunque ordine, con una riga di intestazione obbligatoria).
+  Quale colonna sia "il componente" (quella che pilota l'evidenziazione
+  3D) **si rileva dal contenuto, non dall'intestazione**: dopo il
+  caricamento si conta quale colonna ha più valori che corrispondono a
+  nomi reali nella distinta base, zero configurazione richiesta. Cercare
+  un valore presente in una qualunque colonna (un codice allarme, un
+  nome componente, un codice ricambio, o un valore libero come "pulire
+  ogni 6 mesi" in una colonna "info") mostra **la riga intera trovata**,
+  non solo un'evidenziazione — un operatore che legge un codice sulla
+  macchina lo digita qui e vede subito tutta la riga collegata, senza
+  conoscere il nome CAD del componente (una riga può coinvolgere più
+  componenti: tutti si evidenziano insieme, "esporta scheda ricambio"
+  resta disabilitato in quel caso — una scheda è la foto di una parte
+  sola). Se il valore componente è il nome di un intero
   **sotto-assieme** (es. `HEATER1`) invece di una parte singola, la BOM
   lo mostra come **una sola riga collassata** invece di espanderlo in
   ogni parte sottostante, ed evidenziarlo accende esattamente e solo le
@@ -550,13 +559,13 @@ risposta e timeout della piattaforma. Interfaccia statica (`index.html` +
   caso un nome placeholder generico — verificato su un assieme reale,
   vedi CLAUDE.md §9.21 per il bug di sovrapposizione trovato e
   corretto). La ricerca
-  supporta anche `?q=<codice>` nell'URL: sulla GUI desktop, dove la
-  tabella allarmi può essere incorporata alla generazione della pagina
-  (`open_glb_in_browser(..., alarm_rows=...)`), questo permette di
+  supporta anche `?q=<valore>` nell'URL: sulla GUI desktop, dove la
+  tabella componenti può essere incorporata alla generazione della pagina
+  (`open_glb_in_browser(..., info_table=...)`), questo permette di
   aprire il componente giusto con zero digitazione — vedi CLAUDE.md
   §9.15 per i meccanismi di automazione proposti su questa base
   (endpoint locale, integrazione PLC/SCADA, QR fisico sul quadro
-  allarmi). Puoi anche **caricare la tabella allarmi insieme al file
+  allarmi). Puoi anche **caricare la tabella componenti insieme al file
   3D** (campo file prima della dropzone, sia qui sia nella GUI
   desktop): i due vengono impacchettati in un bundle `BZX1`
   (`balzar/bundle.py`) che viaggia in un solo QR/file e apre il viewer

@@ -213,7 +213,8 @@ class TestHandleRender(unittest.TestCase):
         self.assertTrue(resp["has_3d"])
         self.assertEqual(resp["shape_count"], 1)
         self.assertTrue(resp["glb_base64"])
-        self.assertEqual(resp["alarm_rows"], [["E100", "Bullone-M6"]])
+        self.assertEqual(resp["info_table"],
+                         {"headers": ["codice_allarme", "nome_componente"], "rows": [["E100", "Bullone-M6"]]})
         self.assertTrue(any(d["label"] == "alarms.csv" for d in resp["documents"]))
 
     def test_bzx1_documents_only_bundle_has_no_3d(self):
@@ -438,19 +439,22 @@ class TestHandleEncode3D(unittest.TestCase):
         status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)
         self.assertEqual(status, 200)
         self.assertFalse(resp["bundled"])
-        self.assertEqual(resp["alarm_rows"], [])
+        self.assertEqual(resp["info_table"], {"headers": [], "rows": []})
 
     def test_alarm_csv_produces_a_bundle_payload(self):
         from balzar.bundle import is_bundle
         from balzar.payload import from_base64
 
-        csv_text = "E100,Bullone-M6\nE200,Bullone-M6\n"
+        csv_text = "codice_allarme,nome_componente\nE100,Bullone-M6\nE200,Bullone-M6\n"
         status, resp = handle_encode_3d(
             {"data": _b64(_make_3dxml_bytes()), "alarm_csv": _b64(csv_text.encode("utf-8"))},
             LOCAL_LIMITS)
         self.assertEqual(status, 200)
         self.assertTrue(resp["bundled"])
-        self.assertEqual(resp["alarm_rows"], [["E100", "Bullone-M6"], ["E200", "Bullone-M6"]])
+        self.assertEqual(resp["info_table"], {
+            "headers": ["codice_allarme", "nome_componente"],
+            "rows": [["E100", "Bullone-M6"], ["E200", "Bullone-M6"]],
+        })
         payload = from_base64(resp["payload_base64"])
         self.assertTrue(is_bundle(payload))
 
