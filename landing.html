@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>balzar — l'esploso CAD e la distinta base stanno in un QR</title>
+<meta name="description" content="balzar non comprime immagini: le rigenera da un programma di poche istruzioni. Un esploso CAD con distinta base entra in un singolo QR, offline, senza licenza CAD. Su foto e rumore lo dichiara onestamente: nessun guadagno.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="balzar — l'esploso CAD e la distinta base stanno in un QR">
+<meta property="og:description" content="Non un compressore: un generatore. Un contenuto strutturato (CAD, schemi, pattern) si rigenera da un payload di poche centinaia di byte, deterministico, offline.">
+<meta property="og:url" content="https://balzar-eight.vercel.app/landing.html">
+<meta property="og:image" content="https://balzar-eight.vercel.app/landing-img/schema-tecnico.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%232e86ab'/%3E%3Crect x='4' y='4' width='7' height='7' rx='1' fill='white'/%3E%3Crect x='13' y='4' width='7' height='7' rx='1' fill='white' fill-opacity='.55'/%3E%3Crect x='4' y='13' width='7' height='7' rx='1' fill='white' fill-opacity='.55'/%3E%3Crect x='13' y='13' width='7' height='7' rx='1' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="landing.css">
+</head>
+<body>
+
+  <nav class="site-nav">
+    <div class="wrap">
+      <a class="brand" href="landing.html">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+        balzar
+      </a>
+      <div class="nav-links-inline">
+        <a href="#balzar-live">3D &amp; allarmi</a>
+        <a href="#come-funziona">Come funziona</a>
+        <a href="#prove">Numeri reali</a>
+        <a href="#applicazioni">Applicazioni</a>
+      </div>
+      <a class="btn btn-primary" href="index.html">Prova la demo</a>
+    </div>
+  </nav>
+
+  <main>
+
+    <!-- ================= HERO ================= -->
+    <section class="hero">
+      <div class="wrap">
+        <div class="hero-copy">
+          <span class="eyebrow">Compressione algoritmica basata su descrizione</span>
+          <h1>Il tuo esploso CAD e la distinta base stanno in <em>un QR</em>, senza rete.</h1>
+          <p class="hero-sub">balzar non salva l'immagine del tuo schema tecnico: salva il
+            <em>programma</em> che la rigenera — rettangoli, cerchi, testo, poche centinaia di byte.
+            Un'etichetta fotografata in officina rigenera l'esploso e la distinta base pixel per
+            pixel, senza rete, senza viewer 3D, senza licenza CAD.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="index.html">Prova la demo →</a>
+            <a class="btn btn-secondary" href="#come-funziona">Come funziona</a>
+          </div>
+          <p class="hero-note">Motore deterministico in Python puro, zero dipendenze. Su foto e
+            rumore <a href="#onesta">lo dichiara onestamente</a> invece di fingere una compressione
+            che non c'è.</p>
+        </div>
+        <div class="hero-visual">
+          <figure class="device-card">
+            <img src="landing-img/schema-tecnico.png" width="800" height="600" alt="Schema tecnico di una flangia con viste frontale e in sezione, rigenerato da balzar da un payload di 483 byte">
+            <figcaption>examples/schema_tecnico.bzr — vista frontale + sezione, 800×600px</figcaption>
+          </figure>
+          <div class="stat-badge">
+            <strong>483 B → 1,44 MB</strong>
+            espansione 2.981×, un solo QR
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= STAT STRIP ================= -->
+    <section class="stat-strip">
+      <div class="wrap">
+        <div class="stat"><strong>fino a 44.000×</strong><span>più piccolo dell'RGB equivalente, su CAD/esplosi reali</span></div>
+        <div class="stat"><strong>559 B</strong><span>esploso + distinta base completa, in un solo QR</span></div>
+        <div class="stat"><strong>0 dipendenze</strong><span>motore in Python stdlib pura, gira ovunque</span></div>
+        <div class="stat"><strong>100% offline</strong><span>nessuna rete, nessuna licenza CAD richiesta</span></div>
+      </div>
+    </section>
+
+    <!-- ================= BALZAR LIVE: 3D + ALLARMI ================= -->
+    <section class="block feature-3d" id="balzar-live">
+      <div class="wrap">
+        <div class="browser-frame">
+          <div class="browser-chrome">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="dot" aria-hidden="true"></span>
+            <span class="dot" aria-hidden="true"></span>
+            <span class="url">127.0.0.1 — viewer.html</span>
+          </div>
+          <img src="landing-img/viewer-3d-search.png" width="1280" height="860" alt="Viewer 3D di balzar: un assieme flangia con quattro bulloni, tutti evidenziati in arancione dopo una ricerca per codice allarme A01. A destra la distinta base con la riga BULLONE-M6 selezionata, sotto la tabella dei risultati con codice, componente, funzione e procedura.">
+          <figcaption>ricerca <code>A01</code> nella tabella allarmi → i 4 bulloni si isolano nel
+            modello, la riga giusta della distinta base si evidenzia da sola</figcaption>
+        </div>
+        <div>
+          <span class="eyebrow live">Balzar Live · in azione</span>
+          <h2>Clicca un componente, trova un allarme — offline</h2>
+          <p class="section-lede">Dopo lo scan il viewer non è solo un modello 3D che gira: è uno
+            strumento di ricerca. Un operatore che legge un codice sul quadro comandi lo digita (o
+            lo passa via URL, <code>?q=A01</code>, zero digitazione) e il componente giusto si
+            isola da solo, ovunque sia annidato nell'assieme.</p>
+          <ul class="feature-list">
+            <li>
+              <span class="ficon" aria-hidden="true">🖱️</span>
+              <div><strong>Isolamento con un click</strong><span>clicca una parte nel modello: si
+                accende, tutte le altre si attenuano — anche dentro un sotto-assieme profondo</span></div>
+            </li>
+            <li>
+              <span class="ficon" aria-hidden="true">🔎</span>
+              <div><strong>Ricerca libera, qualunque colonna</strong><span>nome componente, codice
+                allarme, o qualunque altro campo di una tabella caricata — colonne a piacere, rilevate
+                automaticamente</span></div>
+            </li>
+            <li>
+              <span class="ficon" aria-hidden="true">📋</span>
+              <div><strong>Distinta base collegata</strong><span>la riga giusta si seleziona da
+                sola, con il conteggio reale dei posizionamenti nell'assieme</span></div>
+            </li>
+            <li>
+              <span class="ficon" aria-hidden="true">🌐</span>
+              <div><strong>Zero rete, zero licenza CAD</strong><span>gira interamente nel browser —
+                nessun upload dopo lo scan iniziale, nessun software da installare in officina</span></div>
+            </li>
+          </ul>
+          <div class="cta-row" style="margin-top:1.6rem">
+            <a class="btn btn-secondary" href="index.html">Prova il viewer 3D nella demo →</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PROBLEMA ================= -->
+    <section class="block">
+      <div class="wrap">
+        <div class="problem-grid">
+          <div>
+            <div class="section-head">
+              <h2>In officina, il disegno non arriva mai quando serve</h2>
+              <p class="section-lede">Il reparto produttivo raramente ha un viewer 3D o una
+                licenza CAD accanto alla macchina. La manutenzione sul campo — stabulari
+                sotterranei, navi, cantieri — spesso non ha rete.</p>
+            </div>
+            <ul class="problem-list">
+              <li><span class="mark">✕</span><div>Una pila di PDF disordinati su una chiavetta USB, mai la revisione giusta a portata di mano.</div></li>
+              <li><span class="mark">✕</span><div>Un file CAD nativo che nessuno, sul campo, ha il software per aprire.</div></li>
+              <li><span class="mark">✕</span><div>Un export immagine dello stesso schema che pesa troppo per stare in un QR o su un'etichetta.</div></li>
+            </ul>
+            <ul class="problem-list solution">
+              <li><span class="mark">✓</span><div><strong>Un'etichetta con un QR</strong> rigenera esploso e distinta base al volo — nessun software installato, nessuna rete, nessuna licenza.</div></li>
+            </ul>
+          </div>
+          <div class="problem-side">
+            <h3>Precondizione onesta</h3>
+            <p>Funziona quando il disegno è esportabile in pulito da CAD (SVG/DXF) o scritto come
+              programma a mano — un cerchio del sorgente diventa <code>CIRCLE</code>, mai un pixel
+              di mezzo. Uno screenshot o una foto del disegno restano possibili ma rendono peggio:
+              è lo stesso limite dichiarato più sotto, non nascosto.</p>
+            <h3 style="margin-top:1.4rem">Cosa vedi dopo lo scan</h3>
+            <p>Rotazione/zoom del 3D, click su un componente per isolarlo, ricerca per nome o per
+              codice allarme, distinta base, documenti collegati — tutto offline, nella stessa
+              pagina che il QR apre.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= COME FUNZIONA ================= -->
+    <section class="block alt" id="come-funziona">
+      <div class="wrap">
+        <div class="section-head center">
+          <h2>Non un compressore: un generatore</h2>
+          <p class="section-lede">Un PNG o uno ZIP contengono i dati già pronti, solo ricodificati
+            in modo più compatto. balzar salva le <em>istruzioni</em> per produrli — l'immagine
+            non esiste finché qualcuno non esegue il programma.</p>
+        </div>
+        <ol class="steps-flow">
+          <li>
+            <span class="step-num">1</span>
+            <h3>Seed + programma</h3>
+            <p>Poche centinaia di byte: <code>CIRCLE cx=170 cy=150 r=110</code>,
+              <code>TEXT x=90 y=400 text="B-4471-A"</code> — scritto a mano o estratto
+              automaticamente da un'immagine, un SVG/DXF, o una sequenza di file CAD.</p>
+          </li>
+          <li>
+            <span class="step-num">2</span>
+            <h3>Interprete deterministico</h3>
+            <p>Nessun numero casuale "vero" (PRNG proprio, seed esplicito), nessuna libreria
+              esterna nel percorso che conta. Stesso payload, stessi pixel, su ogni piattaforma.</p>
+          </li>
+          <li>
+            <span class="step-num">3</span>
+            <h3>Output rigenerato</h3>
+            <p>L'immagine (o la sequenza di frame, o l'assieme 3D) completa — calcolata ogni
+              volta da zero, mai stata su disco come pixel prima di questo momento.</p>
+          </li>
+        </ol>
+        <blockquote class="quote">
+          È la differenza tra un file audio compresso e uno spartito: lo spartito non contiene il
+          suono, contiene le istruzioni per produrlo ogni volta che qualcuno lo suona.
+          <cite>— lo stesso principio, applicato a immagini, esplosi CAD e distinte base</cite>
+        </blockquote>
+      </div>
+    </section>
+
+    <!-- ================= PROVA / NUMERI ================= -->
+    <section class="block" id="prove">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Un caso reale, misurato — non stimato</h2>
+          <p class="section-lede"><code>examples/etichetta_bom.bzr</code>: esploso di un gruppo
+            flangia con distinta base incorporata (BOM). Stesso identico contenuto, quattro
+            rappresentazioni, un solo confronto che conta davvero: <strong>sta in un QR o no</strong>.</p>
+        </div>
+
+        <div class="proof-grid">
+          <div class="proof-visual">
+            <figure class="device-card">
+              <img src="landing-img/etichetta-bom.png" width="640" height="520" alt="Esploso di un gruppo flangia con bulloni, e tabella distinta base con posizione, part number, descrizione e quantità">
+              <figcaption>rigenerato da un payload di 559 byte</figcaption>
+            </figure>
+            <figure class="proof-qr">
+              <img src="landing-img/etichetta-bom-qr.png" width="290" height="290" alt="QR code reale che contiene l'intero payload dell'etichetta con esploso e distinta base">
+              <figcaption>questo QR contiene<br>l'immagine a sinistra</figcaption>
+            </figure>
+          </div>
+
+          <div class="table-wrap">
+            <table class="compare-table">
+              <thead>
+                <tr><th>Rappresentazione</th><th class="num">Byte</th><th>Sta in un QR? (limite 2.953 B)</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>RGB grezzo (640×520, non compresso)</td><td class="num">998.400</td><td class="fit-no">no — 339× oltre</td></tr>
+                <tr><td>PNG dello stesso contenuto</td><td class="num">5.496</td><td class="fit-no">no — 1,9× oltre</td></tr>
+                <tr><td>ZIP del PNG</td><td class="num">4.969</td><td class="fit-no">no — 1,7× oltre</td></tr>
+                <tr class="win"><td>Payload balzar (.bzp)</td><td class="num">559</td><td class="fit-yes">sì — margine ampio (19% della capacità)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:1.8rem">
+          <table class="compare-table">
+            <thead>
+              <tr><th>Altri esempi inclusi nel progetto</th><th class="num">Payload</th><th class="num">Output rigenerato</th><th class="num">Espansione</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Pattern geometrico ripetuto</td><td class="num">276 B</td><td class="num">1024×1024 px</td><td class="num">~11.400×</td></tr>
+              <tr><td>Sequenza CAD, 3 file DXF (assemblaggio a step)</td><td class="num">169 B</td><td class="num">3 frame 800×800 px</td><td class="num">~34.000×</td></tr>
+              <tr><td>Esploso automatico per layer, 6 componenti</td><td class="num">303 B</td><td class="num">7 frame 800×800 px</td><td class="num">~44.000×</td></tr>
+              <tr><td>GIF con contenuto in movimento, 30 frame</td><td class="num">8.144 B</td><td class="num">320×240×30 frame</td><td class="num">849×</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= ONESTÀ / KOLMOGOROV ================= -->
+    <section class="block alt" id="onesta">
+      <div class="wrap">
+        <div class="honesty-box">
+          <div class="honesty-icon" aria-hidden="true">⚠</div>
+          <div>
+            <h3>Il limite è reale, e lo dichiariamo — non lo nascondiamo</h3>
+            <p>Il principio ha un nome preciso: <strong>complessità di Kolmogorov</strong>.
+              Contenuto strutturato (CAD, pattern, icone, schemi tecnici) si descrive con poche
+              istruzioni — il guadagno è di ordini di grandezza. Contenuto casuale o fotografico
+              non ha una descrizione più corta dei suoi stessi pixel: nessun algoritmo, balzar
+              incluso, può comprimerlo davvero.</p>
+            <p>Quando succede, l'encoder lo dichiara nel risultato invece di fingere un guadagno
+              che non c'è:</p>
+            <span class="honesty-example">rumore puro 800×800 → payload più grande dell'RGB equivalente (0,7×, nessun guadagno)</span>
+            <p style="margin-top:0.9rem">È un requisito di prodotto, non un dettaglio tecnico — è
+              quello che distingue balzar da un tool di compressione bugiardo.
+              <a href="come-funziona.html">Confronto completo con JPEG/PNG/ZIP/MP3 →</a></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= STUDIO / LIVE ================= -->
+    <section class="block">
+      <div class="wrap">
+        <div class="section-head center">
+          <h2>Due prodotti, un solo motore</h2>
+          <p class="section-lede">Balzar Studio crea il payload da un file sorgente. Balzar Live lo
+            apre e lo consulta — nessun encoder coinvolto, funziona anche da un QR fotografato sul
+            campo.</p>
+        </div>
+        <div class="products-grid">
+          <div class="product-card studio">
+            <span class="product-kicker">Balzar Studio · crea</span>
+            <h3>Dal file sorgente al payload</h3>
+            <p class="desc">CLI, app desktop e demo web. Chi prepara il contenuto tecnico: uffici
+              disegno, chi cura manuali e distinte base.</p>
+            <ul>
+              <li>Ingestione diretta di SVG/DXF/3DXML — nessun pixel di mezzo</li>
+              <li>Encoder raster per immagini/screenshot, con fedeltà dichiarata onestamente</li>
+              <li>Sequenze multi-file ed esploso automatico per layer</li>
+              <li>Export QR — immagine singola, griglia o sequenza fotografabile</li>
+            </ul>
+          </div>
+          <div class="product-card live">
+            <span class="product-kicker">Balzar Live · consulta</span>
+            <h3>Dal QR/file alla vista</h3>
+            <p class="desc">Il lato che un tecnico o un operatore usa davvero in officina o sul
+              campo — offline, nessuna licenza CAD.</p>
+            <ul>
+              <li>Rotazione, zoom, click su un componente per isolarlo</li>
+              <li>Ricerca per nome componente o codice allarme</li>
+              <li>Distinta base e documenti/procedure collegati</li>
+              <li>Acquisizione continua da fotocamera, zero tocchi dell'operatore</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PATTERN BAND ================= -->
+    <section class="pattern-band">
+      <div class="pattern-band-bg" aria-hidden="true"></div>
+      <div class="wrap">
+        <p class="big">Ogni piastrella di questo sfondo è calcolata al volo dallo stesso motore —
+          non un solo pixel di questa pagina viene da un file immagine di quel pattern.</p>
+        <p class="small">examples/pattern_tile.bzr — 276 byte, 1024×1024 px, ~11.400× di espansione</p>
+      </div>
+    </section>
+
+    <!-- ================= APPLICAZIONI ================= -->
+    <section class="block" id="applicazioni">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Dove ha senso — e dove no</h2>
+          <p class="section-lede">balzar vince dove il contenuto è strutturato e ripetitivo, non
+            dove è percettivo o già ottimizzato da un codec maturo (foto, audio, video reale).</p>
+        </div>
+        <div class="app-grid">
+          <div class="app-card lead">
+            <div class="app-icon" aria-hidden="true">🔧</div>
+            <div>
+              <h3>Manuali tecnici, ricambi ed esplosi/BOM</h3>
+              <p>Il caso guida del progetto: officina e manutenzione sul campo, dove il viewer 3D
+                e la rete spesso non ci sono. Un'etichetta sostituisce la pila di PDF disordinati.</p>
+              <span class="app-tag">Caso principale</span>
+            </div>
+          </div>
+          <div class="app-card">
+            <div class="app-icon" aria-hidden="true">📟</div>
+            <h3>Asset per firmware/embedded</h3>
+            <p>Icone, boot animation, sprite UI come programma invece di bitmap in flash — il
+              decoder è stdlib pura apposta per questo.</p>
+          </div>
+          <div class="app-card">
+            <div class="app-icon" aria-hidden="true">📡</div>
+            <h3>Distribuzione offline</h3>
+            <p>In zone a bassa connettività, una pagina di QR fotografata in un colpo solo
+              consegna diagrammi e animazioni senza rete dati.</p>
+          </div>
+          <div class="app-card">
+            <div class="app-icon" aria-hidden="true">🎮</div>
+            <h3>Asset procedurali per giochi/app</h3>
+            <p>Tileset, pattern UI, sprite animati generati a runtime da un seed invece che
+              scaricati come bitmap.</p>
+          </div>
+          <div class="app-card">
+            <div class="app-icon" aria-hidden="true">🏷️</div>
+            <h3>Branding fisico generativo</h3>
+            <p>QR su packaging che rigenerano un pattern di brand animato — il valore è il gesto,
+              non la percentuale di compressione.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CTA FINALE ================= -->
+    <section class="final-cta">
+      <div class="wrap">
+        <h2>Provalo sui tuoi file</h2>
+        <p class="section-lede">Carica un'immagine, un SVG/DXF o un assieme 3DXML nella demo
+          web — vedi il payload rigenerarsi in tempo reale, con le statistiche oneste incluse.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="index.html">Prova la demo →</a>
+          <a class="btn btn-secondary" href="trasporto-qr.html">Trasporto QR di un file qualunque</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p class="footer-honesty">Su contenuti strutturati (icone, schemi, pattern, disegni CAD) il
+        guadagno è enorme. Su foto e rumore l'encoder lo dichiara onestamente invece di fingere
+        una compressione che non c'è — è il limite di complessità di Kolmogorov, descritto per
+        intero nella pagina "come funziona".</p>
+      <div class="footer-links">
+        <a href="index.html">Prova la demo →</a>
+        <a href="come-funziona.html">Come funziona, confronto tecnico →</a>
+        <a href="trasporto-qr.html">Trasporto QR di un file qualunque →</a>
+        <a href="https://github.com/ciao-madesign/balzar" target="_blank" rel="noopener">Codice sorgente →</a>
+      </div>
+    </div>
+    <div class="wrap"><p class="footer-note">balzar — motore deterministico in Python puro. Questa pagina è vetrina, non il prodotto: il prodotto è l'app desktop offline.</p></div>
+  </footer>
+
+</body>
+</html>

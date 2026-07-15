@@ -1531,6 +1531,92 @@ misurati altrove in questo documento (§3, §8), non nuovi né stimati.
 Dichiara onestamente le tre righe a guadagno nullo (foto, audio, dati
 strutturati non ancora implementati) invece di ometterle.
 
+### 2.9b `landing.html` — pagina marketing separata dalla demo funzionante
+
+Richiesta diretta di sessione: `index.html` è la demo funzionante a sei
+schede (§2.9), non pensata per convertire un visitatore che arriva da un
+link esterno e non sa ancora cosa sia balzar — nessuna pagina del
+progetto raccontava in un colpo solo il caso d'uso guida (§6 punto 1,
+manutenzione industriale) con un messaggio, una prova visiva e una CTA.
+Decisione di scope confermata esplicitamente con l'utente prima di
+costruire (via `AskUserQuestion`): pagina **separata** (`landing.html`,
+non diventa la root del sito, `index.html`/`vercel.json` **invariati** —
+zero rischio sul flusso esistente), messaggio guidato dal caso
+manutenzione/CAD, CTA primaria "Prova la demo" verso `index.html`.
+
+**Nuovi file**: `landing.html` + `landing.css` (foglio di stile
+dedicato, **non** `style.css` — deliberato: `style.css` è già stato
+sorgente di bug di specificità CSS ripetuti in questo progetto, es. §9.9/
+§9.20/§9.29, tutti dovuti a regole condivise tra pagine diverse che
+collidevano; una pagina di marketing con un linguaggio visivo diverso
+[hero, badge statistici, grid di card] non condivide componenti con la
+UI applicativa, quindi non ha motivo di condividerne il CSS) +
+`landing-img/` (quattro PNG **reali**, non mockup: renderizzati con
+`balzar render`/`balzar chunks --qr` dagli stessi file in `examples/`
+già usati altrove nel progetto — `schema-tecnico.png` per l'hero,
+`etichetta-bom.png` + `etichetta-bom-qr.png` come prova appaiata
+immagine/QR nella sezione numeri, `pattern-tile.png` come texture
+decorativa a bassa opacità in una fascia di pagina, con nota esplicita
+che anche quello sfondo è generato dallo stesso motore, non un'immagine
+qualunque). Nessuna dipendenza nuova: le uniche librerie usate per
+generare gli asset (`qrcode`, Pillow) servivano solo in fase di build
+degli asset statici, non sono richieste a runtime dalla pagina.
+
+**Contenuto**: hero con CTA verso `index.html`; fascia statistiche;
+sezione "problema" (officina senza rete/licenza CAD); "come funziona" a
+3 step con l'analogia spartito già usata in `come-funziona.html`;
+sezione prova con la stessa tabella RGB/PNG/ZIP/payload di §8 (559 B
+contro 998.400 B RGB, unico che entra in un QR) accompagnata dal QR
+reale generato dallo stesso payload; riquadro onestà/Kolmogorov (stesso
+principio "dichiara invece di nascondere" del resto del progetto, con
+l'esempio reale del rumore 0,7× che non comprime); due card Balzar
+Studio/Balzar Live (stesso contenuto di `VISIONE.md` §2); griglia
+applicazioni (5 delle 6 di `VISIONE.md` §3 — la musica/notazione
+simbolica omessa perché lì stessa esplicitamente "zero lavoro
+iniziato", non coerente con il tono "solo capacità reali" scelto per
+questa pagina); CTA finale; footer con link a demo/come-funziona/
+trasporto-qr/repository GitHub (lo stesso URL pubblico già linkato da
+`come-funziona.html`, non un link nuovo).
+
+Verificato con Playwright contro un server locale (`http.server`, non
+Vercel — stessa limitazione di rete già nota, §2.9): desktop/dark-mode/
+mobile (390px) senza overflow orizzontale, tutti i link interni
+risolvono 200, gli anchor `#come-funziona`/`#prove`/`#onesta`/
+`#applicazioni`/`#balzar-live` scrollano al target giusto, nessun errore
+console. Un bug reale trovato e corretto durante la verifica: il badge
+statistico sovrapposto all'immagine hero (posizionato in basso a
+sinistra) copriva la seconda riga della didascalia sottostante —
+spostato in alto a destra, dove non collide con nessun testo.
+
+**Sezione "Balzar Live in azione" (3D + ricerca allarmi), aggiunta dopo
+un secondo giro di feedback**: la prima bozza copriva il viewer 3D solo
+di striscio (un elenco puntato dentro la card "Balzar Live" del
+confronto Studio/Live). L'utente ha chiesto di dargli più peso — è la
+funzionalità con la demo visiva più forte del progetto (click-to-select,
+ricerca libera, BOM collegata, §9.11/§9.15/§9.29) e non aveva ancora
+una prova visiva reale sulla landing. Aggiunta una sezione dedicata
+subito dopo la fascia statistiche (prima di "In officina...", quindi la
+seconda cosa che un visitatore vede dopo l'hero), con uno screenshot
+reale del viewer, non un mockup disegnato a mano: un assieme 3DXML
+sintetico costruito ad hoc per questa schermata (una flangia + 4
+bulloni, geometria a scatole scritta a mano — stesso principio di
+copyright già seguito per non includere file CAD reali di terzi, §2.6/
+§9.2/§9.10/§9.30 — script di generazione non incluso nel repository,
+stesso trattamento delle altre immagini di `landing-img/`) più un CSV
+allarmi a 4 colonne, impacchettati in un vero bundle `.bzx`
+(`balzar encode-bundle ... --alarm`) e aperti con la vera
+`balzar.viewer3d.open_bundle_in_browser` — nessuna delle interazioni
+mostrate nello screenshot è finta: è stata pilotata con Playwright
+(click reale su `materialFromPoint`, ricerca reale digitata in
+`#search-input`) contro il server locale che il modulo avvia per
+davvero. `landing-img/viewer-3d-search.png` cattura lo stato dopo la
+ricerca del codice `A01`: tutti e 4 i bulloni evidenziati in arancione
+nel modello, riga `BULLONE-M6 ×4` selezionata nella distinta base,
+tabella dei risultati con le 4 colonne del CSV. Card presentata come un
+finto "browser frame" (barra con tre pallini + pillola URL, solo CSS —
+`.browser-frame`/`.browser-chrome` in `landing.css`) per segnalare
+visivamente che è un'interfaccia reale in un browser, non un'illustrazione.
+
 ### 2.10 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
