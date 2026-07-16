@@ -636,6 +636,20 @@ summary { cursor: pointer; color: var(--muted); }
 }
 .panel-help > summary { font-size: 0.85rem; }
 .panel-help .tagline { margin: 0.5rem 0 0; }
+
+/* Azioni secondarie ("Altre opzioni") dentro la riga .downloads: una
+   disclosure leggera e inline, non il box bordato del <details> avanzato,
+   così le azioni primarie (scarica payload / genera QR) restano in
+   evidenza. Il layout a card/chip è lasciato al round stile. */
+.more-actions {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  align-self: center;
+}
+.more-actions > summary { font-size: 0.85rem; }
+.more-actions > button { margin: 0.4rem 0.4rem 0 0; }
 #program-text {
   margin: 0.75rem 0 0;
   max-height: 320px;
