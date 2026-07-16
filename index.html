@@ -43,11 +43,11 @@
       <div class="tab-group" id="group-studio">
         <span class="tab-group-name">Balzar Studio · crea un programma da un file</span>
         <div class="tabs" role="tablist">
-          <button class="tab active" id="tab-encode" type="button">Comprimi immagine</button>
+          <button class="tab active" id="tab-3d" type="button">Assemblee 3D</button>
+          <button class="tab" id="tab-encode" type="button">Comprimi immagine</button>
           <button class="tab" id="tab-vector" type="button">Vettoriale (SVG/DXF)</button>
           <button class="tab" id="tab-video" type="button">Video (GIF animata)</button>
           <button class="tab" id="tab-sequence" type="button">Sequenza (multi-file)</button>
-          <button class="tab" id="tab-3d" type="button">Assemblee 3D</button>
         </div>
       </div>
       <div class="tab-group" id="group-live" hidden>
@@ -60,7 +60,7 @@
   </header>
 
   <main>
-    <div id="panel-encode" class="panel">
+    <div id="panel-encode" class="panel" hidden>
       <p class="purpose">Codifica · encoder generico</p>
       <details class="panel-help">
         <summary>A cosa serve</summary>
@@ -341,7 +341,7 @@
       </section>
     </div>
 
-    <div id="panel-3d" class="panel" hidden>
+    <div id="panel-3d" class="panel">
       <p class="purpose">Codifica · assiemi CAD parametrici</p>
       <details class="panel-help">
         <summary>A cosa serve</summary>

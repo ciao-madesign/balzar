@@ -292,8 +292,9 @@ const TAB_NAMES = ["encode", "vector", "video", "sequence", "3d", "open"];
 const tabButtons = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`tab-${n}`)]));
 const tabPanels = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`panel-${n}`)]));
 
-let activeTab = "encode";  // tracked so activateProduct can tell whether the
-                           // current tab already belongs to the target product
+let activeTab = "3d";  // 3D is the promoted default landing (front-and-center
+                       // feature); tracked so activateProduct can tell whether
+                       // the current tab already belongs to the target product
 
 function activateTab(tab) {
   activeTab = tab;
@@ -310,7 +311,7 @@ for (const name of TAB_NAMES) {
 // level 1: which modes belong to each product, and which group container
 // to reveal. The tab lists mirror the two .tab-group blocks in index.html.
 const PRODUCTS = {
-  crea: { group: "group-studio", tabs: ["encode", "vector", "video", "sequence", "3d"] },
+  crea: { group: "group-studio", tabs: ["3d", "encode", "vector", "video", "sequence"] },
   apri: { group: "group-live", tabs: ["open"] },
 };
 const productButtons = { crea: document.getElementById("product-crea"),
