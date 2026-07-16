@@ -3548,11 +3548,54 @@ originali) darebbe un'impressione di pianificazione che non esiste —
 restano idee valutate, non impegni, esattamente come STEP in §7.3.
 
 **Stato**: valutata, non implementata. Nessun modulo `bridge.py` nel
-repository, nessuna dipendenza a protocolli industriali installata,
-nessun formato CSV allarmi esteso. Vedi anche il documento di visione
-separato (vedi §11) per il posizionamento di prodotto (Balzar Studio /
-Balzar Live) — questa sezione resta il riferimento tecnico su cosa
-esiste davvero e cosa mancherebbe.
+repository, nessuna dipendenza a protocolli industriali installata.
+Vedi anche il documento di visione separato (vedi §11) per il
+posizionamento di prodotto (Balzar Studio / Balzar Live) — questa
+sezione resta il riferimento tecnico su cosa esiste davvero e cosa
+mancherebbe.
+
+**Aggiornamento di sessione successiva (nessun codice toccato, solo
+scoping)**: punto 1 della lista sopra ("estendere `parse_alarm_csv` con
+colonne opzionali") è ormai **superato**, non più da fare — la tabella
+componenti è stata generalizzata a contenuto/colonne completamente
+liberi in §9.29 (`ComponentTable`), quindi un eventuale campo
+"documento_procedura" del Bridge non richiede più nessuna estensione:
+è già solo una colonna in più in un CSV a schema libero.
+
+Chiesto esplicitamente all'utente quale sistema reale userebbe da
+integrare (Siemens? quale gamma di PLC? quale protocollo?), la
+risposta è stata di **non decidere ancora**: "principalmente PLC
+Siemens ma non solo", nessun impegno su un modello/protocollo
+specifico, e la richiesta esplicita di **lasciare aperta la strada
+all'automazione** invece di costruire un driver per un sistema preciso
+— la sorgente del segnale potrebbe essere un PLC (via S7comm/OPC UA),
+uno HMI web-based, o altro ancora non identificato. Discussi in sessione
+(nessuna implementazione) i compromessi principali senza impegnarsi:
+OPC UA come protocollo più probabile per coprire "non solo Siemens" in
+un colpo solo (standard aperto IEC 62541, nativo sugli S7-1500,
+supportato da altri vendor) contro S7comm via `python-snap7` (via
+Siemens-specifica, non ufficialmente supportata da Siemens stesso, utile
+solo per PLC più datati senza OPC UA); l'opzione di agganciarsi a uno
+strato SCADA/MES/historian già esistente invece che al PLC direttamente,
+spesso preferibile per motivi di sicurezza di rete OT/IT (segmentazione,
+niente nuovo agente da far approvare sulla rete di fabbrica); il
+vincolo **read-only** (punto 4 sopra) confermato come fermo
+indipendentemente da quale sistema si scelga.
+
+**La conseguenza pratica di "lasciare aperta la strada" è già scritta
+al punto 2 della lista sopra, non un'idea nuova**: un endpoint HTTP
+locale generico (`POST /set_alarm`) sul server già avviato da
+`open_glb_in_browser` è per costruzione **agnostico rispetto al
+protocollo/vendor** — qualunque sistema esterno capace di fare una
+chiamata HTTP (un PLC tramite un piccolo script/gateway, uno HMI
+web-based tramite un webhook, un MES, letteralmente qualunque cosa con
+capacità di scripting minime) può usarlo senza che balzar debba avere
+codice su misura per quel sistema specifico. Quando si riprenderà
+questo lavoro, il punto 2 resta quindi il pezzo giusto da costruire per
+primo — non perché sia "il più facile", ma perché è l'unico dei quattro
+punti che non richiede ancora di sapere con quale sistema reale ci si
+integrerà: i driver di protocollo specifici (punto 3) restano
+esplicitamente rimandati a quando quella decisione sarà presa.
 
 ### 9.20 Demo web riorganizzata in Balzar Studio / Balzar Live; "Apri programma" diventa un apritore generico
 
