@@ -1659,11 +1659,22 @@ l'hero originale apriva già con un esempio concreto (schema tecnico +
 QR), ma non c'era nessuna riga che spiegasse **cos'è balzar** a un
 livello più alto, senza tecnicismi, prima di mostrare la prova. Nuova
 `<section class="intro">` in cima a `<main>` — solo testo centrato,
-niente immagine/card/CTA, massima sobrietà ("Non salviamo i tuoi
-disegni. Li rigeneriamo." + una riga di spiegazione senza menzionare
-QR/byte/payload, lasciati al resto della pagina) — seguita da un
-divisorio (`border-top` su `.hero`) per segnalare visivamente il
-passaggio da "concetto" a "esempio concreto".
+niente immagine/card/CTA, massima sobrietà — seguita da un divisorio
+(`border-top` su `.hero`) per segnalare visivamente il passaggio da
+"concetto" a "esempio concreto".
+
+**Copy rivista due volte nella stessa sessione, su richiesta esplicita
+dell'utente**: la prima versione ("Non salviamo i tuoi disegni. Li
+rigeneriamo.") è stata sostituita con "Tutto il tuo progetto, in un
+piccolo codice." + una riga che sottolinea l'aspetto **completamente
+offline** ("senza rete, senza server") invece di ripetere il
+"non-salviamo" già implicito nell'hero sotto. Vincolo esplicito
+applicato ovunque nella pagina, non solo qui: **mai la prima persona
+plurale** ("salviamo", "generiamo", "dichiariamo") — un residuo è stato
+trovato e corretto nello stesso giro (`h3` della sezione onestà, da
+"lo dichiariamo — non lo nascondiamo" a "dichiarato apertamente — mai
+nascosto"), verificato con un grep mirato (`\w+iamo\b`) su tutto
+`landing.html` per non lasciarne altri.
 
 **Correzione di gerarchia semantica, non solo estetica**: l'intro
 diventa l'unico `<h1>` della pagina (era l'hero prima); il titolo
