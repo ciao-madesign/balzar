@@ -1490,6 +1490,11 @@ const openProgramText = document.getElementById("open-program-text");
 const openDlPng = document.getElementById("open-dl-png");
 const openDlGif = document.getElementById("open-dl-gif");
 const openDlSvg = document.getElementById("open-dl-svg");
+// "Altre opzioni" in questo pannello ha come unico figlio il download SVG:
+// tienilo nascosto quando l'SVG non c'e', cosi' la disclosure non si apre
+// mai su una sezione vuota (l'SVG e' disponibile solo per un programma 2D
+// vettoriale, non per un raster o un multi-frame).
+const openMoreActions = document.getElementById("open-more-actions");
 const openDlPayload = document.getElementById("open-dl-payload");
 const openSvgReason = document.getElementById("open-svg-reason");
 
@@ -1600,6 +1605,7 @@ function renderOpenResult(r) {
   }
 
   openDlSvg.hidden = !r.svg_available;
+  openMoreActions.hidden = !r.svg_available;
   openSvgReason.hidden = r.svg_available;
   if (!r.svg_available) {
     openSvgReason.textContent = "SVG non disponibile: " + r.svg_reason;
