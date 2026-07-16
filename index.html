@@ -353,27 +353,33 @@
           formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
       </details>
 
-      <p class="honesty">Puoi includere nello stesso QR anche una tabella allarmi e
-        altri documenti consultabili: scegli i file qui sotto <strong>prima</strong> di
-        caricare il file 3D — tutto viene impacchettato in un bundle (<code>BZX1</code>,
-        <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca allarmi
-        pronta e un indice navigabile dei documenti. I documenti aggiuntivi sono solo
-        da consultare (non collegati al 3D): testo/CSV/immagini si aprono inline, i
-        formati strutturati (pdf/html/xml/…) si scaricano. Un file <code>.bzr</code>/
-        <code>.bzp</code> (un programma/payload balzar 2D — una tavola tecnica) viene
-        invece <strong>rigenerato al volo</strong> in PNG/SVG e mostrato come le
-        immagini — nessun pixel salvato, solo il programma che lo disegna. Opzionale:
-        senza extra il payload resta un semplice <code>BZM1</code> come prima.</p>
-      <p>
-        <label>Tabella allarmi da includere nel bundle (opzionale):
-          <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
-        <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
-      </p>
-      <p>
-        <label>Documenti aggiuntivi da consultare (opzionale, selezione multipla):
-          <input type="file" id="threed-bundle-docs-input" multiple></label>
-        <button id="threed-bundle-docs-clear-btn" type="button">Rimuovi documenti</button>
-      </p>
+      <!-- Manutenzione/bundle: opzionale, collassato di default così il
+           flusso principale (carica il modello) resta pulito. Gli id dei
+           file input restano invariati (JS in app.js li trova comunque). -->
+      <details class="panel-help">
+        <summary>Gestione manutenzione: includi tabella allarmi e documenti nel bundle (opzionale)</summary>
+        <p class="honesty">Puoi includere nello stesso QR anche una tabella allarmi e
+          altri documenti consultabili: scegli i file qui sotto <strong>prima</strong> di
+          caricare il file 3D — tutto viene impacchettato in un bundle (<code>BZX1</code>,
+          <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca allarmi
+          pronta e un indice navigabile dei documenti. I documenti aggiuntivi sono solo
+          da consultare (non collegati al 3D): testo/CSV/immagini si aprono inline, i
+          formati strutturati (pdf/html/xml/…) si scaricano. Un file <code>.bzr</code>/
+          <code>.bzp</code> (un programma/payload balzar 2D — una tavola tecnica) viene
+          invece <strong>rigenerato al volo</strong> in PNG/SVG e mostrato come le
+          immagini — nessun pixel salvato, solo il programma che lo disegna. Opzionale:
+          senza extra il payload resta un semplice <code>BZM1</code> come prima.</p>
+        <p>
+          <label>Tabella allarmi da includere nel bundle (opzionale):
+            <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
+          <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
+        </p>
+        <p>
+          <label>Documenti aggiuntivi da consultare (opzionale, selezione multipla):
+            <input type="file" id="threed-bundle-docs-input" multiple></label>
+          <button id="threed-bundle-docs-clear-btn" type="button">Rimuovi documenti</button>
+        </p>
+      </details>
 
       <section id="threed-drop" class="dropzone">
         <input type="file" id="threed-file-input" accept=".3dxml" hidden>
@@ -414,22 +420,25 @@
             </label>
           </div>
         </div>
-        <p class="honesty">Clicca una parte per evidenziarla e attenuare le altre (usa
-          <code>materialFromPoint</code> di model-viewer — ogni posizionamento ha un proprio
-          materiale, non condiviso, proprio per renderlo distinguibile). Clicca una riga della
-          distinta base per evidenziare tutte le istanze di quel tipo di parte. Con una parte
-          selezionata, "esporta scheda ricambio" scarica un'immagine con la vista isolata più
-          nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.
-          La barra di ricerca cerca in <strong>qualunque colonna</strong> di una tabella
-          componenti caricata (CSV libero, con intestazione: nome componente, codice, allarme,
-          ricambio, note di manutenzione… in qualunque ordine — nel bundle sopra, o qui sotto) e
-          mostra l'intera riga trovata; se il valore cercato compare anche nella colonna che la
-          tabella usa per il nome del componente (rilevata automaticamente confrontando i valori
-          con la distinta base, non per posizione o intestazione), il componente si evidenzia
-          anche sul modello 3D. Senza tabella caricata, la ricerca cade sul solo nome
-          componente. Differenza tra le due vie di caricamento: quella sopra (prima
-          dell'upload) entra nel bundle scaricabile/QR, questa qui sotto è solo per questa
-          sessione del browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
+        <details class="panel-help">
+          <summary>Come usare la vista 3D (click, ricerca, scheda ricambio)</summary>
+          <p class="honesty">Clicca una parte per evidenziarla e attenuare le altre (usa
+            <code>materialFromPoint</code> di model-viewer — ogni posizionamento ha un proprio
+            materiale, non condiviso, proprio per renderlo distinguibile). Clicca una riga della
+            distinta base per evidenziare tutte le istanze di quel tipo di parte. Con una parte
+            selezionata, "esporta scheda ricambio" scarica un'immagine con la vista isolata più
+            nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.
+            La barra di ricerca cerca in <strong>qualunque colonna</strong> di una tabella
+            componenti caricata (CSV libero, con intestazione: nome componente, codice, allarme,
+            ricambio, note di manutenzione… in qualunque ordine — nel bundle sopra, o qui sotto) e
+            mostra l'intera riga trovata; se il valore cercato compare anche nella colonna che la
+            tabella usa per il nome del componente (rilevata automaticamente confrontando i valori
+            con la distinta base, non per posizione o intestazione), il componente si evidenzia
+            anche sul modello 3D. Senza tabella caricata, la ricerca cade sul solo nome
+            componente. Differenza tra le due vie di caricamento: quella sopra (prima
+            dell'upload) entra nel bundle scaricabile/QR, questa qui sotto è solo per questa
+            sessione del browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
+        </details>
 
         <table class="stats" id="threed-stats-table"></table>
 
