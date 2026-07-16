@@ -62,9 +62,12 @@
   <main>
     <div id="panel-encode">
       <p class="purpose">Codifica · encoder generico</p>
-      <p class="tagline">Per quando non hai un sorgente vettoriale: carica una foto, uno screenshot
-        o un'icona qualsiasi. L'encoder analizza i pixel e prova a ridurli a un programma — e
-        dichiara onestamente quando il contenuto (una foto, del rumore) non si presta.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Per quando non hai un sorgente vettoriale: carica una foto, uno screenshot
+          o un'icona qualsiasi. L'encoder analizza i pixel e prova a ridurli a un programma — e
+          dichiara onestamente quando il contenuto (una foto, del rumore) non si presta.</p>
+      </details>
       <section id="drop" class="dropzone">
         <input type="file" id="file-input" accept="image/*" hidden>
         <p id="drop-label">Trascina un'immagine qui, oppure <button id="browse-btn" type="button">scegli un file</button></p>
@@ -124,10 +127,13 @@
 
     <div id="panel-vector" hidden>
       <p class="purpose">Codifica · ingestione CAD esatta</p>
-      <p class="tagline">Carica un file <code>.svg</code> o <code>.dxf</code>: viene ingerito
-        direttamente (<code>vectorio.py</code>) — niente rasterizzazione, niente quantizzazione.
-        Un cerchio nel file sorgente ha già centro e raggio espliciti, si mappa 1:1 su
-        <code>CIRCLE</code>.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica un file <code>.svg</code> o <code>.dxf</code>: viene ingerito
+          direttamente (<code>vectorio.py</code>) — niente rasterizzazione, niente quantizzazione.
+          Un cerchio nel file sorgente ha già centro e raggio espliciti, si mappa 1:1 su
+          <code>CIRCLE</code>.</p>
+      </details>
 
       <section id="vector-drop" class="dropzone">
         <input type="file" id="vector-file-input" accept=".svg,.dxf" hidden>
@@ -189,10 +195,13 @@
 
     <div id="panel-video" hidden>
       <p class="purpose">Codifica · delta multi-frame</p>
-      <p class="tagline">Carica una GIF animata: viene codificata col modello differenziale
-        (<code>video.py</code>) — il frame 0 per intero, ogni frame successivo costa solo i
-        pixel che cambiano. A differenza di "Comprimi immagine" (che guarda solo il primo
-        frame) qui viene ricostruita l'intera animazione.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica una GIF animata: viene codificata col modello differenziale
+          (<code>video.py</code>) — il frame 0 per intero, ogni frame successivo costa solo i
+          pixel che cambiano. A differenza di "Comprimi immagine" (che guarda solo il primo
+          frame) qui viene ricostruita l'intera animazione.</p>
+      </details>
 
       <section id="video-drop" class="dropzone">
         <input type="file" id="video-file-input" accept=".gif,image/gif" hidden>
@@ -252,12 +261,15 @@
 
     <div id="panel-sequence" hidden>
       <p class="purpose">Codifica · più file, un solo payload navigabile</p>
-      <p class="tagline">Carica 2 o più file. In modalità <strong>"sequenza navigabile"</strong>
-        devono essere <strong>dello stesso tipo</strong> (solo <code>.svg</code>, solo
-        <code>.dxf</code>, oppure immagini raster) e diventano un solo payload con un frame per
-        file, navigabile avanti/indietro. In modalità <strong>"file indipendenti"</strong> ogni
-        file è codificato per conto suo — nessun vincolo di formato, un file rotto non blocca
-        gli altri, ottieni un payload separato per ciascuno.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica 2 o più file. In modalità <strong>"sequenza navigabile"</strong>
+          devono essere <strong>dello stesso tipo</strong> (solo <code>.svg</code>, solo
+          <code>.dxf</code>, oppure immagini raster) e diventano un solo payload con un frame per
+          file, navigabile avanti/indietro. In modalità <strong>"file indipendenti"</strong> ogni
+          file è codificato per conto suo — nessun vincolo di formato, un file rotto non blocca
+          gli altri, ottieni un payload separato per ciascuno.</p>
+      </details>
 
       <fieldset class="mode-picker">
         <label><input type="radio" name="sequence-mode" value="sequence" checked> Sequenza navigabile</label>
@@ -331,12 +343,15 @@
 
     <div id="panel-3d" hidden>
       <p class="purpose">Codifica · assiemi CAD parametrici</p>
-      <p class="tagline">Carica un file <code>.3dxml</code> (formato Dassault, non STEP —
-        vedi <code>scene3d.py</code> per il perché): ogni forma unica viene tenuta una sola
-        volta, ogni sotto-assieme ripetuto si riusa invece di essere ridisegnato — lo stesso
-        principio del resto di balzar, esteso al 3D. Il payload (<code>BZM1</code>) resta
-        compatto per il trasporto; la vista qui e il download <code>.glb</code> sono un
-        formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica un file <code>.3dxml</code> (formato Dassault, non STEP —
+          vedi <code>scene3d.py</code> per il perché): ogni forma unica viene tenuta una sola
+          volta, ogni sotto-assieme ripetuto si riusa invece di essere ridisegnato — lo stesso
+          principio del resto di balzar, esteso al 3D. Il payload (<code>BZM1</code>) resta
+          compatto per il trasporto; la vista qui e il download <code>.glb</code> sono un
+          formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
+      </details>
 
       <p class="honesty">Puoi includere nello stesso QR anche una tabella allarmi e
         altri documenti consultabili: scegli i file qui sotto <strong>prima</strong> di
@@ -454,7 +469,9 @@
 
     <div id="panel-open" hidden>
       <p class="purpose">Balzar Live · apri un payload già esistente</p>
-      <p class="tagline">Hai già un file <code>.bzr</code>/<code>.bzp</code> (un programma 2D),
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Hai già un file <code>.bzr</code>/<code>.bzp</code> (un programma 2D),
         <code>.b3d</code> (un assieme 3D, <code>BZM1</code>) o <code>.bzx</code> (un bundle
         multi-documento, <code>BZX1</code>) scaricato da qui o
         prodotto dalla CLI/app desktop? Caricalo qui: <strong>nessun encoder coinvolto</strong>,
@@ -463,6 +480,7 @@
         viene rigenerato in PNG/GIF/SVG; un <code>.b3d</code> apre il viewer 3D con la distinta
         base; un <code>.bzx</code> apre 3D (se presente) + ricerca allarmi + indice documenti,
         tutto insieme.</p>
+      </details>
 
       <fieldset class="qr-mode-picker" id="open-load-mode-fieldset">
         <legend>Vuoi caricare un file o scansionare una sequenza QR?</legend>

@@ -615,6 +615,19 @@ details {
   padding: 0.6rem 0.9rem;
 }
 summary { cursor: pointer; color: var(--muted); }
+
+/* Aiuto inline per-pannello ("A cosa serve"): disclosure leggera, senza
+   il box bordato del <details> avanzato (DSL) -- è testo di aiuto, non
+   una card. Stato iniziale del pannello = badge + input, l'aiuto è
+   opzionale (progressive disclosure). */
+.panel-help {
+  margin-top: 0.4rem;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+.panel-help > summary { font-size: 0.85rem; }
+.panel-help .tagline { margin: 0.5rem 0 0; }
 #program-text {
   margin: 0.75rem 0 0;
   max-height: 320px;
