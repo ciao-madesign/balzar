@@ -31,9 +31,17 @@
         (l'ultima scheda). Stesso principio dell'app desktop e della CLI.</p>
     </details>
 
+    <!-- Livello 1: cosa vuoi fare (Crea = Studio, Apri = Live). Toggle
+         driven by activateProduct() in app.js; the level-2 tab grid and
+         all tab-*/panel-* ids below are UNCHANGED. -->
+    <nav class="product-switch" role="tablist" aria-label="Cosa vuoi fare">
+      <button class="product-tab active" id="product-crea" type="button">Crea</button>
+      <button class="product-tab" id="product-apri" type="button">Apri</button>
+    </nav>
+
     <div class="tab-groups">
-      <div class="tab-group">
-        <span class="tab-group-name">Balzar Studio · crea</span>
+      <div class="tab-group" id="group-studio">
+        <span class="tab-group-name">Balzar Studio · crea un programma da un file</span>
         <div class="tabs" role="tablist">
           <button class="tab active" id="tab-encode" type="button">Comprimi immagine</button>
           <button class="tab" id="tab-vector" type="button">Vettoriale (SVG/DXF)</button>
@@ -42,8 +50,8 @@
           <button class="tab" id="tab-3d" type="button">Assemblee 3D</button>
         </div>
       </div>
-      <div class="tab-group">
-        <span class="tab-group-name">Balzar Live · consulta</span>
+      <div class="tab-group" id="group-live" hidden>
+        <span class="tab-group-name">Balzar Live · apri un programma già creato</span>
         <div class="tabs" role="tablist">
           <button class="tab" id="tab-open" type="button">Apri programma (.bzr / .bzp / .b3d / .bzx)</button>
         </div>

@@ -102,6 +102,34 @@ h1 {
 }
 .tab:hover { color: var(--fg); }
 
+/* Livello 1 (Crea / Apri) sopra la griglia di modalità. Guardia [hidden]
+   esplicita sul gruppo: .tab-group non ha un display proprio, ma questo
+   progetto è stato morso più volte dalla collisione classe-vs-[hidden],
+   quindi la rendiamo esplicita per costruzione. */
+.product-switch {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+.product-tab {
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  padding: 0.5rem 1.4rem;
+  border-radius: 999px;
+}
+.product-tab.active {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.product-tab:hover:not(.active) { color: var(--fg); border-color: var(--fg); }
+.tab-group[hidden] { display: none; }
+
 .dropzone {
   border: 2px dashed var(--border);
   border-radius: 12px;

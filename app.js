@@ -280,12 +280,23 @@ dlProgramBtn.addEventListener("click", () => {
 setupQrButton("encode", () => (lastResult && !lastResult.payload_omitted) ? lastResult.payload_base64 : null);
 
 // ---------------------------------------------------------- tabs
+//
+// Two-level navigation, kept deliberately thin so the level-2 mechanism
+// (activateTab + the tab-*/panel-* id contract) is UNCHANGED from before
+// the level-1 (Crea/Apri) wrapper was added on top of it:
+//   level 1: activateProduct("crea"|"apri") -> shows one tab-group, hides
+//            the other, and makes sure a tab within it is active.
+//   level 2: activateTab(name) -> the original single-panel switch.
 
 const TAB_NAMES = ["encode", "vector", "video", "sequence", "3d", "open"];
 const tabButtons = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`tab-${n}`)]));
 const tabPanels = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`panel-${n}`)]));
 
+let activeTab = "encode";  // tracked so activateProduct can tell whether the
+                           // current tab already belongs to the target product
+
 function activateTab(tab) {
+  activeTab = tab;
   for (const name of TAB_NAMES) {
     const active = name === tab;
     tabButtons[name].classList.toggle("active", active);
@@ -294,6 +305,29 @@ function activateTab(tab) {
 }
 for (const name of TAB_NAMES) {
   tabButtons[name].addEventListener("click", () => activateTab(name));
+}
+
+// level 1: which modes belong to each product, and which group container
+// to reveal. The tab lists mirror the two .tab-group blocks in index.html.
+const PRODUCTS = {
+  crea: { group: "group-studio", tabs: ["encode", "vector", "video", "sequence", "3d"] },
+  apri: { group: "group-live", tabs: ["open"] },
+};
+const productButtons = { crea: document.getElementById("product-crea"),
+                         apri: document.getElementById("product-apri") };
+
+function activateProduct(name) {
+  for (const [p, cfg] of Object.entries(PRODUCTS)) {
+    const active = p === name;
+    productButtons[p].classList.toggle("active", active);
+    document.getElementById(cfg.group).hidden = !active;
+  }
+  // only switch the active mode if the current one isn't in this product,
+  // so toggling back and forth keeps your place within a product
+  if (!PRODUCTS[name].tabs.includes(activeTab)) activateTab(PRODUCTS[name].tabs[0]);
+}
+for (const name of Object.keys(PRODUCTS)) {
+  productButtons[name].addEventListener("click", () => activateProduct(name));
 }
 
 // -------------------------------------------------------- ingestione vettoriale (SVG/DXF)
