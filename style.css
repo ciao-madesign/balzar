@@ -195,6 +195,14 @@ button:disabled:hover { border-color: var(--border); }
 }
 .status.error { color: var(--bad); }
 
+/* Contenitore uniforme di ogni modalità (encoder o consulta). Hook
+   strutturale condiviso: NON impone una larghezza (il viewer 3D e la
+   griglia immagini restano a piena larghezza), solo una spaziatura
+   verticale coerente tra badge / aiuto / input / risultato. È l'ancora
+   su cui lo step "design system" costruirà il look a card. */
+.panel { padding-top: 0.25rem; }
+.panel > .purpose { margin-top: 0; }
+
 .result { margin-top: 1.5rem; }
 
 .images {
