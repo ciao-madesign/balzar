@@ -1719,7 +1719,7 @@ subito sotto l'`<h1>`.
 
 ### 2.11 Test
 
-342 test, tutti verdi (`python3 -m unittest discover -s tests`):
+346 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1989,24 +1989,13 @@ scansione whole-image su una griglia completa) — vedi §2.4b).
     `_Shape` di `vectorio.py` (già strutturate per kind/geom/layer) nel
     formato a coppie codice/valore DXF — probabilmente il pezzo più
     semplice di questa lista, perché il modello dati esiste già.
-13. **"3D filtered mode"** (nome scelto in sessione): mostrare solo gli
-    assiemi di primo livello nominati dal disegnatore, nascondendo
-    sotto-codici/sotto-assiemi che possono essere informazione
-    riservata (part number proprietari, dettagli costruttivi interni).
-    Proposto e discusso, esplicitamente **rimandato** a valutazione
-    futura, non ancora iniziato. Punto tecnico chiave emerso nella
-    discussione, da tenere presente quando si riprende: **nascondere
-    solo nella UI del viewer non basta** — il `.glb` scaricabile
-    contiene comunque nomi e gerarchia completi di ogni sotto-parte,
-    ispezionabili da chiunque con un viewer glTF generico o un editor
-    di testo (è JSON+binario). Una vera riservatezza richiederebbe
-    unire la geometria sotto il livello scelto già in fase di export
-    (`scene3d.py`/`gltf.py`, non un filtro lato client) — le sotto-parti
-    nascoste diventerebbero una singola mesh anonima, senza nomi né
-    materiali distinti, con il costo esplicito di perdere il
-    click-to-select per quelle sotto-parti specifiche (un compromesso
-    riservatezza-vs-interattività, non un dettaglio implementativo
-    gratuito).
+13. ~~"3D filtered mode"~~ — **fatto**: `merge_named_groups`
+    (`balzar/scene3d.py`, §9.31 — costruito per un motivo diverso,
+    ridurre il payload) risolve esattamente il problema tecnico chiave
+    identificato qui ("nascondere solo nella UI non basta, il `.glb`
+    scaricabile contiene comunque nomi e gerarchia complete") — vedi
+    §9.32 per la verifica esplicita byte-per-byte che i nomi dei
+    sotto-assiemi nascosti non sopravvivono né nel payload né nel GLB.
 
 ## 6. Applicazioni target (valutate, non solo elencate)
 
@@ -4833,10 +4822,67 @@ Xvfb per il dialog GUI (dialog monkeypatchato, mainloop reale pompato):
 prompt mostrato solo per `.3dxml`, nomi passati correttamente fino a
 `encode_3dxml_file`, job completato senza errori. 342 test totali.
 
+### 9.32 "3D filtered mode" chiuso: `merge_names` risolve già la riservatezza, non solo la dimensione
+
+Seguito diretto di sessione, priorità 6 dopo aver chiuso la 1 (§9.30/
+§9.31). Rileggendo §5 punto 13 ("3D filtered mode", mai iniziato):
+l'obiettivo lì descritto — mostrare solo gli assiemi di primo livello
+nominati dal disegnatore, nascondendo sotto-codici/sotto-assiemi che
+possono essere informazione riservata (part number proprietari,
+dettagli costruttivi interni) — e il vincolo tecnico chiave già
+identificato allora ("nascondere solo nella UI del viewer non basta:
+il `.glb` scaricabile contiene comunque nomi e gerarchia complete di
+ogni sotto-parte, ispezionabili da chiunque con un viewer glTF generico
+o un editor di testo") sono **esattamente** ciò che `merge_named_groups`
+(§9.31) già fa, costruito per un motivo diverso (ridurre byte, non
+riservatezza). Confermato con l'utente prima di scrivere altro codice:
+riuso diretto, stessa interfaccia (`merge_names`), nessun meccanismo
+nuovo — l'utente elenca esplicitamente i nomi dei sotto-assiemi da
+nascondere, esattamente come già fa per il risparmio di byte.
+
+**Perché funziona per la riservatezza, non solo per la dimensione**:
+`merge_named_groups` non nasconde solo — **elimina** (`_prune_unreachable`)
+i `Reference`/`Shape` dei sotto-assiemi non più raggiunti dopo la
+fusione. Non c'è nulla da "non mostrare": i nomi/materiali dei
+sotto-assiemi nascosti non esistono più nell'oggetto `Scene3D`, quindi
+non possono comparire né nel payload BZM1 né nel GLB esportato
+**quale che sia il codice a valle** — a differenza di `collapse_names`
+(generate_bom/scene3d_to_glb, §9.21), che raggruppa solo la vista
+BOM/evidenziazione ma lascia intatta l'intera geometria+nomi nel GLB
+scaricabile (nessuna vera riservatezza, esattamente il problema che
+questo punto voleva risolvere).
+
+**Verificato byte-per-byte, non assunto** (`tests/test_scene3d.py::
+TestConfidentialMerge`, 4 nuovi test): costruita una scena sintetica
+con due parti dai nomi deliberatamente proprietari
+(`PN-88213-INTERNAL`, `PN-90144-PROPRIETARY`) sotto un sotto-assieme
+pubblico (`AssiemePubblico`), fusa con `merge_names={"AssiemePubblico"}`:
+- **payload**: nessuna delle due stringhe compare nel corpo decompresso
+  del BZM1 (un controllo sui byte compressi sarebbe stato un test
+  debole — quasi ogni stringa "non c'è" in dati deflate — quindi il
+  test decomprime prima di cercare, verificando i byte che
+  `_deserialize` legge davvero); il nome pubblico del gruppo resta,
+  correttamente (è l'unica identità che deve restare visibile);
+- **BOM**: `generate_bom` mostra **solo** `AssiemePubblico`, zero righe
+  per le parti nascoste;
+- **GLB esportato**: nessuna delle due stringhe compare da nessuna
+  parte nei byte del file — il controllo diretto sul file che un utente
+  scaricherebbe e ispezionerebbe con un viewer glTF generico o un
+  editor di testo, non solo sul percorso di decodifica di balzar;
+- **caso di controllo**: la stessa scena **senza** fusione **lascia
+  davvero trapelare** entrambe le stringhe nel GLB — prova diretta che
+  il test sopra misura una proprietà reale, non una tautologia.
+
+**Nessun codice nuovo nel motore** — solo verifica esplicita di una
+proprietà che il meccanismo già costruito per §9.31 possedeva per
+costruzione, non ancora controllata sotto questa lente. Nessuna
+modifica a CLI/GUI/webapi (già wired in §9.31, stessa interfaccia
+serve entrambi gli scopi). Suite completa: 346 test, tutti verdi.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 342 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 346 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
