@@ -698,35 +698,6 @@ table.compare-table td.fit-no { color: var(--bad); }
   letter-spacing: 0.03em;
 }
 
-/* pattern band */
-
-.pattern-band {
-  position: relative;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  overflow: hidden;
-  padding: 4rem 0;
-}
-.pattern-band-bg {
-  position: absolute;
-  inset: 0;
-  background-image: url("landing-img/pattern-tile.png");
-  background-size: 220px;
-  background-repeat: repeat;
-  opacity: 0.07;
-  pointer-events: none;
-}
-@media (prefers-color-scheme: dark) {
-  .pattern-band-bg { opacity: 0.14; filter: invert(1) hue-rotate(180deg); }
-}
-.pattern-band .wrap { position: relative; text-align: center; max-width: 640px; }
-.pattern-band p.big {
-  font-family: Georgia, serif;
-  font-size: clamp(1.3rem, 2.6vw, 1.7rem);
-  margin: 0 0 0.6rem;
-}
-.pattern-band p.small { color: var(--muted); margin: 0; font-size: 0.9rem; }
-
 /* final CTA */
 
 .final-cta {
