@@ -1654,6 +1654,26 @@ tre pallini + pillola URL, solo CSS — `.browser-frame`/`.browser-chrome`
 in `landing.css`) per segnalare visivamente che è un'interfaccia reale
 in un browser, non un'illustrazione.
 
+**Sezione "intro" aggiunta prima dell'hero, su richiesta esplicita**:
+l'hero originale apriva già con un esempio concreto (schema tecnico +
+QR), ma non c'era nessuna riga che spiegasse **cos'è balzar** a un
+livello più alto, senza tecnicismi, prima di mostrare la prova. Nuova
+`<section class="intro">` in cima a `<main>` — solo testo centrato,
+niente immagine/card/CTA, massima sobrietà ("Non salviamo i tuoi
+disegni. Li rigeneriamo." + una riga di spiegazione senza menzionare
+QR/byte/payload, lasciati al resto della pagina) — seguita da un
+divisorio (`border-top` su `.hero`) per segnalare visivamente il
+passaggio da "concetto" a "esempio concreto".
+
+**Correzione di gerarchia semantica, non solo estetica**: l'intro
+diventa l'unico `<h1>` della pagina (era l'hero prima); il titolo
+dell'hero scende a `<h2 class="hero-title">` con le stesse identiche
+regole tipografiche di prima (spostate dal selettore `h1` a
+`h1, .hero-title` in `landing.css`, incluso `em` per la parola
+evidenziata in accento) — nessuna regressione visiva, solo un
+documento con una struttura di intestazioni corretta (un solo h1, h2
+per le sezioni principali, h3 per le sotto-sezioni, invariato altrove).
+
 ### 2.10 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
