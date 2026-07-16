@@ -1,3 +1,13 @@
+// Frontend della demo web (index.html). Organizzato a blocchi isolati,
+// ciascuno delimitato da un banner "// ----- <nome> -----":
+//   - Helper condivisi: setStatus/fileToBase64/postJSON/fmtBytes/render/
+//     downloadBlob/base64ToBytes/setupQrButton (usati da tutti i blocchi).
+//   - tabs: navigazione a due livelli (activateProduct/activateTab).
+//   - un blocco per encoder/consultatore: encode immagine, vettoriale,
+//     video, sequenza, assiemi 3D, apri programma (Balzar Live).
+// Ogni chiamata a un endpoint /api/* passa da postJSON (un solo punto per
+// il contratto {ok,...}); nessun blocco reimplementa fetch/parse/errore.
+
 const dropzone = document.getElementById("drop");
 const fileInput = document.getElementById("file-input");
 const browseBtn = document.getElementById("browse-btn");
@@ -50,6 +60,21 @@ function fileToBase64(file) {
   });
 }
 
+// Shared POST-to-JSON helper: every encoder/render/QR call in this file
+// hits a serverless endpoint with the same shape (POST JSON, expect
+// {ok, ...} or {ok:false, error}). Consolidated here so the 8 call
+// sites are one line each and the error contract lives in one place.
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+  return json;
+}
+
 // Vercel rifiuta body oltre ~4.5MB; il base64 aggiunge ~33%, quindi il
 // file originale deve stare sotto ~3.3MB. Meglio dirlo subito e chiaro.
 const MAX_FILE_BYTES = 3.3 * 1024 * 1024;
@@ -81,13 +106,7 @@ async function handleFile(file) {
 
     const data = dataUrl.split(",", 2)[1];
 
-    const res = await fetch("/api/encode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, max_dim: maxDimVal }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode", { data, max_dim: maxDimVal });
 
     lastResult = json;
     render(json, file);
@@ -201,13 +220,7 @@ function setupQrButton(prefix, getPayloadBase64) {
     dlBtn.hidden = (mode === "pages");
     lastDownload = null;
     try {
-      const res = await fetch("/api/qr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload_base64: payloadB64, mode, grid_dim: gridDim }),
-      });
-      const json = await res.json();
-      if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+      const json = await postJSON("/api/qr", { payload_base64: payloadB64, mode, grid_dim: gridDim });
 
       noteEl.classList.remove("error");
       if (json.mode === "single") {
@@ -386,13 +399,8 @@ async function handleVectorFile(file) {
   setVectorStatus(`Ingestione di "${file.name}" in corso…`);
   try {
     const data = await fileToBase64(file);
-    const res = await fetch("/api/encode_vector", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, filename: file.name, max_dim: parseInt(vectorMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_vector",
+      { data, filename: file.name, max_dim: parseInt(vectorMaxDim.value, 10) });
 
     lastVectorResult = json;
     if (lower.endsWith(".svg")) {
@@ -507,13 +515,8 @@ async function handleVideoFile(file) {
     videoImgOriginal.src = dataUrl;
     const data = dataUrl.split(",", 2)[1];
 
-    const res = await fetch("/api/encode_video", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, max_dim: parseInt(videoMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_video",
+      { data, max_dim: parseInt(videoMaxDim.value, 10) });
 
     lastVideoResult = json;
     renderVideoResult(json);
@@ -687,13 +690,8 @@ sequenceEncodeBtn.addEventListener("click", async () => {
       filename: f.name,
       data: await fileToBase64(f),
     })));
-    const res = await fetch("/api/encode_sequence", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, mode, max_dim: parseInt(sequenceMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_sequence",
+      { files, mode, max_dim: parseInt(sequenceMaxDim.value, 10) });
 
     if (mode === "independent") {
       renderIndependentResults(json);
@@ -778,13 +776,7 @@ function renderIndependentResults(resp) {
       const btn = e.currentTarget;
       btn.disabled = true;
       try {
-        const res = await fetch("/api/qr", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ payload_base64: item.payload_base64 }),
-        });
-        const qrJson = await res.json();
-        if (!qrJson.ok) throw new Error(qrJson.error || "errore sconosciuto");
+        const qrJson = await postJSON("/api/qr", { payload_base64: item.payload_base64 });
         lastQrB64 = qrJson.qr_png_base64;
         qrImg.src = "data:image/png;base64," + lastQrB64;
         qrNote.textContent = qrJson.single_qr
@@ -1418,13 +1410,7 @@ async function handleThreedFile(file) {
         body.documents.push({ label: df.name, data: await fileToBase64(df) });
       }
     }
-    const res = await fetch("/api/encode_3d", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_3d", body);
 
     lastThreedResult = json;
     renderThreedResult(json);
@@ -1557,13 +1543,7 @@ async function handleOpenData(dataB64, label) {
   openDocsResultEl.hidden = true;
   setOpenStatus(`Apertura di ${label} in corso…`);
   try {
-    const res = await fetch("/api/render", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: dataB64 }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/render", { data: dataB64 });
 
     lastOpenResult = null;
     lastOpen3dResult = null;
