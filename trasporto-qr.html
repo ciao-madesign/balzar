@@ -20,7 +20,7 @@
       balzar sa sfruttare (un PDF di testo, un binario) — qui non si promette nessun guadagno di
       spazio, solo un modo di far stare un file più grande di un QR in una sequenza di QR
       stampabili/fotografabili, con integrità verificata (CRC32) al riassemblaggio.</p>
-    <p class="nav-links">← <a href="index.html">torna alla demo balzar</a></p>
+    <p class="nav-links">← <a href="landing.html">torna alla home</a> · <a href="index.html">torna alla demo balzar</a></p>
   </header>
 
   <main>
@@ -67,7 +67,7 @@
         </label>
         <p class="dim-picker" id="enc-grid-dim-fixed" hidden>Griglia fissata a 1×1 (nessuna
           griglia): l'acquisizione continua da fotocamera legge in modo affidabile solo un QR per
-          fotogramma — vedi CLAUDE.md §2.4g per la misura.</p>
+          fotogramma.</p>
       </section>
       <p id="enc-status" class="status"></p>
       <div id="enc-pages" class="qr-pages"></div>
@@ -142,8 +142,8 @@
         file prima di offrirlo in download: se anche un solo bit fosse alterato nel giro
         stampa/foto/lettura, la verifica fallisce esplicitamente invece di restituire un file
         silenziosamente corrotto. Stesso principio già usato per i payload balzar
-        (<code>chunks --raw</code>/<code>scan --raw</code> in CLI, <code>CLAUDE.md</code> §2.4c) —
-        qui applicato senza bisogno di un terminale.</p>
+        (<code>chunks --raw</code>/<code>scan --raw</code> in CLI) — qui applicato senza bisogno di
+        un terminale.</p>
     </section>
 
   </main>

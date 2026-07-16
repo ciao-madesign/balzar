@@ -1685,6 +1685,33 @@ evidenziata in accento) — nessuna regressione visiva, solo un
 documento con una struttura di intestazioni corretta (un solo h1, h2
 per le sezioni principali, h3 per le sotto-sezioni, invariato altrove).
 
+**Riferimenti a `CLAUDE.md` rimossi dal testo visibile del sito**: su
+richiesta esplicita, ogni menzione renderizzata di `CLAUDE.md` (il log
+tecnico di sessione, interno al repository) è stata tolta dal testo
+pubblico — `come-funziona.html` (link/citazione in fondo alla tabella
+di confronto, sostituito con la stessa affermazione senza il nome del
+file), `trasporto-qr.html` (due punti, § tolte dalle frasi che le
+citavano) e `index.html` (una citazione nel tab "Apri programma"). I
+commenti nel codice sorgente JS/CSS che citano `CLAUDE.md §N` come
+puntatore a spiegazioni più dettagliate (`qr-transport-core.js`,
+`qr-camera-scanner.js`, `app.js`, `trasporto-qr.js`, `style.css`, più
+l'intestazione di licenza vendorizzata di `jsQR.min.js`) sono stati
+**lasciati invariati**: non sono testo visibile a un visitatore del
+sito (solo a chi apre i sorgenti), e sono la stessa documentazione
+tecnica di sessione già presente ovunque nel progetto.
+
+**Link "torna alla home" verso `landing.html` aggiunto su tutte e tre
+le pagine del sito** (`index.html`, `come-funziona.html`,
+`trasporto-qr.html`), su richiesta esplicita — prima solo
+`come-funziona.html`/`trasporto-qr.html` avevano un link indietro (verso
+`index.html`, non verso `landing.html`), e `index.html` non aveva alcun
+link di ritorno. Aggiunto senza toccare i link già esistenti: su
+`come-funziona.html`/`trasporto-qr.html` lo stesso `<p class="nav-links">`
+ora porta due link ("torna alla home" verso `landing.html` · il vecchio
+"torna alla demo" verso `index.html`, invariato); su `index.html`
+(che prima non aveva alcuna riga `nav-links` di ritorno) una nuova riga
+subito sotto l'`<h1>`.
+
 ### 2.10 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
