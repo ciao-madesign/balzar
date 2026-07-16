@@ -1551,16 +1551,41 @@ sorgente di bug di specificità CSS ripetuti in questo progetto, es. §9.9/
 collidevano; una pagina di marketing con un linguaggio visivo diverso
 [hero, badge statistici, grid di card] non condivide componenti con la
 UI applicativa, quindi non ha motivo di condividerne il CSS) +
-`landing-img/` (quattro PNG **reali**, non mockup: renderizzati con
+`landing-img/` (PNG **reali**, non mockup: renderizzati con
 `balzar render`/`balzar chunks --qr` dagli stessi file in `examples/`
 già usati altrove nel progetto — `schema-tecnico.png` per l'hero,
 `etichetta-bom.png` + `etichetta-bom-qr.png` come prova appaiata
-immagine/QR nella sezione numeri, `pattern-tile.png` come texture
-decorativa a bassa opacità in una fascia di pagina, con nota esplicita
-che anche quello sfondo è generato dallo stesso motore, non un'immagine
-qualunque). Nessuna dipendenza nuova: le uniche librerie usate per
-generare gli asset (`qrcode`, Pillow) servivano solo in fase di build
-degli asset statici, non sono richieste a runtime dalla pagina.
+immagine/QR nella sezione numeri, `viewer-3d-search.png` per la sezione
+Balzar Live, vedi sotto). Nessuna dipendenza nuova: le uniche librerie
+usate per generare gli asset (`qrcode`, Pillow) servivano solo in fase
+di build degli asset statici, non sono richieste a runtime dalla pagina.
+
+**Bug reale di deformazione dell'immagine, trovato e corretto dopo il
+primo feedback dell'utente**: il QR nella sezione "prove" appariva
+allungato in verticale, non quadrato. Causa isolata misurando il DOM,
+non indovinata: la regola globale `img { max-width: 100%; }` non aveva
+`height: auto`, quindi quando il layout a flexbox della riga
+immagine+QR restringeva la larghezza dell'elemento sotto l'attributo
+HTML `width="290"`, l'altezza restava fissa a `height="290"` (letta
+dall'attributo) mentre la larghezza si riduceva — la stessa distorsione
+si sarebbe potuta ripresentare su qualunque immagine futura stretta in
+un contenitore più piccolo dei suoi attributi HTML. Fix in due parti:
+`height: auto` aggiunto alla regola globale `img` (corregge la classe
+di bug, non solo il QR), e `.proof-visual` passato da `flex` a
+`display: grid` con colonne proporzionali esplicite (`1.2fr 1fr`) per
+un dimensionamento più prevedibile del riquadro QR, con l'immagine del
+QR stessa vincolata a `aspect-ratio: 1/1` come ulteriore garanzia
+indipendente dagli attributi HTML. Verificato leggendo
+`getBoundingClientRect()` prima/dopo il fix (123×290px deformato →
+123×123px quadrato) e visivamente su desktop/mobile.
+
+**Sezione "pattern band" rimossa su richiesta esplicita**: il testo
+("ogni piastrella di questo sfondo è calcolata al volo...") accompagnava
+uno sfondo decorativo a bassa opacità di `pattern_tile.bzr`, ma preso
+fuori contesto — senza aver appena visto il resto della pagina — non
+comunicava nulla di comprensibile. Rimossi la sezione HTML, le regole
+CSS `.pattern-band*` e il PNG `landing-img/pattern-tile.png` (diventato
+inutilizzato), invece di lasciare CSS/asset morti nel repository.
 
 **Contenuto**: hero con CTA verso `index.html`; fascia statistiche;
 sezione "problema" (officina senza rete/licenza CAD); "come funziona" a
@@ -1597,25 +1622,37 @@ ricerca libera, BOM collegata, §9.11/§9.15/§9.29) e non aveva ancora
 una prova visiva reale sulla landing. Aggiunta una sezione dedicata
 subito dopo la fascia statistiche (prima di "In officina...", quindi la
 seconda cosa che un visitatore vede dopo l'hero), con uno screenshot
-reale del viewer, non un mockup disegnato a mano: un assieme 3DXML
-sintetico costruito ad hoc per questa schermata (una flangia + 4
-bulloni, geometria a scatole scritta a mano — stesso principio di
-copyright già seguito per non includere file CAD reali di terzi, §2.6/
-§9.2/§9.10/§9.30 — script di generazione non incluso nel repository,
-stesso trattamento delle altre immagini di `landing-img/`) più un CSV
-allarmi a 4 colonne, impacchettati in un vero bundle `.bzx`
-(`balzar encode-bundle ... --alarm`) e aperti con la vera
-`balzar.viewer3d.open_bundle_in_browser` — nessuna delle interazioni
-mostrate nello screenshot è finta: è stata pilotata con Playwright
-(click reale su `materialFromPoint`, ricerca reale digitata in
-`#search-input`) contro il server locale che il modulo avvia per
-davvero. `landing-img/viewer-3d-search.png` cattura lo stato dopo la
-ricerca del codice `A01`: tutti e 4 i bulloni evidenziati in arancione
-nel modello, riga `BULLONE-M6 ×4` selezionata nella distinta base,
-tabella dei risultati con le 4 colonne del CSV. Card presentata come un
-finto "browser frame" (barra con tre pallini + pillola URL, solo CSS —
-`.browser-frame`/`.browser-chrome` in `landing.css`) per segnalare
-visivamente che è un'interfaccia reale in un browser, non un'illustrazione.
+reale del viewer, non un mockup disegnato a mano.
+
+**Prima versione**: un assieme 3DXML sintetico costruito ad hoc (una
+flangia + 4 bulloni, geometria a scatole scritta a mano) più un CSV
+allarmi a 4 colonne, impacchettati in un vero bundle `.bzx` e aperti con
+la vera `balzar.viewer3d.open_bundle_in_browser`. **Sostituita su
+richiesta esplicita dell'utente** con uno screenshot dello stesso
+assieme 3DXML industriale reale già usato per la verifica end-to-end di
+§9.10/§9.12/§9.21/§9.30 (skid con vasche di accumulo/riscaldo, 88 forme
+uniche, 245 posizionamenti-foglia — fornito di nuovo in sessione,
+**non incluso nel repository** per lo stesso motivo di copyright già
+seguito per gli altri assiemi reali di quelle sezioni): risultato
+nettamente più credibile di una geometria a scatole disegnata a mano —
+lista BOM lunga e realistica visibile nel pannello, silhouette
+riconoscibile di un impianto vero. CSV allarmi con nomi di componenti
+reali estratti dalla BOM (`RESISTENZA_DU_SCATOLA`, `VASCA_RISCALDO`,
+`QUADRO_EL_DU` — nomi di parte generici, non part number proprietari)
+invece di quelli inventati della flangia sintetica. Nessuna delle
+interazioni mostrate nello screenshot è finta: pilotata con Playwright
+(ricerca reale digitata in `#search-input`) contro il server locale che
+`open_bundle_in_browser` avvia per davvero. `landing-img/
+viewer-3d-search.png` cattura lo stato dopo la ricerca del codice
+`E102`: il quadro elettrico evidenziato in arancione nel modello
+(silhouette dell'intero skid attenuata sullo sfondo), riga
+`QUADRO_EL_DU ×1` selezionata nella distinta base — visibile
+contemporaneamente nello stesso screenshot, prova diretta del
+collegamento 3D↔BOM↔ricerca — tabella dei risultati con le 4 colonne
+del CSV sotto. Card presentata come un finto "browser frame" (barra con
+tre pallini + pillola URL, solo CSS — `.browser-frame`/`.browser-chrome`
+in `landing.css`) per segnalare visivamente che è un'interfaccia reale
+in un browser, non un'illustrazione.
 
 ### 2.10 CLI
 
