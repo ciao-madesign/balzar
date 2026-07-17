@@ -742,3 +742,11 @@ e il formato è interpretabile come regole discrete.
 
 Per un registro di idee esterne valutate (comprese quelle scartate o
 ridimensionate, con il perché) vedi `CLAUDE.md` §7.
+
+## Licenza
+
+Software proprietario, **tutti i diritti riservati** — Copyright © 2026
+Michele Aldeni. Vedi `LICENSE` (regime closed-beta) e `THIRD-PARTY-NOTICES.md`
+(ogni componente open-source di terze parti citato con la propria licenza e
+i relativi obblighi — Apache-2.0, LGPL-2.1, MIT, BSD, HPND). Il percorso
+verso la beta installabile (desktop poi Android) è tracciato in `ROADMAP.md`.
