@@ -129,6 +129,33 @@ def deactivate() -> None:
         pass
 
 
+# Esiti della decisione all'avvio, per l'interfaccia che monta il gate (GUI
+# desktop, WebView). Separati dalla UI cosi' la politica e' testabile senza
+# Tk/browser.
+STARTUP_OPEN = "open"                  # build di sviluppo: nessun gate
+STARTUP_UNCONFIGURED = "unconfigured"  # impacchettata ma senza chiave: rifiuta
+STARTUP_ACTIVATED = "activated"        # gia' attivata: parte
+STARTUP_NEED_KEY = "need_key"          # chiedi la chiave
+
+
+def startup_decision(frozen: bool) -> str:
+    """Cosa deve fare l'interfaccia all'avvio, dato se gira come binario
+    impacchettato (`frozen`, es. PyInstaller `sys.frozen`).
+
+    Politica: il gate si applica a una build IMPACCHETTATA o a una build in
+    cui una chiave e' stata incorporata; una build di sviluppo da sorgente e
+    non configurata resta aperta (comodita' di sviluppo, non un buco -- una
+    build impacchettata senza chiave viene comunque rifiutata, fail-closed,
+    intercettando l'errore di 'ho dimenticato di impostare la chiave')."""
+    if not (is_configured() or frozen):
+        return STARTUP_OPEN
+    if not is_configured():
+        return STARTUP_UNCONFIGURED
+    if is_activated():
+        return STARTUP_ACTIVATED
+    return STARTUP_NEED_KEY
+
+
 def _main(argv=None) -> int:
     import argparse
     import getpass

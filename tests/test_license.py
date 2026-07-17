@@ -73,6 +73,23 @@ class LicenseTest(unittest.TestCase):
             f.write("{ not valid json")
         self.assertFalse(lic.is_activated())
 
+    # --- decisione all'avvio (politica testabile senza Tk) -------------
+    def test_startup_dev_build_unconfigured_opens_freely(self):
+        lic.BETA_KEY_SHA256 = ""
+        self.assertEqual(lic.startup_decision(frozen=False), lic.STARTUP_OPEN)
+
+    def test_startup_packaged_build_without_key_is_refused(self):
+        lic.BETA_KEY_SHA256 = ""
+        self.assertEqual(lic.startup_decision(frozen=True), lic.STARTUP_UNCONFIGURED)
+
+    def test_startup_configured_not_activated_needs_key(self):
+        self.assertEqual(lic.startup_decision(frozen=False), lic.STARTUP_NEED_KEY)
+        self.assertEqual(lic.startup_decision(frozen=True), lic.STARTUP_NEED_KEY)
+
+    def test_startup_configured_and_activated_starts(self):
+        self.assertTrue(lic.activate(_KEY))
+        self.assertEqual(lic.startup_decision(frozen=False), lic.STARTUP_ACTIVATED)
+
 
 if __name__ == "__main__":
     unittest.main()

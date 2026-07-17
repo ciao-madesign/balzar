@@ -22,10 +22,13 @@ from __future__ import annotations
 import base64
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 import uuid
 from tkinter import filedialog, messagebox, simpledialog, ttk
+
+from . import license as license_gate
 
 from .imageio import load_frames, save_gif
 from .interpreter import render as render_program
@@ -1177,8 +1180,47 @@ class BalzarApp:
             self._animate()
 
 
+def _ensure_licensed(root: tk.Tk) -> bool:
+    """Gate di licenza beta all'avvio. Ritorna True se l'app puo' partire.
+
+    La politica (quando applicare il gate) vive in `license.startup_decision`,
+    testabile senza Tk; qui c'e' solo il wiring dei dialog. Vedi ROADMAP.md /
+    CLAUDE.md §12.2."""
+    decision = license_gate.startup_decision(getattr(sys, "frozen", False))
+    if decision == license_gate.STARTUP_OPEN:
+        return True          # build di sviluppo: nessun gate
+    if decision == license_gate.STARTUP_ACTIVATED:
+        return True          # gia' attivata su questo dispositivo
+    if decision == license_gate.STARTUP_UNCONFIGURED:
+        messagebox.showerror(
+            "Balzar",
+            "Questa build non ha una chiave di licenza configurata e non puo' "
+            "essere avviata.\n\n(Errore di produzione della build: la chiave "
+            "beta non e' stata impostata prima del packaging.)")
+        return False
+    # STARTUP_NEED_KEY: chiedi la chiave, fino a 3 tentativi
+    for _ in range(3):
+        key = simpledialog.askstring(
+            "Attivazione Balzar (beta)",
+            "Inserisci la chiave di attivazione della beta:",
+            parent=root)
+        if key is None:
+            return False     # annullato dall'utente
+        if license_gate.activate(key):
+            return True
+        messagebox.showerror("Balzar", "Chiave non valida. Riprova.")
+    messagebox.showerror(
+        "Balzar", "Attivazione non riuscita. L'app verra' chiusa.")
+    return False
+
+
 def main() -> None:
     root = tk.Tk()
+    root.withdraw()                     # nascosta finche' la licenza non e' ok
+    if not _ensure_licensed(root):
+        root.destroy()
+        return
+    root.deiconify()
     BalzarApp(root)
     root.mainloop()
 
