@@ -1,2 +1,22 @@
-pillow
-qrcode
+# Dipendenze Python di Balzar (motore + app desktop).
+#
+# Il MOTORE (grid/dsl/ops/interpreter/payload) e' stdlib pura, zero
+# dipendenze. Queste servono all'app desktop e alle funzioni QR/immagine.
+
+pillow            # decodifica immagini/GIF (imageio.py) + comporre le griglie QR
+qrcode            # generazione QR (puro Python), nessuna dipendenza nativa
+pyzbar            # lettura QR da foto (opzionale ma richiesta per "Scansiona foto QR")
+
+# DIPENDENZA NATIVA DI SISTEMA (non installabile via pip):
+#   pyzbar carica la libreria C `libzbar` via ctypes. Sulla macchina di build
+#   dev'essere presente:
+#     - Debian/Ubuntu:  apt-get install libzbar0
+#     - macOS (brew):   brew install zbar
+#     - Windows:        la DLL e' inclusa nella wheel di pyzbar, nessuna azione
+#   PyInstaller la include automaticamente nel pacchetto come binario separato
+#   (linking dinamico -> coerente con l'obbligo LGPL-2.1 di libzbar, vedi
+#   THIRD-PARTY-NOTICES.md).
+#
+# NOTA: senza pyzbar/libzbar l'app parte comunque; solo la lettura QR da foto
+# e' disabilitata. La scansione con fotocamera (browser) usa jsQR lato client
+# e NON richiede pyzbar.
