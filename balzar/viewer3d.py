@@ -73,8 +73,12 @@ import shutil
 import threading
 import webbrowser
 
-_MODEL_VIEWER_JS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "model-viewer.min.js")
+from .assets import vendored_path
+
+# Frozen-aware (PyInstaller): vedi balzar/assets.py. Il file .spec bundla
+# model-viewer.min.js in datas, altrimenti nel pacchetto la vista 3D si
+# romperebbe (il path da __file__ punterebbe dentro _MEIPASS senza il file).
+_MODEL_VIEWER_JS = vendored_path("model-viewer.min.js")
 
 _PAGE_TEMPLATE = """<!DOCTYPE html>
 <html>

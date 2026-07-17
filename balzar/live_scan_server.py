@@ -29,7 +29,11 @@ import shutil
 import threading
 import webbrowser
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from .assets import vendored_path
+
+# Frozen-aware (PyInstaller): vedi balzar/assets.py. Questi tre file sono
+# aggiunti a datas nel .spec, altrimenti la scansione fotocamera si romperebbe
+# nel pacchetto.
 _VENDORED_JS = ("jsQR.min.js", "qr-transport-core.js", "qr-camera-scanner.js")
 
 _PAGE_TEMPLATE = """<!DOCTYPE html>
@@ -185,7 +189,7 @@ def start_live_scan_server(work_dir: str) -> tuple[http.server.HTTPServer, "queu
     with open(os.path.join(work_dir, "index.html"), "w", encoding="utf-8") as fh:
         fh.write(_PAGE_TEMPLATE)
     for name in _VENDORED_JS:
-        src = os.path.join(_REPO_ROOT, name)
+        src = vendored_path(name)
         if os.path.exists(src):
             shutil.copy(src, os.path.join(work_dir, name))
 
