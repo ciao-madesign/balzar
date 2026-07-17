@@ -4959,3 +4959,91 @@ sostitutivo: le sezioni corrispondenti restano qui, questo file resta la
 fonte tecnica di verità; `VISIONE.md` è la vista di sintesi condivisibile
 con chi non ha bisogno del log di sessione completo. Tenerli allineati a
 mano quando cambia la sostanza di una delle sezioni duplicate.
+
+## 12. Percorso verso la beta: licenza, packaging, roadmap
+
+Decisione di sessione (con l'utente): passare da "codice funzionante" a
+"beta installabile e testabile dai primi utenti". Le funzionalità sono già
+complete — questo lavoro è **packaging, distribuzione e igiene legale**, non
+capacità del motore. Il riferimento operativo vive in `ROADMAP.md` (radice
+del repo); questa sezione è il log tecnico di cosa è stato deciso e fatto.
+
+**Modello di distribuzione scelto**: **programma installabile su licenza**,
+non pubblicazione su store. Verificato in sessione (non a memoria): per
+Windows, macOS e Android questo è possibile **senza** passare da alcun
+marketplace — Windows `.exe`/installer diretto (avviso SmartScreen aggirabile
+se non firmato), macOS `.dmg` con Developer ID (Gatekeeper aggirabile senza
+notarizzazione a pagamento), Android sideload di un `.apk` (la firma è
+auto-generata, requisito di build, non un cancello di store). **iOS** è
+l'unica eccezione (di fatto serve store o enterprise) — fuori scope, non
+richiesto.
+
+**Ordine di rilascio deciso**: prima desktop (macOS/Windows, test sul
+MacBook Air Apple-Silicon dell'utente), poi Android. Onestà dichiarata:
+Android è l'ordine **più difficile**, non il più facile — l'app desktop
+(`gui.py`) esiste già, mentre il motore è portabile ma la UI Tkinter no
+(non gira su mobile). Approccio Android scelto per la beta: **server Python
+locale + WebView dentro l'APK**, che riusa l'intera UI web (`index.html` +
+`webapi.py`) e la scansione QR già lato browser (`jsQR`), senza riscrivere
+la UI. Correzione onesta messa a verbale: questa beta WebView **è già
+pienamente offline** (il server gira su `127.0.0.1` sul telefono, niente
+esce dal dispositivo; `model-viewer`/`jsQR` sono vendorizzati, non da CDN) —
+quindi "WebView" **non** contraddice il "tutto offline". Una futura app
+nativa resta desiderabile ma per **footprint/UX native/avvio**, non per
+l'offline (che è già garantito) — documentato con la motivazione corretta
+in `ROADMAP.md`, per non costruire una roadmap su un presupposto falso.
+
+### 12.1 Licenza: tutti i diritti riservati + note di terzi trasparenti
+
+Regime deciso per la beta: **tutti i diritti riservati a Michele Aldeni**
+(`LICENSE`, proprietaria closed-beta), con **citazione trasparente e
+completa di ogni licenza di terzi** (`THIRD-PARTY-NOTICES.md`) per non
+esporre il progetto a rischi legali. La riserva di diritti copre solo il
+codice originale di Balzar, non i componenti di terze parti, che restano
+soggetti ai propri termini — dichiarato esplicitamente nel `LICENSE` §5.
+
+Licenze di terzi verificate sui file/pacchetti reali (non a memoria): Pillow
+HPND (MIT-CMU), qrcode BSD, pyzbar MIT, **libzbar LGPL-2.1** (l'unico
+non-permissivo — obbligo di linking dinamico soddisfatto: `pyzbar` la carica
+via `ctypes`, mai statica, `libzbar.so.0` bundlata come file separato dal
+build PyInstaller, §9.13), `model-viewer` 4.3.1 Apache-2.0 (con componenti
+BSD-3-Clause di Google/lit incorporati, attribuzioni preservate negli header
+`@license` del file vendorizzato), `jsQR` 1.4.0 Apache-2.0. Dopo la beta:
+decisione su commercializzazione/apertura — rimandata.
+
+### 12.2 Gate di licenza beta: `balzar/license.py` (soft gate, non DRM)
+
+Requisito deciso: all'avvio l'app chiede una **chiave di attivazione**; per
+la beta la chiave è **unica e condivisa**, decisa dall'utente. È un cancello
+beta, non una protezione anti-copia — dichiarato onestamente nel modulo:
+il codice Python è ispezionabile e l'hash della chiave è comunque incorporato
+nel binario (deve esserlo, la chiave è la stessa per tutti), quindi scoraggia
+la condivisione casuale, non un attaccante. Il meccanismo vero (chiavi
+per-utente, firma asimmetrica) verrà dopo la beta.
+
+Meccanismo: confronta l'**hash SHA-256** della chiave inserita con
+`BETA_KEY_SHA256` incorporato (mai la chiave in chiaro; `hmac.compare_digest`
+a tempo costante), persiste l'attivazione in `~/.balzar/activation.json`
+(scrittura atomica tmp+`os.replace`, stessa disciplina di `library.py`;
+override `BALZAR_LICENSE_DIR` per i test). **Fail-closed**: finché
+`BETA_KEY_SHA256` è vuoto (com'è nel repo), il gate rifiuta qualunque chiave
+— una build senza chiave impostata non è utilizzabile, per scelta esplicita.
+L'attivazione salvata memorizza l'hash con cui è stata fatta: cambiare la
+chiave della build (nuovo `BETA_KEY_SHA256`) invalida le attivazioni vecchie.
+L'hash della chiave si imposta in fase di build senza far transitare la
+chiave in chiaro nei sorgenti/git: `python3 -m balzar.license hash-key`
+(input nascosto via `getpass`, stampa il SHA-256 da incollare).
+
+**Non ancora wired nelle interfacce**: `license.py` è il meccanismo + i test
+(9 test in `tests/test_license.py`, logica pura file/JSON — verifica chiave
+corretta/errata, tolleranza spazi, fail-closed quando non configurato,
+persistenza, invalidazione al cambio chiave, file di stato corrotto); il
+wiring all'avvio della GUI desktop (`gui.py`) e della WebView Android è un
+passo della Fase 1/2 di `ROADMAP.md`, non ancora fatto (il gate va agganciato
+alle interfacce impacchettate, non alla CLI di sviluppo). Versione del
+pacchetto portata a `0.9.0b1` (prima linea beta).
+
+**Da questo ambiente Linux è producibile**: i documenti legali, il gate
+`license.py`, e (prossimi) `balzar.spec` rifinito, `requirements.txt`, script
+di build e istruzioni. **Non producibile da qui**: i binari macOS/Windows e
+l'APK Android reali (servono quelle macchine/SDK — li produce l'utente).
