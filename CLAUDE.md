@@ -5047,3 +5047,60 @@ pacchetto portata a `0.9.0b1` (prima linea beta).
 `license.py`, e (prossimi) `balzar.spec` rifinito, `requirements.txt`, script
 di build e istruzioni. **Non producibile da qui**: i binari macOS/Windows e
 l'APK Android reali (servono quelle macchine/SDK — li produce l'utente).
+
+### 12.3 Fase 1 desktop — preparazione al packaging (fatta da qui)
+
+Tutto ciò che non richiede una macchina macOS/Windows reale, con verifica.
+
+**Gate di licenza agganciato alla GUI desktop** (`gui.py` `main()` →
+`_ensure_licensed`): all'avvio la root Tk è nascosta finché la licenza non è
+ok. La **politica** (quando applicare il gate) vive in
+`license.startup_decision(frozen)`, testabile senza Tk — 4 esiti:
+`STARTUP_OPEN` (build di sviluppo da sorgente, non configurata → nessun gate,
+comodità di sviluppo), `STARTUP_UNCONFIGURED` (build **impacchettata** senza
+chiave → **rifiutata**, fail-closed, intercetta il "ho dimenticato di
+impostare la chiave"), `STARTUP_ACTIVATED` (già attivata → parte),
+`STARTUP_NEED_KEY` (chiede la chiave, fino a 3 tentativi, annulla = esce).
+`frozen` = `getattr(sys, "frozen", False)` (vero solo sotto PyInstaller).
+**Verificato davvero sotto Xvfb con python3.12** (Tk reale, non solo la logica
+pura): 5 scenari — dev apre senza chiedere, chiave errata rifiuta, chiave
+giusta attiva e passa, già-attivata passa senza chiedere, annulla rifiuta.
+
+**Bug di packaging reale trovato e corretto (non ipotetico)**: `viewer3d.py`
+e `live_scan_server.py` risolvevano i JS vendorizzati
+(`model-viewer.min.js`; `jsQR.min.js`/`qr-transport-core.js`/
+`qr-camera-scanner.js`) via `dirname(dirname(__file__))` = radice del repo —
+sotto un bundle PyInstaller quel percorso punta dentro `_MEIPASS` **senza i
+file**, quindi nel pacchetto la **vista 3D e la scansione fotocamera si
+sarebbero rotte**. Fix all'altitudine giusta: nuovo modulo `balzar/assets.py`
+(`asset_root()`/`vendored_path()`, un solo punto di verità, frozen-aware via
+`sys._MEIPASS`) usato da entrambi i moduli; e `balzar.spec` che aggiunge i 4
+file a `datas` con dest `.` (la radice del bundle, dove `_MEIPASS` li cerca).
+Test `tests/test_assets.py` (3): la radice in dev è il repo, `vendored_path`
+compone il nome, **tutti e 4 i file esistono davvero** (così un rename senza
+aggiornare il `.spec` rompe un test, non il pacchetto silenziosamente).
+
+**`balzar.spec` rifinito**: `datas` dei JS vendorizzati (sopra), icona
+per-piattaforma (`assets/balzar.ico` Windows / `assets/balzar.icns` macOS /
+`.png` fallback) **guardata da `os.path.exists`** (un'icona mancante non rompe
+la build), e un `BUNDLE` `Balzar.app` con `bundle_identifier`/`info_plist` per
+macOS. Build ora via `pyinstaller balzar.spec`, non più il comando `--onefile`
+crudo (che ignorava asset e icona). Icona generata dogfooding Pillow
+(`assets/balzar.png`+`.ico`, quadrato accent #c77a2e + "b" geometrica, nessun
+font di sistema).
+
+**`requirements.txt`**: aggiunto `pyzbar` (richiesto per "Scansiona foto QR"
+nel pacchetto) e documentata la dipendenza **nativa** `libzbar0`/`brew
+install zbar`/wheel Windows, con la nota che senza di essa l'app parte
+comunque (solo la lettura QR da foto è disattivata; la fotocamera via jsQR
+non la richiede).
+
+**`BUILD.md`**: istruzioni per-OS (impostare la chiave beta con
+`license.py hash-key` senza committarla; build macOS su MacBook Air incl.
+generazione `.icns` con `sips`/`iconutil`; build Windows; bypass Gatekeeper/
+SmartScreen per i tester senza firma a pagamento).
+
+**Resta da fare sulla macchina dell'utente** (non producibile da qui): impostare
+`BETA_KEY_SHA256`, `pyinstaller balzar.spec` su macOS (MacBook Air) e su
+Windows, test dei binari reali. Il wiring del gate nella WebView Android è
+Fase 2.
