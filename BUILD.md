@@ -7,6 +7,13 @@ store. Ordine di rilascio beta: **macOS prima, poi Windows** (vedi
 Questo file copre il **desktop**. L'app desktop esiste già (`balzar/gui.py`);
 qui c'è solo come impacchettarla.
 
+> **Nota direzione UI** — la UI primaria sta migrando a un **guscio WebView**
+> (pywebview + server locale che serve la stessa interfaccia della demo web,
+> offline; vedi `ROADMAP.md` Fase 1b e `CLAUDE.md` §12.5). La GUI Tkinter
+> descritta qui resta come **fallback**. Le istruzioni di build sotto valgono
+> per entrambe; i passi specifici del guscio WebView (dipendenza `pywebview`,
+> entry point) verranno aggiunti quando quel guscio sarà in piedi.
+
 ---
 
 ## 0. Prerequisiti (macchina di build)

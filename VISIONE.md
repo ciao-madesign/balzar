@@ -82,6 +82,17 @@ procedura, e un piccolo orchestratore esterno (mai il motore balzar) che
 traduce un evento macchina in una chiamata alla ricerca già esistente.
 Non è un impegno di roadmap, è una direzione plausibile.
 
+**Forma del prodotto finale**: un'app **installabile e usabile come qualsiasi
+programma** (tipo Microsoft Word) — installazione banale, doppio clic, lavora
+come un normale programma locale, offline. Tecnicamente, Studio e Live vivono
+in **un'unica interfaccia** (quella della demo web) dentro un **guscio nativo**
+(finestra pywebview su desktop, WebView su mobile; nessun browser visibile,
+nessuna rete) — lo stesso schema di app come VS Code/Slack, non "un sito". La
+CLI e la GUI Tkinter restano come strumenti di sviluppo/fallback. Il dettaglio
+tecnico della decisione (perché guscio WebView invece di Tkinter, cosa richiede
+l'esperienza "come Word": installer + firma) è in `CLAUDE.md` §12.5 e nella
+`ROADMAP.md`.
+
 ---
 
 ## 3. Applicazioni target

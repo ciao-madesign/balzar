@@ -5126,3 +5126,56 @@ il sottoinsieme vettoriale-sicuro), i motivi di scarto vengono mostrati nelle
 stats invece che nascosti (stessa onestà della CLI). Verificato sotto Xvfb
 (python3.12, Tk reale) su `examples/flangia_sorgente.svg` (231 B, 2077×) e
 `.dxf` (245 B): nessun crash, job valido, non marcato live-artifact.
+
+### 12.5 Decisione di architettura UI: guscio WebView unico (desktop + mobile), Tkinter come fallback
+
+Nata dalla prima build desktop reale su Mac: la GUI Tkinter è densa, non
+progettata, senza framing Studio/Live, e **molto diversa dalla demo web appena
+ridisegnata**. Constatazione onesta messa a verbale con l'utente: nei documenti
+il desktop è "il prodotto" e la web è "solo vetrina", ma la vetrina è più
+curata del prodotto. Ragionato con l'utente **prima di scrivere codice** e
+deciso.
+
+**Obiettivo finale dichiarato dall'utente** (verbatim del senso): un'app
+desktop/mobile **installabile e usabile come qualsiasi programma tipo Microsoft
+Word** — installazione banale che chiunque sa fare, doppio clic, lavora come un
+normale programma locale (finestra nativa, offline, nessun terminale/browser
+visibile). Chiarito il confine beta→finale: la finestra nativa offline è la
+beta (guscio WebView, sotto); "come Word" nel senso pieno richiede anche un
+**installer** (`.dmg` drag-to-Applicazioni / `setup.exe`) e la **firma del
+codice** (zero avvisi) — entrambi già in `ROADMAP.md`, rimandati oltre la beta
+funzionale. Divisione dei ruoli esplicita: la complessità (build/firma/
+installer) è tutta lato sviluppatore, una volta sola; l'utente finale riceve
+solo il pacchetto e fa il gesto banale.
+
+**Decisione (Strada B)**: unificare tutte le superfici sulla **stessa UI web**
+dentro un **guscio nativo**, invece di lucidare Tkinter (tetto estetico basso,
+e terrebbe tre UI separate da mantenere). Il desktop diventa una finestra
+**pywebview** (webview nativo del SO — WKWebView/WebView2/WebKitGTK) che mostra
+`index.html`+`app.js`+`style.css` serviti da un server locale in-process che
+instrada `/api/*` ai `handle_*` di `webapi.py` con `LOCAL_LIMITS`. Pienamente
+offline (`127.0.0.1`, nessun browser visibile) — lo stesso schema di app
+installabili come VS Code/Slack/Spotify, **non** "un sito". Scelte confermate
+dall'utente: **B**, **pywebview** (finestra app nativa, non browser di
+sistema), **Tkinter tenuta come fallback** (`--classic`/fallback automatico se
+pywebview manca), non cancellata.
+
+**Conseguenza strategica**: il round **stile** si fa **una volta sola** sulla
+web UI e migliora web + desktop + Android insieme (Fase 2 Android usa già lo
+stesso schema WebView, quindi condivide `localserver.py` e la web UI — nessuna
+terza interfaccia). Per questo lo stile viene **dopo** che il guscio è in piedi,
+non prima (altrimenti si stila alla cieca).
+
+**Confine di verifica onesto**: il server locale + il routing `/api/*` sono
+testabili in questo ambiente Linux con Playwright (riuso dell'harness già usato
+per la demo, cfr. `devserver_ux.py`); la **finestra pywebview** no (nessun
+backend webview/display qui) — si valida sul Mac. Dichiarato invece di fingere
+una verifica impossibile.
+
+**Passi stabiliti** (dettaglio in `ROADMAP.md` Fase 1b): 1) `balzar/
+localserver.py` (server+API, testabile qui); 2) bundling del frontend nel
+`.spec` (costruibile qui); 3) finestra pywebview + gate (costruibile qui,
+validabile sul Mac); 4) dettagli desktop — download via API pywebview,
+**Libreria rimandata** nella versione WebView (resta nel fallback Tkinter per
+la beta, è solo-desktop e non esiste nella web UI). Il motore, `webapi.py` (i
+handler restano identici) e la demo web/Vercel **non vengono toccati**.

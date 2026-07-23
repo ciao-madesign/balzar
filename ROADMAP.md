@@ -1,16 +1,52 @@
-# Roadmap verso la beta
+# Roadmap verso la beta (e verso il prodotto)
 
-Documento di pianificazione del percorso da "codice funzionante" a "beta
-installabile e testabile dai primi utenti". Le **funzionalità** sono già
-complete (Balzar Studio: encoder di tutti i formati; Balzar Live: apri/
-scansiona/viewer 3D/libreria — vedi `CLAUDE.md`); ciò che manca è
-**packaging, distribuzione e igiene legale**, non capacità del motore.
+Documento di pianificazione del percorso da "codice funzionante" a prodotto
+installabile. Le **funzionalità** sono già complete (Balzar Studio: encoder di
+tutti i formati; Balzar Live: apri/scansiona/viewer 3D/libreria — vedi
+`CLAUDE.md`); ciò che manca è **packaging, distribuzione, UI e igiene legale**,
+non capacità del motore.
 
-Modello di distribuzione scelto: **programma installabile su licenza**, non
-pubblicazione su uno store. Per Windows, macOS e Android questo è possibile
-senza passare da alcun marketplace (iOS resta l'unica eccezione, fuori scope).
+## Obiettivo finale (deciso con l'utente)
 
-Ordine di rilascio deciso: **prima desktop (macOS/Windows), poi Android.**
+Il prodotto finale è **un'app desktop (e in futuro mobile) installabile e
+usabile come qualsiasi programma — tipo Microsoft Word**: la scarichi, la
+installi con un gesto banale che chiunque sa fare, la apri con un doppio clic,
+e lavora come un **normale programma locale** (finestra nativa, offline, nessun
+terminale, nessun browser visibile, nessuna rete).
+
+Concretamente questo significa tre cose, tutte già nella roadmap:
+
+| | Beta (in corso) | Prodotto finale "come Word" |
+|---|---|---|
+| Finestra nativa, offline, nessun terminale/browser | ✅ (guscio WebView, sotto) | ✅ |
+| Installer banale (trascina in Applicazioni / `setup.exe`) | da aggiungere | ✅ |
+| Firma del codice → zero avvisi di sicurezza | rimandata | ✅ |
+
+**Divisione dei ruoli** (importante): tutta la complessità — build, firma,
+creazione dell'installer — è lato **sviluppatore**, una volta sola. L'**utente
+finale** riceve solo il `.dmg`/`.exe` e fa il gesto che tutti conoscono
+(trascina/doppio clic). Nessun utente compilerà mai nulla.
+
+## Decisione di architettura UI: una sola interfaccia, guscio nativo
+
+Deciso con l'utente (dopo aver constatato che la GUI Tkinter desktop è densa,
+non progettata, e diversa dalla demo web appena ridisegnata): **unificare tutte
+le superfici sulla stessa UI web**, dentro un **guscio nativo**.
+
+- Il desktop diventa una **finestra pywebview** (usa il webview nativo del SO:
+  WKWebView su macOS, WebView2 su Windows, WebKitGTK su Linux) che mostra la
+  stessa `index.html` + `app.js` + `style.css` della demo, servita da un
+  **server locale in-process** che instrada `/api/*` ai `handle_*` già
+  esistenti in `webapi.py`, con `LOCAL_LIMITS` (niente limiti Vercel).
+- **Pienamente offline e "programma locale"**: il server gira su `127.0.0.1`
+  dentro il processo dell'app; nessun browser visibile, nessuna rete. È lo
+  stesso schema di app installabili come VS Code / Slack / Spotify (web-tech in
+  un guscio nativo), non "un sito".
+- **Una sola UI** per web, desktop e Android (Fase 2 usa già lo stesso schema):
+  il round **stile** si fa una volta sola sulla web UI e migliora tutte e tre
+  le superfici insieme.
+- **La GUI Tkinter resta come fallback** (raggiungibile es. `--classic`, o
+  automaticamente se `pywebview` non è disponibile), non viene cancellata.
 
 ---
 
@@ -26,20 +62,14 @@ Ordine di rilascio deciso: **prima desktop (macOS/Windows), poi Android.**
 
 ### Gate di licenza beta (soft gate, non DRM)
 
-Requisito deciso: all'avvio l'app chiede una **chiave di attivazione**. Per la
-beta la chiave è **unica e condivisa**, decisa da Michele. È un cancello beta,
-non una protezione anti-copia robusta:
-
-- meccanismo: `balzar/license.py` — confronta l'**hash** SHA-256 della chiave
-  inserita con un hash incorporato, mai la chiave in chiaro; l'attivazione è
-  persistita localmente (`~/.balzar/activation.json`) così non va reinserita a
-  ogni avvio;
-- onestà: il codice è ispezionabile, quindi il gate scoraggia la condivisione
-  casuale, non un attaccante determinato — il meccanismo vero (chiavi
-  per-utente, firma) verrà dopo la beta;
-- l'hash della chiave beta va impostato in fase di build da Michele
-  (`python3 -m balzar.license hash-key`), senza far transitare la chiave in
-  chiaro nei sorgenti o nella cronologia git.
+All'avvio l'app chiede una **chiave di attivazione**. Per la beta la chiave è
+**unica e condivisa**, decisa da Michele. Cancello beta, non protezione
+anti-copia robusta: `balzar/license.py` confronta l'hash SHA-256 della chiave
+(mai la chiave in chiaro), persiste l'attivazione in
+`~/.balzar/activation.json`; fail-closed se non configurata. L'hash si imposta
+in build con `python3 -m balzar.license hash-key`. Il meccanismo vero
+(per-utente) verrà dopo la beta. Nel guscio WebView il gate va agganciato prima
+di aprire la finestra (riuso della logica `startup_decision`).
 
 ---
 
@@ -49,71 +79,62 @@ non una protezione anti-copia robusta:
 - [x] `THIRD-PARTY-NOTICES.md` con ogni dipendenza, licenza e obblighi.
 - [x] `balzar/license.py` — gate di licenza beta offline + test.
 
----
+## Fase 1a — Packaging desktop Tkinter ✅ (fatto, resta come fallback)
 
-## Fase 1 — Beta desktop (macOS + Windows)
+Il primo giro di packaging, ora **fallback** (non più la UI primaria):
 
-Test primario sul MacBook Air di Michele (Apple Silicon / arm64).
+- [x] Gate `license.py` agganciato all'avvio della GUI Tkinter (`gui.py`).
+- [x] `balzar.spec` (datas dei JS vendorizzati + icona per-OS + `Balzar.app`),
+      `assets.py` frozen-aware, `requirements.txt` con `pyzbar`/`libzbar0`.
+- [x] Ingestione SVG/DXF aggiunta al desktop (gap trovato alla prima build reale
+      su Mac — `CLAUDE.md` §12.4).
+- [x] Build macOS reale verificata sul MacBook Air (`.app` funzionante, gate +
+      Studio/Live + SVG/DXF).
 
-Passaggi minimi per una beta installabile e funzionante:
+## Fase 1b — Guscio WebView desktop (UI primaria) — IN CORSO
 
-- [ ] `balzar.spec`: icona applicazione, nome, versione, metadati.
-- [ ] `requirements.txt` completo + nota sulle dipendenze **native**
-      (`libzbar0`) necessarie sulla macchina di build.
-- [ ] Wiring del gate `license.py` nell'avvio della GUI desktop (`gui.py`).
-- [ ] **Build macOS** su MacBook Air (`pyinstaller balzar.spec`) → `.app` /
-      `.dmg` arm64 per il test personale.
-- [ ] **Build Windows** su una macchina Windows reale → eseguibile / installer
-      minimale (Inno Setup o NSIS).
-- [ ] Istruzioni per i tester per aggirare Gatekeeper (macOS: clic-destro →
-      Apri) e SmartScreen (Windows: "Esegui comunque") **senza** firma a
-      pagamento.
+Passi stabiliti (ordine di esecuzione):
 
-**Rimandato oltre la beta** (deliberatamente escluso dal "minimo"):
-firma EV Windows, notarizzazione Apple ($99/anno), auto-update, installer
-rifinito, `.app` universale Intel+arm.
+- [ ] **Passo 1** — server locale di produzione (`balzar/localserver.py`):
+      serve i file statici del frontend + instrada `/api/*` ai `handle_*` di
+      `webapi.py`, con `LOCAL_LIMITS`, frozen-aware (via `assets.py`).
+      *Testabile qui* con Playwright (riuso dell'harness) su tutti i flussi.
+- [ ] **Passo 2** — bundling del frontend nel `.spec`: `index.html`, `app.js`,
+      `style.css`, le altre `*.html`, tutti i JS in `datas`, trovati
+      frozen-aware. *Costruibile qui.*
+- [ ] **Passo 3** — finestra pywebview + gate: nuovo entry point (gate →
+      server locale in thread → `webview.create_window` → `webview.start`),
+      `pywebview` in `requirements.txt`, Tkinter come fallback.
+      *Costruibile qui, **validabile solo sul Mac*** (nessun backend webview in
+      questo ambiente Linux — il server+API li testo qui, la finestra la valida
+      Michele).
+- [ ] **Passo 4** — dettagli desktop nella WebView: download file
+      (payload/PNG/GLB) via API di salvataggio nativa di pywebview; **Libreria
+      rimandata** nella versione WebView (resta nel fallback Tkinter per la
+      beta — è una feature solo-desktop non presente nella web UI).
 
-**Da qui (questo ambiente Linux) è producibile**: `balzar.spec` rifinito,
-`requirements.txt`, il gate `license.py`, gli script di build e le istruzioni.
-**Non producibile da qui**: i binari macOS/Windows reali (servono quelle
-macchine — Michele li compila).
+## Fase 1c — Esperienza "come Word" (installer + firma)
 
----
+- [ ] Installer: `.dmg` con trascinamento in Applicazioni (macOS) / `setup.exe`
+      Inno Setup o NSIS (Windows). *Sul Mac/Windows dell'utente.*
+- [ ] **Rimandato oltre la beta**: notarizzazione Apple ($99/anno), certificato
+      firma Windows, auto-update, `.app` universale Intel+arm. Fino ad allora i
+      tester usano il bypass Gatekeeper/SmartScreen una volta sola (`BUILD.md`).
 
-## Fase 2 — Beta Android
+## Fase 2 — Beta Android (stesso guscio WebView)
 
-Approccio scelto per la beta: **server Python locale + WebView dentro un APK**.
+Stesso schema server locale + WebView, dentro un APK — quindi **condivide il
+`localserver.py` e la UI web del Passo 1**, nessuna terza interfaccia.
 
-- riusa l'intera UI web esistente (`index.html` + `webapi.py`) e la scansione
-  QR già lato browser (`jsQR`/`ContinuousQrScanner`) — nessuna riscrittura UI;
-- **è pienamente offline**: il server gira su `127.0.0.1` sul telefono stesso,
-  niente esce dal dispositivo; `model-viewer`/`jsQR` sono già vendorizzati in
-  locale, non da CDN. La WebView è solo la tecnologia di rendering della UI,
-  non una dipendenza da internet;
-- packaging candidato: Chaquopy (Python dentro un progetto Android) oppure
-  BeeWare/Briefcase.
+- [ ] Packaging (Chaquopy vs BeeWare/Briefcase) + impalcatura server+WebView.
+- [ ] Gate `license.py` all'avvio.
+- [ ] Build APK (SDK Android non presente in questo ambiente Linux) + firma con
+      chiave auto-generata (requisito Android, non un cancello di store).
+- [ ] Sideload su device + checklist funzionale.
 
-Passaggi:
-
-- [ ] Fissare il packaging (Chaquopy vs BeeWare) e l'impalcatura server+WebView.
-- [ ] Gate `license.py` all'avvio anche nella WebView beta.
-- [ ] Build APK (richiede un SDK Android/Buildozer non presente in questo
-      ambiente Linux) e firma con chiave auto-generata (gratuita, requisito
-      Android, **non** un cancello di store).
-- [ ] Sideload su un device di test → checklist: encode, viewer 3D in WebView,
-      scansione QR fotocamera, libreria.
-
-**Nota di progetto importante — app nativa futura**: la beta WebView+server è
-già offline, quindi **non** contraddice il concetto "tutto offline". Una futura
-**app nativa vera** resta desiderabile, ma per ragioni diverse dall'offline:
-footprint (niente interprete Python impacchettato → APK più leggero),
-integrazione fotocamera/gesti nativa, avvio più rapido, UX mobile migliore, e
-distribuzione più pulita. Documentata qui perché non vada persa, con la
-**motivazione corretta** — non "altrimenti non è offline", che sarebbe
-tecnicamente falso.
-
-**Da qui è producibile**: l'impalcatura del server locale + WebView e il codice
-di wiring. **Non producibile da qui**: l'APK reale e il test su device.
+**App nativa mobile futura**: desiderabile per footprint/UX native, **non** per
+l'offline (già garantito dal server locale). Documentata per non perderla, con
+la motivazione corretta.
 
 ---
 
