@@ -5104,3 +5104,25 @@ SmartScreen per i tester senza firma a pagamento).
 `BETA_KEY_SHA256`, `pyinstaller balzar.spec` su macOS (MacBook Air) e su
 Windows, test dei binari reali. Il wiring del gate nella WebView Android è
 Fase 2.
+
+### 12.4 Gap reale trovato dalla prima build reale su Mac: SVG/DXF nel desktop
+
+Alla prima build/uso reale dell'app sul MacBook dell'utente, caricare un
+`.svg` ha dato `UnidentifiedImageError: cannot identify image file`. Causa
+(verificata nel codice, non ipotizzata): il dispatch di `gui.py` (`_worker`/
+`_dispatch_payload_bytes`) gestiva `.3dxml`/`.bzx`/`.b3d`/`.bzr` e per tutto
+il resto cadeva su `_job_from_image` → Pillow, che su un SVG solleva quel-
+l'errore. L'ingestione vettoriale (`vectorio.py`) esiste ed è completa da
+sessioni, ma era esposta **solo** in CLI (`encode-vector`) e nella demo web
+(tab Vettoriale), **mai agganciata all'app desktop** — proprio il caso d'uso
+guida (§6.1, disegni CAD esportati in SVG/DXF).
+
+Fix: nuovo `_job_from_vector` in `gui.py` (mirror di `_job_from_image`, usa
+`vectorio.ingest_vector_file`), più un ramo `.svg/.dxf` in `_worker` prima
+del dispatch generico e le estensioni aggiunte al dialog `open_file`.
+Trattato come un encode "create" (come immagine/3dxml): `is_live_artifact`
+resta `False`, i pulsanti 2D si abilitano (incluso "Esporta SVG", l'output usa
+il sottoinsieme vettoriale-sicuro), i motivi di scarto vengono mostrati nelle
+stats invece che nascosti (stessa onestà della CLI). Verificato sotto Xvfb
+(python3.12, Tk reale) su `examples/flangia_sorgente.svg` (231 B, 2077×) e
+`.dxf` (245 B): nessun crash, job valido, non marcato live-artifact.
