@@ -20,19 +20,23 @@
 # inclusa automaticamente da PyInstaller come binario separato (verificato su
 # Linux, CLAUDE.md §9.13) -- coerente con l'obbligo LGPL di linking dinamico.
 
+import glob
 import os
 import sys
 
 block_cipher = None
 
-# --- asset vendorizzati da includere nel bundle (dest '.' = radice) ---------
-_vendored = [
-    "model-viewer.min.js",
-    "jsQR.min.js",
-    "qr-transport-core.js",
-    "qr-camera-scanner.js",
-]
-datas = [(name, ".") for name in _vendored if os.path.exists(name)]
+# --- frontend statico (guscio WebView) + JS di terze parti vendorizzati -----
+# Il server locale (balzar/localserver.py) serve questi file dalla radice del
+# bundle (sys._MEIPASS) via balzar/assets.py. SENZA di essi il guscio WebView
+# non avrebbe UI da mostrare, e la vista 3D (model-viewer) / la scansione
+# fotocamera (jsQR + qr-transport-core + qr-camera-scanner) si romperebbero.
+# Glob dalla radice del repo (il .spec va eseguito da li'): tutte le pagine
+# HTML, i CSS e i JS -- inclusi app.js e i quattro JS vendorizzati.
+_frontend = glob.glob("*.html") + glob.glob("*.css") + glob.glob("*.js")
+datas = [(f, ".") for f in _frontend if os.path.isfile(f)]
+# immagini referenziate dalla landing (sottocartella)
+datas += [(f, "landing-img") for f in glob.glob("landing-img/*") if os.path.isfile(f)]
 
 # --- icona per piattaforma (guardata: se manca, build senza icona) ----------
 if sys.platform == "darwin":

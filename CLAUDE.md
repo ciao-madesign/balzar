@@ -5179,3 +5179,29 @@ validabile sul Mac); 4) dettagli desktop — download via API pywebview,
 **Libreria rimandata** nella versione WebView (resta nel fallback Tkinter per
 la beta, è solo-desktop e non esiste nella web UI). Il motore, `webapi.py` (i
 handler restano identici) e la demo web/Vercel **non vengono toccati**.
+
+**Passo 1 ✅ (fatto, verificato qui)**: `balzar/localserver.py` — server
+in-process che serve la UI statica (da `assets.asset_root()`, frozen-aware) e
+instrada `/api/*` ai `handle_*` di `webapi.py` con `LOCAL_LIMITS`; bind
+**solo** a `127.0.0.1`, traversal rifiutato, `start_local_server(port=0)`
+ritorna `(server, url)` per il futuro entry point pywebview, più un `main()`
+standalone (`python3 -m balzar.localserver`). Verificato in due modi: (a) lo
+stesso harness Playwright della demo puntato al server di produzione (non al
+dev server scratch) — tutti i flussi Studio/Live encode/vector/video/QR/3D/
+open verdi, 0 errori JS; (b) `tests/test_localserver.py` (6 test senza
+Playwright, via `urllib`: index servito, file vendorizzato servito, traversal
+→ 404, `/api` sconosciuto → 404, roundtrip reale `/api/render` di un payload
+`BZR1`, corpo non-JSON → 500 onesto invece di crash). I `handle_*` non sono
+stati toccati: server locale ed endpoint Vercel li riusano identici, cambia
+solo il profilo di limiti.
+
+**Passo 2 ✅ (fatto, costruibile qui)**: `balzar.spec` ora bundla **tutto il
+frontend** in `datas` (glob dalla radice: 4 `*.html`, 2 `*.css`, 6 `*.js`
+inclusi i 4 JS vendorizzati e `app.js`, + 4 immagini `landing-img/`) — 16 file
+totali, con dest `.`/`landing-img` così `asset_root()` (=`_MEIPASS` in un
+bundle) li trova. Sostituisce la vecchia lista esplicita dei soli 4 JS
+vendorizzati. La verifica frozen reale (che il `.app` serva davvero la UI da
+`_MEIPASS`) fa parte del Passo 3 sul Mac.
+
+**Prossimo: Passo 3** (finestra pywebview + gate) — costruibile qui, ma la
+finestra si valida solo sul Mac.
