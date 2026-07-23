@@ -95,19 +95,19 @@ Il primo giro di packaging, ora **fallback** (non più la UI primaria):
 
 Passi stabiliti (ordine di esecuzione):
 
-- [ ] **Passo 1** — server locale di produzione (`balzar/localserver.py`):
+- [x] **Passo 1 ✅** — server locale di produzione (`balzar/localserver.py`):
       serve i file statici del frontend + instrada `/api/*` ai `handle_*` di
-      `webapi.py`, con `LOCAL_LIMITS`, frozen-aware (via `assets.py`).
-      *Testabile qui* con Playwright (riuso dell'harness) su tutti i flussi.
-- [ ] **Passo 2** — bundling del frontend nel `.spec`: `index.html`, `app.js`,
-      `style.css`, le altre `*.html`, tutti i JS in `datas`, trovati
-      frozen-aware. *Costruibile qui.*
-- [ ] **Passo 3** — finestra pywebview + gate: nuovo entry point (gate →
-      server locale in thread → `webview.create_window` → `webview.start`),
-      `pywebview` in `requirements.txt`, Tkinter come fallback.
-      *Costruibile qui, **validabile solo sul Mac*** (nessun backend webview in
-      questo ambiente Linux — il server+API li testo qui, la finestra la valida
-      Michele).
+      `webapi.py`, con `LOCAL_LIMITS`, frozen-aware. Verificato con l'harness
+      Playwright sul server di produzione + 6 test `urllib`.
+- [x] **Passo 2 ✅** — bundling del frontend nel `.spec` (glob: 16 file —
+      html/css/js + `landing-img/`), frozen-aware.
+- [x] **Passo 3 ✅ (costruito, finestra da validare sul Mac)** — guscio
+      pywebview: `balzar/webview_app.py` (gate → server locale → finestra),
+      gate web-based (`activate.html` + route `/api/activate` iniettato in
+      `localserver`), `balzar-app.py` → WebView con fallback Tkinter,
+      `pywebview` in `requirements.txt`. Verificato qui: 6 test + flusso
+      Playwright sull'`activate.html`. **La finestra nativa la valida Michele
+      sul Mac** (nessun backend webview in Linux headless).
 - [ ] **Passo 4** — dettagli desktop nella WebView: download file
       (payload/PNG/GLB) via API di salvataggio nativa di pywebview; **Libreria
       rimandata** nella versione WebView (resta nel fallback Tkinter per la

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attivazione Balzar (beta)</title>
+<style>
+  :root { --accent: #c77a2e; --bg: #1c1c1c; --fg: #eee; --muted: #999; --border: #444; --bad: #e77; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, Segoe UI, sans-serif;
+    display: flex; align-items: center; justify-content: center; }
+  .card { width: min(90vw, 380px); text-align: center; }
+  .logo { width: 72px; height: 72px; border-radius: 18px; background: var(--accent);
+    display: flex; align-items: center; justify-content: center; margin: 0 auto 1.2rem;
+    font-size: 42px; font-weight: 700; color: var(--bg); }
+  h1 { font-size: 1.15rem; margin: 0 0 0.3rem; }
+  p.sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 1.4rem; }
+  input { width: 100%; box-sizing: border-box; font: inherit; font-size: 1rem;
+    padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);
+    background: #2a2a2a; color: var(--fg); text-align: center; }
+  button { margin-top: 0.9rem; width: 100%; font: inherit; font-weight: 600;
+    padding: 0.6rem; border-radius: 8px; border: none; background: var(--accent);
+    color: var(--bg); cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .msg { min-height: 1.3em; margin-top: 0.8rem; font-size: 0.9rem; }
+  .msg.error { color: var(--bad); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">b</div>
+    <h1>Attivazione Balzar</h1>
+    <p class="sub">Inserisci la chiave di attivazione della beta.</p>
+    <form id="form">
+      <input id="key" type="password" autocomplete="off" autofocus
+             placeholder="chiave di attivazione" aria-label="chiave">
+      <button id="btn" type="submit">Attiva</button>
+    </form>
+    <p id="msg" class="msg" role="status"></p>
+  </div>
+<script>
+  const form = document.getElementById("form");
+  const keyEl = document.getElementById("key");
+  const btn = document.getElementById("btn");
+  const msg = document.getElementById("msg");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const key = keyEl.value;
+    if (!key) return;
+    btn.disabled = true; msg.className = "msg"; msg.textContent = "Verifica…";
+    try {
+      const res = await fetch("/api/activate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      const json = await res.json();
+      if (json.activated) {
+        msg.textContent = "Attivata. Avvio…";
+        location.href = "/index.html";
+      } else {
+        msg.className = "msg error"; msg.textContent = "Chiave non valida. Riprova.";
+        btn.disabled = false; keyEl.value = ""; keyEl.focus();
+      }
+    } catch (err) {
+      msg.className = "msg error"; msg.textContent = "Errore: " + err.message;
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

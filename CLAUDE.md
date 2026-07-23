@@ -5203,5 +5203,30 @@ bundle) li trova. Sostituisce la vecchia lista esplicita dei soli 4 JS
 vendorizzati. La verifica frozen reale (che il `.app` serva davvero la UI da
 `_MEIPASS`) fa parte del Passo 3 sul Mac.
 
-**Prossimo: Passo 3** (finestra pywebview + gate) — costruibile qui, ma la
-finestra si valida solo sul Mac.
+**Passo 3 ✅ (costruito qui; la finestra si valida sul Mac)**: guscio nativo.
+- `balzar/webview_app.py`: entry point del prodotto desktop. `run()` decide via
+  `license.startup_decision` quale pagina aprire (OPEN/ACTIVATED → `/index.html`,
+  NEED_KEY → `/activate.html`, UNCONFIGURED → finestra d'errore), avvia il
+  server locale con un route iniettato `/api/activate`, apre
+  `webview.create_window(...)`. `import webview` è **deferito** dentro `run()`
+  così il modulo importa anche senza pywebview e la logica è testabile in CI.
+- Gate **interamente web-based** (nessun Tkinter nel percorso WebView):
+  `activate.html` (form → `POST /api/activate` → redirect a `/index.html`),
+  route iniettato in `localserver` via il nuovo parametro `extra_routes`
+  (localserver resta disaccoppiato da `license.py`).
+- `balzar-app.py` (entry PyInstaller) ora chiama `webview_app.main`, che ricade
+  sulla **GUI Tkinter** se pywebview manca o con `--classic`. La CLI
+  `balzar gui` resta Tkinter (strumento di sviluppo). `pywebview` aggiunto a
+  `requirements.txt` (senza, fallback Tkinter).
+- Verificato qui: `tests/test_webview_app.py` (6 test — scelta pagina iniziale
+  per ogni decisione, route `/api/activate` con chiave giusta/sbagliata +
+  persistenza, `activate.html` servita, `run()` solleva `ImportError` senza
+  pywebview → fallback raggiungibile) + un **flusso Playwright end-to-end**
+  sull'`activate.html` reale (chiave sbagliata → errore resta sulla pagina;
+  chiave giusta → attiva e redirige a `/index.html` con la UI balzar presente).
+  **Non verificabile qui**: la finestra pywebview nativa (nessun backend webview
+  in Linux headless) — la valida Michele sul Mac (`pip install pywebview`,
+  rebuild, l'app apre una finestra nativa con la UI ridisegnata).
+
+**Prossimo: Passo 4** (dettagli desktop nella WebView — download via API
+pywebview, Libreria rimandata) + validazione sul Mac, poi il round **stile**.

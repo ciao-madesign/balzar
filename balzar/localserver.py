@@ -50,7 +50,13 @@ _MIME = {".html": "text/html", ".js": "application/javascript", ".css": "text/cs
          ".woff": "font/woff", ".woff2": "font/woff2"}
 
 
-def _make_handler(static_root: str, limits):
+def _make_handler(static_root: str, limits, extra_routes=None):
+    # extra_routes: dict opzionale path -> fn(body: dict) -> (status, obj),
+    # per endpoint locali che non sono handler di webapi (es. /api/activate
+    # del gate di licenza, iniettato dall'entry point pywebview -- cosi'
+    # localserver resta disaccoppiato da license.py).
+    extra = extra_routes or {}
+
     class _Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # silenzioso: e' un'app, non un server
             pass
@@ -86,8 +92,10 @@ def _make_handler(static_root: str, limits):
             self.wfile.write(data)
 
         def do_POST(self) -> None:
-            handler = ROUTES.get(self.path.split("?", 1)[0])
-            if handler is None:
+            path = self.path.split("?", 1)[0]
+            extra_fn = extra.get(path)
+            handler = ROUTES.get(path)
+            if extra_fn is None and handler is None:
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -98,7 +106,10 @@ def _make_handler(static_root: str, limits):
                                           "error": "richiesta vuota o troppo grande"})
                     return
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
-                status, obj = handler(body, limits)
+                if extra_fn is not None:
+                    status, obj = extra_fn(body)          # non prende limits
+                else:
+                    status, obj = handler(body, limits)
                 self._send_json(status, obj)
             except Exception as exc:
                 self._send_json(500, {"ok": False,
@@ -108,7 +119,7 @@ def _make_handler(static_root: str, limits):
 
 
 def start_local_server(port: int = 0, limits=LOCAL_LIMITS,
-                       static_root: str | None = None):
+                       static_root: str | None = None, extra_routes=None):
     """Avvia il server su 127.0.0.1 in un thread daemon e ritorna
     `(server, url)`. `port=0` sceglie una porta effimera libera. Il chiamante
     (l'entry point pywebview) punta la finestra a `url` e, alla chiusura,
@@ -117,7 +128,8 @@ def start_local_server(port: int = 0, limits=LOCAL_LIMITS,
     Bind esplicito a 127.0.0.1 (mai 0.0.0.0): il server non deve essere
     raggiungibile dalla rete, solo dal processo/utente locale."""
     root = static_root if static_root is not None else asset_root()
-    server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(root, limits))
+    server = ThreadingHTTPServer(("127.0.0.1", port),
+                                 _make_handler(root, limits, extra_routes))
     real_port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

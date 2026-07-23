@@ -6,6 +6,9 @@
 pillow            # decodifica immagini/GIF (imageio.py) + comporre le griglie QR
 qrcode            # generazione QR (puro Python), nessuna dipendenza nativa
 pyzbar            # lettura QR da foto (opzionale ma richiesta per "Scansiona foto QR")
+pywebview         # guscio nativo del prodotto desktop (finestra WebView sulla UI web);
+                  # usa il webview del SO (WKWebView/WebView2/WebKitGTK). Senza, l'app
+                  # ricade sulla GUI Tkinter classica (--classic).
 
 # DIPENDENZA NATIVA DI SISTEMA (non installabile via pip):
 #   pyzbar carica la libreria C `libzbar` via ctypes. Sulla macchina di build
