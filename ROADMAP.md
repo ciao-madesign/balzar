@@ -108,10 +108,12 @@ Passi stabiliti (ordine di esecuzione):
       `pywebview` in `requirements.txt`. Verificato qui: 6 test + flusso
       Playwright sull'`activate.html`. **La finestra nativa la valida Michele
       sul Mac** (nessun backend webview in Linux headless).
-- [ ] **Passo 4** — dettagli desktop nella WebView: download file
-      (payload/PNG/GLB) via API di salvataggio nativa di pywebview; **Libreria
-      rimandata** nella versione WebView (resta nel fallback Tkinter per la
-      beta — è una feature solo-desktop non presente nella web UI).
+- [x] **Passo 4 ✅ (validato sul Mac, packaged)** — download file via ponte
+      nativo pywebview (`window.pywebview.api.save_file` → finestra "Salva con
+      nome"), SVG nell'encoder generico auto-instradato alla scheda Vettoriale.
+      `.app` impacchettato con pywebview verificato (finestra nativa + download
+      + encode/QR/3D). **Libreria rimandata** nella versione WebView (resta nel
+      fallback Tkinter). Manca solo Fase 1c (installer + firma).
 
 ## Fase 1c — Esperienza "come Word" (installer + firma)
 

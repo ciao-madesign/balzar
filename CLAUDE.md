@@ -5252,5 +5252,12 @@ Il ponte di salvataggio nativo (finestra pywebview) si valida sul Mac; la
 logica browser (SVG-route, fallback `<a download>`) è verificata qui con
 Playwright. Suite Python invariata (nessuna riga JS testata da `unittest`).
 
-**Prossimo**: rebuild `.app` con pywebview + test download nativi sul Mac,
-poi il round **stile**.
+**`.app` impacchettato validato sul Mac** (Fase 1b chiusa): `rm -rf build dist
+&& pyinstaller balzar.spec` produce un `Balzar.app` che si apre come finestra
+nativa con la UI web ridisegnata; download nativi (finestra "Salva con nome"),
+encode/QR/3D funzionanti nel pacchetto. PyInstaller ha incluso pywebview/pyobjc
+senza hidden-import extra. Restano, per il prodotto "come Word" (Fase 1c): il
+`.dmg`/installer e la firma — rimandati oltre la beta funzionale.
+
+**Prossimo**: round **stile** (font/colori/spaziature) sulla web UI — ora
+migliora desktop + web + Android insieme (una sola interfaccia).
