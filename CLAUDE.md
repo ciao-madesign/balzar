@@ -5259,5 +5259,27 @@ encode/QR/3D funzionanti nel pacchetto. PyInstaller ha incluso pywebview/pyobjc
 senza hidden-import extra. Restano, per il prodotto "come Word" (Fase 1c): il
 `.dmg`/installer e la firma — rimandati oltre la beta funzionale.
 
-**Prossimo**: round **stile** (font/colori/spaziature) sulla web UI — ora
-migliora desktop + web + Android insieme (una sola interfaccia).
+### 12.6 Round stile: professionale chiaro, accento blu (una UI per tutte le superfici)
+
+Deciso con l'utente ("professionale chiaro, niente arancione, più aria, meno
+parole"): ridisegno di `style.css` in passi isolati con harness a guardia,
+mostrato con mockup e screenshot reali prima/durante. Poiché la UI è ora
+condivisa (guscio WebView), lo stile migliora desktop + web + Android insieme.
+- **Token** (passo 1): palette chiara di default + scura curata
+  (`prefers-color-scheme`), accento **blu** `#2563eb`/`#4f83f1`, neutri puliti,
+  nuovi token `--accent-hover/-soft`, `--surface-2`, `--shadow(-sm)`,
+  `--radius*`, scala `--sp-*`.
+- **Tipografia/aria** (passo 2): wordmark da serif Georgia a `system-ui` 650,
+  spaziature più generose (max-width 920px).
+- **Componenti** (passo 3): `.panel` come card (superficie/bordo/ombra),
+  bottone primario blu pieno per l'azione principale (`[id$="dl-payload"]`) e
+  secondario pulito per il resto, `.purpose` come chip badge tenue, fix
+  contrasto `product-tab` attivo, dropzone/hover coerenti.
+- **Icona** (passo 4): `assets/balzar.{png,ico,icns}` rigenerate in blu,
+  accento di `activate.html` da arancione a blu.
+Verificato con l'harness UX (verde) e screenshot light+dark ad ogni giro.
+Nessun file `.py` toccato (solo CSS/HTML/icone). La landing **non** è stata
+toccata (usa il suo `landing.css`). Da validare live sul Mac + rebuild `.app`
+per l'icona blu. Restano possibili rifiniture minori (accento del viewer 3D
+`viewer3d.py`/`live_scan_server.py` ancora arancioni — non nel flusso app
+principale) e il taglio copy "meno parole" tab per tab.
