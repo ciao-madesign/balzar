@@ -54,7 +54,7 @@ video{width:min(90vw,640px);border-radius:8px;background:#000}
 #progress.done{color:#7d7}
 button{padding:8px 16px;border-radius:6px;border:1px solid #555;background:#2a2a2a;
        color:#eee;font:inherit;cursor:pointer}
-button:hover{border-color:#c77a2e}
+button:hover{border-color:#2563eb}
 p.hint{font-size:12px;color:#999;max-width:520px;text-align:center;margin:0}
 </style>
 </head>
