@@ -1,25 +1,46 @@
 :root {
   color-scheme: light dark;
+  /* Palette "professionale chiara", accento blu. Chiaro di default, scuro
+     curato via prefers-color-scheme. Un solo set di token per tutta la UI. */
   --bg: #ffffff;
-  --fg: #1a1a2e;
-  --muted: #5b5b6e;
-  --accent: #2e86ab;
-  --border: #d8d8e2;
-  --panel: #f5f5fa;
-  --good: #1f8a4c;
-  --bad: #c0392b;
+  --fg: #1b1e23;
+  --muted: #626b76;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #e8effc;   /* sfondo tenue per badge/chip accento */
+  --border: #e3e6eb;
+  --panel: #f7f8fa;         /* superficie card/pannello */
+  --surface-2: #eef0f4;     /* superficie leggermente più marcata */
+  --good: #1a7f4b;
+  --bad: #d64545;
+  --shadow-sm: 0 1px 2px rgba(20, 23, 28, .06);
+  --shadow: 0 1px 2px rgba(20, 23, 28, .05), 0 4px 14px rgba(20, 23, 28, .06);
+  /* raggi e ritmo spaziale condivisi ("più aria") */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-pill: 999px;
+  --sp-1: 0.5rem;
+  --sp-2: 0.85rem;
+  --sp-3: 1.25rem;
+  --sp-4: 1.75rem;
+  --sp-5: 2.5rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14141f;
-    --fg: #eceef2;
-    --muted: #9a9ab0;
-    --accent: #5fb3d9;
-    --border: #33334a;
-    --panel: #1d1d2c;
-    --good: #4fce85;
-    --bad: #e67466;
+    --bg: #15171c;
+    --fg: #e9ebef;
+    --muted: #99a2ad;
+    --accent: #4f83f1;
+    --accent-hover: #6a97f5;
+    --accent-soft: #1e2a44;
+    --border: #2d323c;
+    --panel: #1d2027;
+    --surface-2: #262a33;
+    --good: #4cc88a;
+    --bad: #e77466;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 18px rgba(0, 0, 0, .35);
   }
 }
 
@@ -27,27 +48,29 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--fg);
-  line-height: 1.5;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
 header, main, footer {
-  max-width: 880px;
+  max-width: 920px;
   margin: 0 auto;
-  padding: 1.5rem 1.25rem;
+  padding: var(--sp-4) var(--sp-3);
 }
+main { padding-top: var(--sp-2); }
 
 h1 {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 2.2rem;
-  margin: 0 0 0.5rem;
-  letter-spacing: 0.02em;
+  font-size: 1.9rem;
+  font-weight: 650;
+  margin: 0 0 0.35rem;
+  letter-spacing: -0.02em;
 }
 
-.tagline { color: var(--fg); max-width: 68ch; }
-.honesty { color: var(--muted); font-size: 0.92rem; max-width: 68ch; }
+.tagline { color: var(--fg); max-width: 66ch; }
+.honesty { color: var(--muted); font-size: 0.9rem; max-width: 66ch; line-height: 1.6; }
 
 .purpose {
   display: inline-block;
