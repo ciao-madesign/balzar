@@ -117,11 +117,15 @@ Passi stabiliti (ordine di esecuzione):
 
 ## Fase 1c — Esperienza "come Word" (installer + firma)
 
-- [ ] Installer: `.dmg` con trascinamento in Applicazioni (macOS) / `setup.exe`
-      Inno Setup o NSIS (Windows). *Sul Mac/Windows dell'utente.*
-- [ ] **Rimandato oltre la beta**: notarizzazione Apple ($99/anno), certificato
-      firma Windows, auto-update, `.app` universale Intel+arm. Fino ad allora i
-      tester usano il bypass Gatekeeper/SmartScreen una volta sola (`BUILD.md`).
+- [x] **Script installer pronti** (`packaging/`): `make_dmg.sh` (macOS, `.dmg`
+      drag-to-Applicazioni via `hdiutil`) e `balzar.iss` (Windows, `setup.exe`
+      Inno Setup con voce nel menu Start). Il `.dmg`/`setup.exe` reale lo genera
+      l'utente sul Mac/Windows (`BUILD.md` §2.4 / §3.4). Icona installer blu.
+- [ ] **Firma del codice** — l'unica cosa che separa gli installer dallo "zero
+      avvisi" di Word: notarizzazione Apple ($99/anno), certificato EV Windows.
+      Rimandata oltre la beta; fino ad allora i tester usano il bypass
+      Gatekeeper/SmartScreen una volta sola (`BUILD.md`). Anche: auto-update,
+      `.app` universale Intel+arm, DMG con layout grafico.
 
 ## Fase 2 — Beta Android (stesso guscio WebView)
 

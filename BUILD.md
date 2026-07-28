@@ -98,8 +98,17 @@ Verifica: `python3 -m balzar.license status` → `configurato: True`.
 
 3. Avvia: doppio clic su `dist/Balzar.app`. All'avvio chiederà la chiave beta.
 
+4. **Installer `.dmg`** (per distribuire ai tester):
+
+   ```sh
+   bash packaging/make_dmg.sh
+   ```
+
+   Produce `dist/Balzar-<versione>.dmg`: il tester lo apre e **trascina Balzar
+   in Applicazioni** (il gesto "come Word"). Usa solo `hdiutil` di sistema.
+
 **Per i tester (macOS, app non notarizzata)**: al primo avvio Gatekeeper la
-blocca. Aggiramento: **clic destro sull'app → Apri → Apri** (una volta sola),
+blocca. Aggiramento: **clic destro su Balzar → Apri → Apri** (una volta sola),
 oppure Impostazioni di Sistema → Privacy e sicurezza → "Apri comunque". La
 notarizzazione a pagamento è rimandata a dopo la beta.
 
@@ -117,9 +126,11 @@ notarizzazione a pagamento è rimandata a dopo la beta.
 
    Risultato: `dist\balzar.exe` (con l'icona `assets\balzar.ico`).
 
-4. (Opzionale) installer con **Inno Setup** o **NSIS** (gratuiti): avvolgono
-   `balzar.exe` in un `setup.exe` con voce nel menu Start. Per la beta puoi
-   anche distribuire direttamente `balzar.exe`.
+4. **Installer `setup.exe`** con **Inno Setup** (gratuito,
+   https://jrsoftware.org/isdl.php): apri `packaging\balzar.iss` con l'Inno
+   Setup Compiler e premi **Compile** (oppure `ISCC.exe packaging\balzar.iss`).
+   Produce `dist\Balzar-Setup-<versione>.exe` con voce nel menu Start. Per la
+   beta puoi anche distribuire direttamente `dist\balzar.exe`.
 
 **Per i tester (Windows, exe non firmato)**: SmartScreen mostra "Windows ha
 protetto il PC". Aggiramento: **Ulteriori informazioni → Esegui comunque**.
@@ -129,5 +140,7 @@ La firma con certificato EV è rimandata a dopo la beta.
 
 ## 4. Cosa è rimandato oltre la beta (deliberatamente)
 
-Firma EV Windows, notarizzazione Apple ($99/anno), auto-update, `.app`
-universale Intel+arm, installer rifinito. Vedi `ROADMAP.md`.
+**Firma del codice** (notarizzazione Apple $99/anno; certificato EV Windows) —
+l'unica cosa che separa gli installer attuali dallo "zero avvisi" di Word.
+Anche: auto-update, `.app` universale Intel+arm, DMG con sfondo/layout
+grafico. Vedi `ROADMAP.md`.
