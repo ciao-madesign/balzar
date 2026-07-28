@@ -5228,5 +5228,29 @@ vendorizzati. La verifica frozen reale (che il `.app` serva davvero la UI da
   in Linux headless) — la valida Michele sul Mac (`pip install pywebview`,
   rebuild, l'app apre una finestra nativa con la UI ridisegnata).
 
-**Prossimo: Passo 4** (dettagli desktop nella WebView — download via API
-pywebview, Libreria rimandata) + validazione sul Mac, poi il round **stile**.
+**Validazione sul Mac (fatta da Michele) + Passo 4 avviato**: la finestra
+pywebview reale si apre con la UI web ridisegnata (da sorgente
+`python3 balzar-app.py`), file picker nativo e "genera QR" funzionanti. Due
+problemi reali trovati dall'uso e corretti:
+- **Download rotti in WKWebView** (il sintomo classico): un download via blob
+  `<a download>` **naviga** verso il blob invece di scaricarlo, riempiendo la
+  finestra senza modo di tornare indietro. Fix in un solo punto di
+  strozzatura (`downloadBlob` in `app.js`, usato da tutti i ~25 download):
+  nel guscio pywebview instrada al **ponte nativo** `window.pywebview.api.
+  save_file(filename, b64)` (nuova classe `_JsApi` in `webview_app.py`, apre
+  la finestra "Salva con nome" del SO via `create_file_dialog(SAVE_DIALOG)` e
+  scrive i byte); nel browser resta il classico `<a download>`. Gestisce sia
+  `Uint8Array` sia `Blob` (la scheda ricambio usa `canvas.toBlob`). Passata
+  `js_api=_JsApi()` a `create_window`.
+- **SVG nell'encoder generico dava errore** invece di usare l'encoder
+  dedicato: `handleFile` (scheda "Comprimi immagine") ora, se il file è
+  `.svg`/`.dxf`, passa alla scheda "Vettoriale" e chiama `handleVectorFile`
+  (niente rasterizzazione, come già fa il desktop Tkinter §12.4). Verificato
+  con Playwright: SVG dato a `#file-input` → auto-switch a `panel-vector` +
+  risultato vettoriale, zero errori JS.
+Il ponte di salvataggio nativo (finestra pywebview) si valida sul Mac; la
+logica browser (SVG-route, fallback `<a download>`) è verificata qui con
+Playwright. Suite Python invariata (nessuna riga JS testata da `unittest`).
+
+**Prossimo**: rebuild `.app` con pywebview + test download nativi sul Mac,
+poi il round **stile**.

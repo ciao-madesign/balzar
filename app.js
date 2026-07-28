@@ -81,6 +81,15 @@ const MAX_FILE_BYTES = 3.3 * 1024 * 1024;
 
 async function handleFile(file) {
   resultEl.hidden = true;
+  // Un file vettoriale (SVG/DXF) finito nell'encoder generico non va
+  // rasterizzato (Pillow fallirebbe): passa alla scheda "Vettoriale" e usa
+  // l'ingestione dedicata, invece di dare un errore.
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".svg") || lower.endsWith(".dxf")) {
+    activateTab("vector");
+    handleVectorFile(file);
+    return;
+  }
   if (file.size > MAX_FILE_BYTES) {
     setStatus(
       `File troppo grande (${(file.size / 1048576).toFixed(1)} MB): il limite di upload è ~3.3 MB. ` +
@@ -159,14 +168,37 @@ function render(r, file) {
   resultEl.hidden = false;
 }
 
-function downloadBlob(bytes, filename, mime) {
-  const blob = new Blob([bytes], { type: mime });
+function downloadBlob(data, filename, mime) {
+  // Nel guscio desktop (pywebview/WKWebView) i download via blob NON
+  // funzionano: il webview naviga verso il blob invece di scaricarlo,
+  // riempiendo la finestra senza modo di tornare indietro. In quel caso
+  // usa il ponte nativo (finestra "Salva con nome" del SO). Nel browser
+  // (demo web) resta il classico <a download>. `data` puo' essere un
+  // Uint8Array/ArrayBuffer o un Blob (es. canvas.toBlob della scheda ricambio).
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_file) {
+    _saveViaNative(data, filename);
+    return;
+  }
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function _saveViaNative(data, filename) {
+  // Passa i byte come base64 all'API Python (window.pywebview.api.save_file),
+  // che apre la finestra di salvataggio nativa e scrive il file.
+  if (data instanceof Blob) {
+    const r = new FileReader();
+    r.onload = () => window.pywebview.api.save_file(filename, r.result.split(",", 2)[1]);
+    r.readAsDataURL(data);
+  } else {
+    const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+    window.pywebview.api.save_file(filename, bytesToB64(u8));
+  }
 }
 
 function base64ToBytes(b64) {

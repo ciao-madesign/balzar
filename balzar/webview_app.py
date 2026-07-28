@@ -21,6 +21,7 @@ tests/test_localserver.py); la finestra pywebview vera si valida sul Mac
 
 from __future__ import annotations
 
+import base64
 import sys
 
 from . import license as license_gate
@@ -42,6 +43,26 @@ def _activate(body: dict):
     Ritorna (status, obj) come i handler, ma non prende `limits`."""
     key = body.get("key", "")
     return 200, {"ok": True, "activated": bool(license_gate.activate(key))}
+
+
+class _JsApi:
+    """API Python esposta al JS della finestra come `window.pywebview.api`.
+    Serve a salvare i file: in WKWebView un download via blob naviga invece
+    di scaricare (vedi downloadBlob in app.js), quindi il JS chiama qui e noi
+    apriamo la finestra di salvataggio nativa del SO."""
+
+    def save_file(self, filename: str, b64: str) -> bool:
+        import webview
+        win = webview.windows[0] if webview.windows else None
+        if win is None:
+            return False
+        result = win.create_file_dialog(webview.SAVE_DIALOG, save_filename=filename)
+        if not result:
+            return False  # annullato dall'utente
+        path = result if isinstance(result, str) else result[0]
+        with open(path, "wb") as fh:
+            fh.write(base64.b64decode(b64))
+        return True
 
 
 def _initial_path(decision: str) -> str:
@@ -67,7 +88,8 @@ def run() -> int:
         extra_routes={"/api/activate": _activate})
     try:
         webview.create_window(_WINDOW_TITLE, url=url + _initial_path(decision),
-                              width=1200, height=800, min_size=(900, 600))
+                              width=1200, height=800, min_size=(900, 600),
+                              js_api=_JsApi())
         webview.start()  # blocca finche' la finestra non viene chiusa
     finally:
         server.shutdown()
