@@ -73,8 +73,12 @@ import shutil
 import threading
 import webbrowser
 
-_MODEL_VIEWER_JS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "model-viewer.min.js")
+from .assets import vendored_path
+
+# Frozen-aware (PyInstaller): vedi balzar/assets.py. Il file .spec bundla
+# model-viewer.min.js in datas, altrimenti nel pacchetto la vista 3D si
+# romperebbe (il path da __file__ punterebbe dentro _MEIPASS senza il file).
+_MODEL_VIEWER_JS = vendored_path("model-viewer.min.js")
 
 _PAGE_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -94,13 +98,13 @@ model-viewer{{width:100%;height:100%}}
 #bom td.qty{{text-align:right;color:#9cf}}
 #bom tr.part{{cursor:pointer}}
 #bom tr.part:hover td{{background:#333}}
-#bom tr.part.selected td{{background:#c77a2e;color:#fff}}
+#bom tr.part.selected td{{background:#2563eb;color:#fff}}
 #reset-btn,#export-btn{{position:absolute;top:12px;padding:6px 12px;border-radius:6px;
            border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
            font:inherit;cursor:pointer}}
 #reset-btn{{left:12px}}
 #export-btn{{left:120px}}
-#reset-btn:hover,#export-btn:hover{{border-color:#c77a2e}}
+#reset-btn:hover,#export-btn:hover{{border-color:#2563eb}}
 #export-btn:disabled{{opacity:0.4;cursor:not-allowed}}
 #search-bar{{position:absolute;bottom:12px;left:12px;right:12px;display:flex;gap:8px;
             align-items:center;flex-wrap:wrap}}
@@ -109,7 +113,7 @@ model-viewer{{width:100%;height:100%}}
 #search-btn,#alarm-csv-label{{padding:6px 10px;border-radius:6px;border:1px solid #555;
                              background:rgba(20,20,20,0.85);color:#eee;font:inherit;
                              cursor:pointer;font-size:13px}}
-#search-btn:hover,#alarm-csv-label:hover{{border-color:#c77a2e}}
+#search-btn:hover,#alarm-csv-label:hover{{border-color:#2563eb}}
 #search-panel{{position:absolute;bottom:52px;left:12px;right:12px;display:flex;
               flex-direction:column;gap:6px;max-height:50vh}}
 #search-note{{margin:0;color:#eee;font-size:12px;background:rgba(20,20,20,0.7);

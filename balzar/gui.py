@@ -22,10 +22,13 @@ from __future__ import annotations
 import base64
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 import uuid
 from tkinter import filedialog, messagebox, simpledialog, ttk
+
+from . import license as license_gate
 
 from .imageio import load_frames, save_gif
 from .interpreter import render as render_program
@@ -227,9 +230,10 @@ class BalzarApp:
 
     def open_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Apri immagine, GIF animata, assieme 3D (.3dxml), bundle o payload balzar",
-            filetypes=[("Immagini, 3D, bundle e payload",
-                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.3dxml *.bzp *.b3d *.bzx *.bzr"),
+            title="Apri immagine, GIF, disegno vettoriale (SVG/DXF), assieme 3D, bundle o payload balzar",
+            filetypes=[("Immagini, vettoriale, 3D, bundle e payload",
+                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.svg *.dxf "
+                        "*.3dxml *.bzp *.b3d *.bzx *.bzr"),
                        ("Tutti i file", "*.*")])
         if not path:
             return
@@ -402,6 +406,11 @@ class BalzarApp:
         try:
             if path.endswith(".3dxml"):
                 self._job_from_3dxml(job, path, merge_names=merge_names)
+            elif path.endswith((".svg", ".dxf")):
+                # ingestione vettoriale diretta (vectorio.py) -- niente Pillow,
+                # niente rasterizzazione. E' un encode "create" come immagine/
+                # 3dxml, quindi is_live_artifact resta False (default).
+                self._job_from_vector(job, path)
             else:
                 with open(path, "rb") as fh:
                     data = fh.read()
@@ -600,6 +609,42 @@ class BalzarApp:
             ("QR", "1 codice" if fits_in_qr(result.payload)
              else f"{_fmt(len(chunk_payload(result.payload)))} capitoli QR"),
         ]
+
+    def _job_from_vector(self, job: Job, path: str) -> None:
+        """Ingest an SVG/DXF drawing directly (vectorio.py): no rasterization,
+        no quantization, no Pillow -- a circle in the source keeps its exact
+        center/radius, mapped 1:1 to CIRCLE. Same engine the CLI 'encode-vector'
+        and the web demo's Vettoriale tab already use; wired into the desktop
+        app so a drag/open of a .svg/.dxf no longer falls through to the raster
+        loader and crashes with UnidentifiedImageError."""
+        from .vectorio import ingest_vector_file
+        max_dim = int(self.max_dim.get())
+        result = ingest_vector_file(path, max_dim=max_dim)
+        job.payload = result.payload
+        job.program_text = result.program_text
+        rendered = render_program(result.program_text)
+        job.width, job.height = rendered.width, rendered.height
+        job.frames_rgb = [rendered.frame_rgb(i) for i in range(len(rendered.frames))]
+        job.original_frames_rgb = []  # source is vector, no raster original to compare
+
+        upload_size = os.path.getsize(path)
+        raw = job.width * job.height * 3
+        ratio = raw / len(result.payload)
+        job.stats = [
+            ("sorgente", f"{job.source_name} ({_fmt(upload_size)} B, {result.source_format})"),
+            ("analisi", f"{job.width}x{job.height}, {result.element_count} elementi vettoriali"),
+            ("istruzioni", _fmt(result.instruction_count)),
+            ("saltati", _fmt(len(result.skipped))),
+            ("RGB grezzo", f"{_fmt(raw)} B"),
+            ("payload", f"{_fmt(len(result.payload))} B"),
+            ("fattore vs RGB", (f"{ratio:,.1f}x" if ratio >= 1
+                                else f"NESSUN GUADAGNO ({ratio:.2f}x)")),
+            ("QR", "1 codice" if fits_in_qr(result.payload)
+             else f"{_fmt(len(chunk_payload(result.payload)))} capitoli QR"),
+        ]
+        # surface skipped reasons instead of hiding them (same honesty as CLI)
+        for reason in result.skipped[:6]:
+            job.stats.append(("saltato", reason))
 
     # -------------------------------------------------------------- saving
 
@@ -1177,8 +1222,47 @@ class BalzarApp:
             self._animate()
 
 
+def _ensure_licensed(root: tk.Tk) -> bool:
+    """Gate di licenza beta all'avvio. Ritorna True se l'app puo' partire.
+
+    La politica (quando applicare il gate) vive in `license.startup_decision`,
+    testabile senza Tk; qui c'e' solo il wiring dei dialog. Vedi ROADMAP.md /
+    CLAUDE.md §12.2."""
+    decision = license_gate.startup_decision(getattr(sys, "frozen", False))
+    if decision == license_gate.STARTUP_OPEN:
+        return True          # build di sviluppo: nessun gate
+    if decision == license_gate.STARTUP_ACTIVATED:
+        return True          # gia' attivata su questo dispositivo
+    if decision == license_gate.STARTUP_UNCONFIGURED:
+        messagebox.showerror(
+            "Balzar",
+            "Questa build non ha una chiave di licenza configurata e non puo' "
+            "essere avviata.\n\n(Errore di produzione della build: la chiave "
+            "beta non e' stata impostata prima del packaging.)")
+        return False
+    # STARTUP_NEED_KEY: chiedi la chiave, fino a 3 tentativi
+    for _ in range(3):
+        key = simpledialog.askstring(
+            "Attivazione Balzar (beta)",
+            "Inserisci la chiave di attivazione della beta:",
+            parent=root)
+        if key is None:
+            return False     # annullato dall'utente
+        if license_gate.activate(key):
+            return True
+        messagebox.showerror("Balzar", "Chiave non valida. Riprova.")
+    messagebox.showerror(
+        "Balzar", "Attivazione non riuscita. L'app verra' chiusa.")
+    return False
+
+
 def main() -> None:
     root = tk.Tk()
+    root.withdraw()                     # nascosta finche' la licenza non e' ok
+    if not _ensure_licensed(root):
+        root.destroy()
+        return
+    root.deiconify()
     BalzarApp(root)
     root.mainloop()
 

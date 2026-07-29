@@ -791,5 +791,104 @@ class TestMergeNamedGroups(unittest.TestCase):
         self.assertIsInstance(merged_result.payload, bytes)
 
 
+class TestConfidentialMerge(unittest.TestCase):
+    """CLAUDE.md SS5 point 13 ("3D filtered mode"): hiding names/geometry
+    of a sub-assembly in the VIEWER isn't real confidentiality, because
+    the downloadable .glb still contains every hidden sub-part's name
+    and material -- inspectable by anyone with a generic glTF viewer or
+    a text editor. merge_named_groups (SS9.31, built for a different
+    reason -- payload size) turns out to already solve this properly:
+    it doesn't just hide names, it DELETES the separate References and
+    Shapes entirely (via _prune_unreachable) before the payload/GLB are
+    ever generated -- so there is nothing left to leak, in either
+    artifact. Verified directly here, not assumed from the size tests
+    already covering the mechanism itself."""
+
+    def _scene_with_sensitive_sub_parts(self):
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        # deliberately proprietary-looking names, the exact kind of
+        # thing SS5 point 13 says shouldn't leak in a shared .glb
+        secret_a = Shape(name="PN-88213-INTERNAL", color=(1, 2, 3),
+                         vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+                         strips=[[0, 1, 2]])
+        secret_b = Shape(name="PN-90144-PROPRIETARY", color=(4, 5, 6),
+                         vertices=[(2.0, 0.0, 0.0), (3.0, 0.0, 0.0), (2.0, 1.0, 0.0)],
+                         strips=[[0, 1, 2]])
+        ref_a = Reference(name="PN-88213-INTERNAL", shape_index=0, children=[])
+        ref_b = Reference(name="PN-90144-PROPRIETARY", shape_index=1, children=[])
+        group = Reference(name="AssiemePubblico", shape_index=None, children=[
+            (1, "inst_a", _IDENTITY_MATRIX),
+            (2, "inst_b", _IDENTITY_MATRIX),
+        ])
+        root = Reference(name="Root", shape_index=None,
+                         children=[(3, "public_inst", _IDENTITY_MATRIX)])
+        scene = Scene3D(shapes=[secret_a, secret_b], references=[root, ref_a, ref_b, group], root=0)
+        return scene
+
+    def test_merged_payload_contains_no_trace_of_hidden_sub_part_names(self):
+        import zlib as _zlib
+
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._scene_with_sensitive_sub_parts()
+        merged = merge_named_groups(scene, {"AssiemePubblico"})
+        payload = encode_payload(merged)
+
+        # the body is deflate-compressed, so a plain substring check
+        # against the raw payload bytes would be meaningless (almost
+        # any string is "absent" from compressed data) -- decompress
+        # first, the same body _deserialize itself reads
+        body = _zlib.decompress(payload[14:])
+        self.assertNotIn(b"PN-88213-INTERNAL", body)
+        self.assertNotIn(b"PN-90144-PROPRIETARY", body)
+        # the public group name legitimately stays (that's the point --
+        # only the TOP level keeps its own identity)
+        self.assertIn(b"AssiemePubblico", body)
+
+        rebuilt = decode_payload(payload)
+        all_ref_names = {r.name for r in rebuilt.references}
+        all_shape_names = {s.name for s in rebuilt.shapes}
+        self.assertNotIn("PN-88213-INTERNAL", all_ref_names | all_shape_names)
+        self.assertNotIn("PN-90144-PROPRIETARY", all_ref_names | all_shape_names)
+
+    def test_bom_shows_only_the_public_group_name_not_hidden_parts(self):
+        from balzar.scene3d import generate_bom, merge_named_groups
+
+        scene = self._scene_with_sensitive_sub_parts()
+        merged = merge_named_groups(scene, {"AssiemePubblico"})
+        bom = generate_bom(merged)
+
+        names = {e.name for e in bom}
+        self.assertEqual(names, {"AssiemePubblico"})
+        self.assertNotIn("PN-88213-INTERNAL", names)
+        self.assertNotIn("PN-90144-PROPRIETARY", names)
+
+    def test_exported_glb_bytes_contain_no_trace_of_hidden_sub_part_names(self):
+        # the actual SS5 point 13 concern: a generic glTF viewer or a
+        # text editor run directly against the downloadable .glb -- not
+        # balzar's own decode path, which could theoretically hide
+        # things balzar's own code chooses not to show without them
+        # being truly gone from the file
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._scene_with_sensitive_sub_parts()
+        merged = merge_named_groups(scene, {"AssiemePubblico"})
+        glb = scene3d_to_glb(merged)
+
+        self.assertNotIn(b"PN-88213-INTERNAL", glb)
+        self.assertNotIn(b"PN-90144-PROPRIETARY", glb)
+        self.assertIn(b"AssiemePubblico", glb)
+
+    def test_unmerged_glb_would_have_leaked_the_names_control_case(self):
+        # the control that proves the test above is meaningful: WITHOUT
+        # merging, the same sensitive names ARE present in the GLB --
+        # confirms this is a real property being tested, not a tautology
+        scene = self._scene_with_sensitive_sub_parts()
+        glb = scene3d_to_glb(scene)
+        self.assertIn(b"PN-88213-INTERNAL", glb)
+        self.assertIn(b"PN-90144-PROPRIETARY", glb)
+
+
 if __name__ == "__main__":
     unittest.main()

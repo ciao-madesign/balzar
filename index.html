@@ -14,32 +14,44 @@
   <header>
     <h1>balzar</h1>
     <p class="nav-links">← <a href="landing.html">torna alla home</a></p>
-    <p class="tagline">Ogni scheda qui sotto trasforma un file in un <em>programma</em> di poche
-      istruzioni (rettangoli, cerchi, tiling, palette) — quello che scarichi non contiene mai pixel,
-      solo il risultato che vedi è stato <strong>rigenerato da zero</strong> eseguendo quel programma.</p>
-    <p class="honesty">Su contenuti strutturati (icone, schemi, pattern, disegni CAD) il guadagno è enorme.
-      Su foto e rumore l'encoder lo dichiara onestamente invece di fingere una compressione che non c'è —
-      è il limite di complessità di Kolmogorov descritto nel progetto.</p>
-    <p class="nav-links"><a href="come-funziona.html">Come funziona balzar, e confronto con altri sistemi di compressione →</a></p>
-    <p class="nav-links"><a href="trasporto-qr.html">Trasporto QR di un file qualunque (nessun motore balzar) →</a></p>
-    <p class="honesty">Due prodotti, non uno: <strong>Balzar Studio</strong> crea un payload da un file
-      sorgente (encoder — le prime cinque schede), <strong>Balzar Live</strong> apre un payload già
-      esistente e lo consulta (nessun encoder coinvolto — l'ultima scheda). Stesso principio
-      dell'app desktop e della CLI, qui applicato alla stessa demo web.</p>
+    <p class="tagline">Trasforma un file in un piccolo <em>programma</em> che lo
+      <strong>rigenera da zero</strong>: quello che scarichi non contiene pixel, solo le istruzioni
+      per ricrearli.</p>
+    <p class="nav-links">
+      <a href="come-funziona.html">Come funziona →</a> ·
+      <a href="trasporto-qr.html">Trasporto QR di un file qualunque →</a>
+    </p>
+    <details class="header-more">
+      <summary>Quando conviene, e i due strumenti</summary>
+      <p class="honesty">Su contenuti strutturati (icone, schemi, pattern, disegni CAD) il guadagno è
+        enorme. Su foto e rumore l'encoder lo dichiara onestamente invece di fingere una compressione
+        che non c'è — è il limite di complessità di Kolmogorov.</p>
+      <p class="honesty"><strong>Balzar Studio</strong> crea un payload da un file sorgente (le prime
+        cinque schede). <strong>Balzar Live</strong> apre un payload già esistente e lo consulta
+        (l'ultima scheda). Stesso principio dell'app desktop e della CLI.</p>
+    </details>
+
+    <!-- Livello 1: cosa vuoi fare (Crea = Studio, Apri = Live). Toggle
+         driven by activateProduct() in app.js; the level-2 tab grid and
+         all tab-*/panel-* ids below are UNCHANGED. -->
+    <nav class="product-switch" role="tablist" aria-label="Cosa vuoi fare">
+      <button class="product-tab active" id="product-crea" type="button">Crea</button>
+      <button class="product-tab" id="product-apri" type="button">Apri</button>
+    </nav>
 
     <div class="tab-groups">
-      <div class="tab-group">
-        <span class="tab-group-name">Balzar Studio · crea</span>
+      <div class="tab-group" id="group-studio">
+        <span class="tab-group-name">Balzar Studio · crea un programma da un file</span>
         <div class="tabs" role="tablist">
-          <button class="tab active" id="tab-encode" type="button">Comprimi immagine</button>
+          <button class="tab active" id="tab-3d" type="button">Assemblee 3D</button>
+          <button class="tab" id="tab-encode" type="button">Comprimi immagine</button>
           <button class="tab" id="tab-vector" type="button">Vettoriale (SVG/DXF)</button>
           <button class="tab" id="tab-video" type="button">Video (GIF animata)</button>
           <button class="tab" id="tab-sequence" type="button">Sequenza (multi-file)</button>
-          <button class="tab" id="tab-3d" type="button">Assemblee 3D</button>
         </div>
       </div>
-      <div class="tab-group">
-        <span class="tab-group-name">Balzar Live · consulta</span>
+      <div class="tab-group" id="group-live" hidden>
+        <span class="tab-group-name">Balzar Live · apri un programma già creato</span>
         <div class="tabs" role="tablist">
           <button class="tab" id="tab-open" type="button">Apri programma (.bzr / .bzp / .b3d / .bzx)</button>
         </div>
@@ -48,11 +60,14 @@
   </header>
 
   <main>
-    <div id="panel-encode">
+    <div id="panel-encode" class="panel" hidden>
       <p class="purpose">Codifica · encoder generico</p>
-      <p class="tagline">Per quando non hai un sorgente vettoriale: carica una foto, uno screenshot
-        o un'icona qualsiasi. L'encoder analizza i pixel e prova a ridurli a un programma — e
-        dichiara onestamente quando il contenuto (una foto, del rumore) non si presta.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Per quando non hai un sorgente vettoriale: carica una foto, uno screenshot
+          o un'icona qualsiasi. L'encoder analizza i pixel e prova a ridurli a un programma — e
+          dichiara onestamente quando il contenuto (una foto, del rumore) non si presta.</p>
+      </details>
       <section id="drop" class="dropzone">
         <input type="file" id="file-input" accept="image/*" hidden>
         <p id="drop-label">Trascina un'immagine qui, oppure <button id="browse-btn" type="button">scegli un file</button></p>
@@ -73,11 +88,11 @@
       <section id="result" class="result" hidden>
         <div class="images">
           <figure>
-            <figcaption>originale caricato</figcaption>
+            <figcaption>originale</figcaption>
             <img id="img-original" alt="immagine originale">
           </figure>
           <figure>
-            <figcaption>rigenerato da balzar (payload → interprete → pixel)</figcaption>
+            <figcaption>rigenerato da balzar</figcaption>
             <img id="img-rendered" alt="immagine rigenerata da balzar">
           </figure>
         </div>
@@ -86,12 +101,15 @@
 
         <div class="downloads">
           <button id="dl-payload" type="button">scarica payload (.bzp)</button>
-          <button id="dl-program" type="button">scarica programma (.bzr)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <details class="more-actions">
+            <summary>Altre opzioni</summary>
+            <button id="dl-program" type="button">scarica programma (.bzr)</button>
+          </details>
+          <label class="qr-mode-label">Come generare il QR:
             <select id="encode-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <button id="encode-gen-qr-btn" type="button">genera QR</button>
@@ -110,12 +128,15 @@
       </section>
     </div>
 
-    <div id="panel-vector" hidden>
+    <div id="panel-vector" class="panel" hidden>
       <p class="purpose">Codifica · ingestione CAD esatta</p>
-      <p class="tagline">Carica un file <code>.svg</code> o <code>.dxf</code>: viene ingerito
-        direttamente (<code>vectorio.py</code>) — niente rasterizzazione, niente quantizzazione.
-        Un cerchio nel file sorgente ha già centro e raggio espliciti, si mappa 1:1 su
-        <code>CIRCLE</code>.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica un file <code>.svg</code> o <code>.dxf</code>: viene ingerito
+          direttamente (<code>vectorio.py</code>) — niente rasterizzazione, niente quantizzazione.
+          Un cerchio nel file sorgente ha già centro e raggio espliciti, si mappa 1:1 su
+          <code>CIRCLE</code>.</p>
+      </details>
 
       <section id="vector-drop" class="dropzone">
         <input type="file" id="vector-file-input" accept=".svg,.dxf" hidden>
@@ -136,11 +157,11 @@
       <section id="vector-result" class="result" hidden>
         <div class="images">
           <figure id="vector-original-figure" hidden>
-            <figcaption>originale caricato (SVG, reso nativamente dal browser)</figcaption>
+            <figcaption>originale</figcaption>
             <img id="vector-img-original" alt="SVG originale">
           </figure>
           <figure>
-            <figcaption>rigenerato da balzar (payload → interprete → pixel)</figcaption>
+            <figcaption>rigenerato da balzar</figcaption>
             <img id="vector-img-rendered" alt="contenuto rigenerato">
           </figure>
         </div>
@@ -150,13 +171,16 @@
 
         <div class="downloads">
           <button id="vector-dl-payload" type="button">scarica payload (.bzp)</button>
-          <button id="vector-dl-program" type="button">scarica programma (.bzr)</button>
-          <button id="vector-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <details class="more-actions">
+            <summary>Altre opzioni</summary>
+            <button id="vector-dl-program" type="button">scarica programma (.bzr)</button>
+            <button id="vector-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
+          </details>
+          <label class="qr-mode-label">Come generare il QR:
             <select id="vector-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <button id="vector-gen-qr-btn" type="button">genera QR</button>
@@ -175,12 +199,15 @@
       </section>
     </div>
 
-    <div id="panel-video" hidden>
+    <div id="panel-video" class="panel" hidden>
       <p class="purpose">Codifica · delta multi-frame</p>
-      <p class="tagline">Carica una GIF animata: viene codificata col modello differenziale
-        (<code>video.py</code>) — il frame 0 per intero, ogni frame successivo costa solo i
-        pixel che cambiano. A differenza di "Comprimi immagine" (che guarda solo il primo
-        frame) qui viene ricostruita l'intera animazione.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica una GIF animata: viene codificata col modello differenziale
+          (<code>video.py</code>) — il frame 0 per intero, ogni frame successivo costa solo i
+          pixel che cambiano. A differenza di "Comprimi immagine" (che guarda solo il primo
+          frame) qui viene ricostruita l'intera animazione.</p>
+      </details>
 
       <section id="video-drop" class="dropzone">
         <input type="file" id="video-file-input" accept=".gif,image/gif" hidden>
@@ -201,11 +228,11 @@
       <section id="video-result" class="result" hidden>
         <div class="images">
           <figure>
-            <figcaption>originale caricato</figcaption>
+            <figcaption>originale</figcaption>
             <img id="video-img-original" alt="GIF originale">
           </figure>
           <figure>
-            <figcaption>rigenerato da balzar (delta tra frame)</figcaption>
+            <figcaption>rigenerato da balzar</figcaption>
             <img id="video-img-rendered" alt="GIF rigenerata">
           </figure>
         </div>
@@ -214,12 +241,15 @@
 
         <div class="downloads">
           <button id="video-dl-payload" type="button">scarica payload (.bzp)</button>
-          <button id="video-dl-program" type="button">scarica programma (.bzr)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <details class="more-actions">
+            <summary>Altre opzioni</summary>
+            <button id="video-dl-program" type="button">scarica programma (.bzr)</button>
+          </details>
+          <label class="qr-mode-label">Come generare il QR:
             <select id="video-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <button id="video-gen-qr-btn" type="button">genera QR</button>
@@ -238,14 +268,17 @@
       </section>
     </div>
 
-    <div id="panel-sequence" hidden>
+    <div id="panel-sequence" class="panel" hidden>
       <p class="purpose">Codifica · più file, un solo payload navigabile</p>
-      <p class="tagline">Carica 2 o più file. In modalità <strong>"sequenza navigabile"</strong>
-        devono essere <strong>dello stesso tipo</strong> (solo <code>.svg</code>, solo
-        <code>.dxf</code>, oppure immagini raster) e diventano un solo payload con un frame per
-        file, navigabile avanti/indietro. In modalità <strong>"file indipendenti"</strong> ogni
-        file è codificato per conto suo — nessun vincolo di formato, un file rotto non blocca
-        gli altri, ottieni un payload separato per ciascuno.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica 2 o più file. In modalità <strong>"sequenza navigabile"</strong>
+          devono essere <strong>dello stesso tipo</strong> (solo <code>.svg</code>, solo
+          <code>.dxf</code>, oppure immagini raster) e diventano un solo payload con un frame per
+          file, navigabile avanti/indietro. In modalità <strong>"file indipendenti"</strong> ogni
+          file è codificato per conto suo — nessun vincolo di formato, un file rotto non blocca
+          gli altri, ottieni un payload separato per ciascuno.</p>
+      </details>
 
       <fieldset class="mode-picker">
         <label><input type="radio" name="sequence-mode" value="sequence" checked> Sequenza navigabile</label>
@@ -280,7 +313,7 @@
           <button id="sequence-next" type="button">Avanti ▶</button>
         </div>
         <figure>
-          <figcaption>rigenerato da balzar (step corrente)</figcaption>
+          <figcaption>rigenerato · step corrente</figcaption>
           <img id="sequence-img-rendered" alt="frame corrente della sequenza">
         </figure>
 
@@ -288,12 +321,15 @@
 
         <div class="downloads">
           <button id="sequence-dl-payload" type="button">scarica payload (.bzp)</button>
-          <button id="sequence-dl-program" type="button">scarica programma (.bzr)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <details class="more-actions">
+            <summary>Altre opzioni</summary>
+            <button id="sequence-dl-program" type="button">scarica programma (.bzr)</button>
+          </details>
+          <label class="qr-mode-label">Come generare il QR:
             <select id="sequence-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <button id="sequence-gen-qr-btn" type="button">genera QR</button>
@@ -317,36 +353,45 @@
       </section>
     </div>
 
-    <div id="panel-3d" hidden>
+    <div id="panel-3d" class="panel">
       <p class="purpose">Codifica · assiemi CAD parametrici</p>
-      <p class="tagline">Carica un file <code>.3dxml</code> (formato Dassault, non STEP —
-        vedi <code>scene3d.py</code> per il perché): ogni forma unica viene tenuta una sola
-        volta, ogni sotto-assieme ripetuto si riusa invece di essere ridisegnato — lo stesso
-        principio del resto di balzar, esteso al 3D. Il payload (<code>BZM1</code>) resta
-        compatto per il trasporto; la vista qui e il download <code>.glb</code> sono un
-        formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Carica un file <code>.3dxml</code> (formato Dassault, non STEP —
+          vedi <code>scene3d.py</code> per il perché): ogni forma unica viene tenuta una sola
+          volta, ogni sotto-assieme ripetuto si riusa invece di essere ridisegnato — lo stesso
+          principio del resto di balzar, esteso al 3D. Il payload (<code>BZM1</code>) resta
+          compatto per il trasporto; la vista qui e il download <code>.glb</code> sono un
+          formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
+      </details>
 
-      <p class="honesty">Puoi includere nello stesso QR anche una tabella allarmi e
-        altri documenti consultabili: scegli i file qui sotto <strong>prima</strong> di
-        caricare il file 3D — tutto viene impacchettato in un bundle (<code>BZX1</code>,
-        <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca allarmi
-        pronta e un indice navigabile dei documenti. I documenti aggiuntivi sono solo
-        da consultare (non collegati al 3D): testo/CSV/immagini si aprono inline, i
-        formati strutturati (pdf/html/xml/…) si scaricano. Un file <code>.bzr</code>/
-        <code>.bzp</code> (un programma/payload balzar 2D — una tavola tecnica) viene
-        invece <strong>rigenerato al volo</strong> in PNG/SVG e mostrato come le
-        immagini — nessun pixel salvato, solo il programma che lo disegna. Opzionale:
-        senza extra il payload resta un semplice <code>BZM1</code> come prima.</p>
-      <p>
-        <label>Tabella allarmi da includere nel bundle (opzionale):
-          <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
-        <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
-      </p>
-      <p>
-        <label>Documenti aggiuntivi da consultare (opzionale, selezione multipla):
-          <input type="file" id="threed-bundle-docs-input" multiple></label>
-        <button id="threed-bundle-docs-clear-btn" type="button">Rimuovi documenti</button>
-      </p>
+      <!-- Manutenzione/bundle: opzionale, collassato di default così il
+           flusso principale (carica il modello) resta pulito. Gli id dei
+           file input restano invariati (JS in app.js li trova comunque). -->
+      <details class="panel-help">
+        <summary>Gestione manutenzione: includi tabella allarmi e documenti nel bundle (opzionale)</summary>
+        <p class="honesty">Puoi includere nello stesso QR anche una tabella allarmi e
+          altri documenti consultabili: scegli i file qui sotto <strong>prima</strong> di
+          caricare il file 3D — tutto viene impacchettato in un bundle (<code>BZX1</code>,
+          <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca allarmi
+          pronta e un indice navigabile dei documenti. I documenti aggiuntivi sono solo
+          da consultare (non collegati al 3D): testo/CSV/immagini si aprono inline, i
+          formati strutturati (pdf/html/xml/…) si scaricano. Un file <code>.bzr</code>/
+          <code>.bzp</code> (un programma/payload balzar 2D — una tavola tecnica) viene
+          invece <strong>rigenerato al volo</strong> in PNG/SVG e mostrato come le
+          immagini — nessun pixel salvato, solo il programma che lo disegna. Opzionale:
+          senza extra il payload resta un semplice <code>BZM1</code> come prima.</p>
+        <p>
+          <label>Tabella allarmi da includere nel bundle (opzionale):
+            <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
+          <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
+        </p>
+        <p>
+          <label>Documenti aggiuntivi da consultare (opzionale, selezione multipla):
+            <input type="file" id="threed-bundle-docs-input" multiple></label>
+          <button id="threed-bundle-docs-clear-btn" type="button">Rimuovi documenti</button>
+        </p>
+      </details>
 
       <section id="threed-drop" class="dropzone">
         <input type="file" id="threed-file-input" accept=".3dxml" hidden>
@@ -387,22 +432,25 @@
             </label>
           </div>
         </div>
-        <p class="honesty">Clicca una parte per evidenziarla e attenuare le altre (usa
-          <code>materialFromPoint</code> di model-viewer — ogni posizionamento ha un proprio
-          materiale, non condiviso, proprio per renderlo distinguibile). Clicca una riga della
-          distinta base per evidenziare tutte le istanze di quel tipo di parte. Con una parte
-          selezionata, "esporta scheda ricambio" scarica un'immagine con la vista isolata più
-          nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.
-          La barra di ricerca cerca in <strong>qualunque colonna</strong> di una tabella
-          componenti caricata (CSV libero, con intestazione: nome componente, codice, allarme,
-          ricambio, note di manutenzione… in qualunque ordine — nel bundle sopra, o qui sotto) e
-          mostra l'intera riga trovata; se il valore cercato compare anche nella colonna che la
-          tabella usa per il nome del componente (rilevata automaticamente confrontando i valori
-          con la distinta base, non per posizione o intestazione), il componente si evidenzia
-          anche sul modello 3D. Senza tabella caricata, la ricerca cade sul solo nome
-          componente. Differenza tra le due vie di caricamento: quella sopra (prima
-          dell'upload) entra nel bundle scaricabile/QR, questa qui sotto è solo per questa
-          sessione del browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
+        <details class="panel-help">
+          <summary>Come usare la vista 3D (click, ricerca, scheda ricambio)</summary>
+          <p class="honesty">Clicca una parte per evidenziarla e attenuare le altre (usa
+            <code>materialFromPoint</code> di model-viewer — ogni posizionamento ha un proprio
+            materiale, non condiviso, proprio per renderlo distinguibile). Clicca una riga della
+            distinta base per evidenziare tutte le istanze di quel tipo di parte. Con una parte
+            selezionata, "esporta scheda ricambio" scarica un'immagine con la vista isolata più
+            nome e quantità — per richiedere un ricambio senza dover rifare lo screenshot a mano.
+            La barra di ricerca cerca in <strong>qualunque colonna</strong> di una tabella
+            componenti caricata (CSV libero, con intestazione: nome componente, codice, allarme,
+            ricambio, note di manutenzione… in qualunque ordine — nel bundle sopra, o qui sotto) e
+            mostra l'intera riga trovata; se il valore cercato compare anche nella colonna che la
+            tabella usa per il nome del componente (rilevata automaticamente confrontando i valori
+            con la distinta base, non per posizione o intestazione), il componente si evidenzia
+            anche sul modello 3D. Senza tabella caricata, la ricerca cade sul solo nome
+            componente. Differenza tra le due vie di caricamento: quella sopra (prima
+            dell'upload) entra nel bundle scaricabile/QR, questa qui sotto è solo per questa
+            sessione del browser, comoda per provare una tabella diversa senza rigenerare nulla.</p>
+        </details>
 
         <table class="stats" id="threed-stats-table"></table>
 
@@ -419,11 +467,11 @@
         <div class="downloads">
           <button id="threed-dl-payload" type="button">scarica payload (.b3d)</button>
           <button id="threed-dl-glb" type="button">scarica modello (.glb)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <label class="qr-mode-label">Come generare il QR:
             <select id="threed-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <button id="threed-gen-qr-btn" type="button">genera QR</button>
@@ -440,9 +488,11 @@
       </section>
     </div>
 
-    <div id="panel-open" hidden>
+    <div id="panel-open" class="panel" hidden>
       <p class="purpose">Balzar Live · apri un payload già esistente</p>
-      <p class="tagline">Hai già un file <code>.bzr</code>/<code>.bzp</code> (un programma 2D),
+      <details class="panel-help">
+        <summary>A cosa serve</summary>
+        <p class="tagline">Hai già un file <code>.bzr</code>/<code>.bzp</code> (un programma 2D),
         <code>.b3d</code> (un assieme 3D, <code>BZM1</code>) o <code>.bzx</code> (un bundle
         multi-documento, <code>BZX1</code>) scaricato da qui o
         prodotto dalla CLI/app desktop? Caricalo qui: <strong>nessun encoder coinvolto</strong>,
@@ -451,6 +501,7 @@
         viene rigenerato in PNG/GIF/SVG; un <code>.b3d</code> apre il viewer 3D con la distinta
         base; un <code>.bzx</code> apre 3D (se presente) + ricerca allarmi + indice documenti,
         tutto insieme.</p>
+      </details>
 
       <fieldset class="qr-mode-picker" id="open-load-mode-fieldset">
         <legend>Vuoi caricare un file o scansionare una sequenza QR?</legend>
@@ -536,13 +587,16 @@
         <div class="downloads">
           <button id="open-dl-png" type="button">scarica PNG</button>
           <button id="open-dl-gif" type="button" hidden>scarica GIF</button>
-          <button id="open-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
           <button id="open-dl-payload" type="button">scarica payload (.bzp)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <details class="more-actions" id="open-more-actions" hidden>
+            <summary>Altre opzioni</summary>
+            <button id="open-dl-svg" type="button" hidden>scarica SVG (vettoriale)</button>
+          </details>
+          <label class="qr-mode-label">Come generare il QR:
             <select id="open-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <label class="dim-picker">
@@ -603,11 +657,11 @@
         <div class="downloads">
           <button id="open-3d-dl-payload" type="button">scarica payload (.b3d/.bzx)</button>
           <button id="open-3d-dl-glb" type="button">scarica modello (.glb)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <label class="qr-mode-label">Come generare il QR:
             <select id="open-3d-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <label class="dim-picker">
@@ -633,11 +687,11 @@
         </details>
         <div class="downloads">
           <button id="open-docs-dl-payload" type="button">scarica bundle (.bzx)</button>
-          <label class="qr-mode-label">Tipo di export QR:
+          <label class="qr-mode-label">Come generare il QR:
             <select id="open-docs-qr-mode">
-              <option value="single">Immagine singola (griglia unica)</option>
-              <option value="gif">Sequenza QR — GIF animata</option>
-              <option value="pages">Sequenza QR — pagine PNG</option>
+              <option value="single">QR singolo (una immagine)</option>
+              <option value="gif">QR animato (GIF, per uno schermo)</option>
+              <option value="pages">QR in pagine (PNG da stampare)</option>
             </select>
           </label>
           <label class="dim-picker">

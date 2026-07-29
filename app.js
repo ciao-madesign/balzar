@@ -1,3 +1,13 @@
+// Frontend della demo web (index.html). Organizzato a blocchi isolati,
+// ciascuno delimitato da un banner "// ----- <nome> -----":
+//   - Helper condivisi: setStatus/fileToBase64/postJSON/fmtBytes/render/
+//     downloadBlob/base64ToBytes/setupQrButton (usati da tutti i blocchi).
+//   - tabs: navigazione a due livelli (activateProduct/activateTab).
+//   - un blocco per encoder/consultatore: encode immagine, vettoriale,
+//     video, sequenza, assiemi 3D, apri programma (Balzar Live).
+// Ogni chiamata a un endpoint /api/* passa da postJSON (un solo punto per
+// il contratto {ok,...}); nessun blocco reimplementa fetch/parse/errore.
+
 const dropzone = document.getElementById("drop");
 const fileInput = document.getElementById("file-input");
 const browseBtn = document.getElementById("browse-btn");
@@ -50,12 +60,36 @@ function fileToBase64(file) {
   });
 }
 
+// Shared POST-to-JSON helper: every encoder/render/QR call in this file
+// hits a serverless endpoint with the same shape (POST JSON, expect
+// {ok, ...} or {ok:false, error}). Consolidated here so the 8 call
+// sites are one line each and the error contract lives in one place.
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+  return json;
+}
+
 // Vercel rifiuta body oltre ~4.5MB; il base64 aggiunge ~33%, quindi il
 // file originale deve stare sotto ~3.3MB. Meglio dirlo subito e chiaro.
 const MAX_FILE_BYTES = 3.3 * 1024 * 1024;
 
 async function handleFile(file) {
   resultEl.hidden = true;
+  // Un file vettoriale (SVG/DXF) finito nell'encoder generico non va
+  // rasterizzato (Pillow fallirebbe): passa alla scheda "Vettoriale" e usa
+  // l'ingestione dedicata, invece di dare un errore.
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".svg") || lower.endsWith(".dxf")) {
+    activateTab("vector");
+    handleVectorFile(file);
+    return;
+  }
   if (file.size > MAX_FILE_BYTES) {
     setStatus(
       `File troppo grande (${(file.size / 1048576).toFixed(1)} MB): il limite di upload è ~3.3 MB. ` +
@@ -81,13 +115,7 @@ async function handleFile(file) {
 
     const data = dataUrl.split(",", 2)[1];
 
-    const res = await fetch("/api/encode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, max_dim: maxDimVal }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode", { data, max_dim: maxDimVal });
 
     lastResult = json;
     render(json, file);
@@ -140,14 +168,37 @@ function render(r, file) {
   resultEl.hidden = false;
 }
 
-function downloadBlob(bytes, filename, mime) {
-  const blob = new Blob([bytes], { type: mime });
+function downloadBlob(data, filename, mime) {
+  // Nel guscio desktop (pywebview/WKWebView) i download via blob NON
+  // funzionano: il webview naviga verso il blob invece di scaricarlo,
+  // riempiendo la finestra senza modo di tornare indietro. In quel caso
+  // usa il ponte nativo (finestra "Salva con nome" del SO). Nel browser
+  // (demo web) resta il classico <a download>. `data` puo' essere un
+  // Uint8Array/ArrayBuffer o un Blob (es. canvas.toBlob della scheda ricambio).
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_file) {
+    _saveViaNative(data, filename);
+    return;
+  }
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function _saveViaNative(data, filename) {
+  // Passa i byte come base64 all'API Python (window.pywebview.api.save_file),
+  // che apre la finestra di salvataggio nativa e scrive il file.
+  if (data instanceof Blob) {
+    const r = new FileReader();
+    r.onload = () => window.pywebview.api.save_file(filename, r.result.split(",", 2)[1]);
+    r.readAsDataURL(data);
+  } else {
+    const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+    window.pywebview.api.save_file(filename, bytesToB64(u8));
+  }
 }
 
 function base64ToBytes(b64) {
@@ -201,13 +252,7 @@ function setupQrButton(prefix, getPayloadBase64) {
     dlBtn.hidden = (mode === "pages");
     lastDownload = null;
     try {
-      const res = await fetch("/api/qr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload_base64: payloadB64, mode, grid_dim: gridDim }),
-      });
-      const json = await res.json();
-      if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+      const json = await postJSON("/api/qr", { payload_base64: payloadB64, mode, grid_dim: gridDim });
 
       noteEl.classList.remove("error");
       if (json.mode === "single") {
@@ -280,12 +325,24 @@ dlProgramBtn.addEventListener("click", () => {
 setupQrButton("encode", () => (lastResult && !lastResult.payload_omitted) ? lastResult.payload_base64 : null);
 
 // ---------------------------------------------------------- tabs
+//
+// Two-level navigation, kept deliberately thin so the level-2 mechanism
+// (activateTab + the tab-*/panel-* id contract) is UNCHANGED from before
+// the level-1 (Crea/Apri) wrapper was added on top of it:
+//   level 1: activateProduct("crea"|"apri") -> shows one tab-group, hides
+//            the other, and makes sure a tab within it is active.
+//   level 2: activateTab(name) -> the original single-panel switch.
 
 const TAB_NAMES = ["encode", "vector", "video", "sequence", "3d", "open"];
 const tabButtons = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`tab-${n}`)]));
 const tabPanels = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`panel-${n}`)]));
 
+let activeTab = "3d";  // 3D is the promoted default landing (front-and-center
+                       // feature); tracked so activateProduct can tell whether
+                       // the current tab already belongs to the target product
+
 function activateTab(tab) {
+  activeTab = tab;
   for (const name of TAB_NAMES) {
     const active = name === tab;
     tabButtons[name].classList.toggle("active", active);
@@ -294,6 +351,29 @@ function activateTab(tab) {
 }
 for (const name of TAB_NAMES) {
   tabButtons[name].addEventListener("click", () => activateTab(name));
+}
+
+// level 1: which modes belong to each product, and which group container
+// to reveal. The tab lists mirror the two .tab-group blocks in index.html.
+const PRODUCTS = {
+  crea: { group: "group-studio", tabs: ["3d", "encode", "vector", "video", "sequence"] },
+  apri: { group: "group-live", tabs: ["open"] },
+};
+const productButtons = { crea: document.getElementById("product-crea"),
+                         apri: document.getElementById("product-apri") };
+
+function activateProduct(name) {
+  for (const [p, cfg] of Object.entries(PRODUCTS)) {
+    const active = p === name;
+    productButtons[p].classList.toggle("active", active);
+    document.getElementById(cfg.group).hidden = !active;
+  }
+  // only switch the active mode if the current one isn't in this product,
+  // so toggling back and forth keeps your place within a product
+  if (!PRODUCTS[name].tabs.includes(activeTab)) activateTab(PRODUCTS[name].tabs[0]);
+}
+for (const name of Object.keys(PRODUCTS)) {
+  productButtons[name].addEventListener("click", () => activateProduct(name));
 }
 
 // -------------------------------------------------------- ingestione vettoriale (SVG/DXF)
@@ -351,13 +431,8 @@ async function handleVectorFile(file) {
   setVectorStatus(`Ingestione di "${file.name}" in corso…`);
   try {
     const data = await fileToBase64(file);
-    const res = await fetch("/api/encode_vector", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, filename: file.name, max_dim: parseInt(vectorMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_vector",
+      { data, filename: file.name, max_dim: parseInt(vectorMaxDim.value, 10) });
 
     lastVectorResult = json;
     if (lower.endsWith(".svg")) {
@@ -472,13 +547,8 @@ async function handleVideoFile(file) {
     videoImgOriginal.src = dataUrl;
     const data = dataUrl.split(",", 2)[1];
 
-    const res = await fetch("/api/encode_video", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, max_dim: parseInt(videoMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_video",
+      { data, max_dim: parseInt(videoMaxDim.value, 10) });
 
     lastVideoResult = json;
     renderVideoResult(json);
@@ -652,13 +722,8 @@ sequenceEncodeBtn.addEventListener("click", async () => {
       filename: f.name,
       data: await fileToBase64(f),
     })));
-    const res = await fetch("/api/encode_sequence", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, mode, max_dim: parseInt(sequenceMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_sequence",
+      { files, mode, max_dim: parseInt(sequenceMaxDim.value, 10) });
 
     if (mode === "independent") {
       renderIndependentResults(json);
@@ -743,13 +808,7 @@ function renderIndependentResults(resp) {
       const btn = e.currentTarget;
       btn.disabled = true;
       try {
-        const res = await fetch("/api/qr", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ payload_base64: item.payload_base64 }),
-        });
-        const qrJson = await res.json();
-        if (!qrJson.ok) throw new Error(qrJson.error || "errore sconosciuto");
+        const qrJson = await postJSON("/api/qr", { payload_base64: item.payload_base64 });
         lastQrB64 = qrJson.qr_png_base64;
         qrImg.src = "data:image/png;base64," + lastQrB64;
         qrNote.textContent = qrJson.single_qr
@@ -1383,13 +1442,7 @@ async function handleThreedFile(file) {
         body.documents.push({ label: df.name, data: await fileToBase64(df) });
       }
     }
-    const res = await fetch("/api/encode_3d", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_3d", body);
 
     lastThreedResult = json;
     renderThreedResult(json);
@@ -1469,6 +1522,11 @@ const openProgramText = document.getElementById("open-program-text");
 const openDlPng = document.getElementById("open-dl-png");
 const openDlGif = document.getElementById("open-dl-gif");
 const openDlSvg = document.getElementById("open-dl-svg");
+// "Altre opzioni" in questo pannello ha come unico figlio il download SVG:
+// tienilo nascosto quando l'SVG non c'e', cosi' la disclosure non si apre
+// mai su una sezione vuota (l'SVG e' disponibile solo per un programma 2D
+// vettoriale, non per un raster o un multi-frame).
+const openMoreActions = document.getElementById("open-more-actions");
 const openDlPayload = document.getElementById("open-dl-payload");
 const openSvgReason = document.getElementById("open-svg-reason");
 
@@ -1522,13 +1580,7 @@ async function handleOpenData(dataB64, label) {
   openDocsResultEl.hidden = true;
   setOpenStatus(`Apertura di ${label} in corso…`);
   try {
-    const res = await fetch("/api/render", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: dataB64 }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/render", { data: dataB64 });
 
     lastOpenResult = null;
     lastOpen3dResult = null;
@@ -1585,6 +1637,7 @@ function renderOpenResult(r) {
   }
 
   openDlSvg.hidden = !r.svg_available;
+  openMoreActions.hidden = !r.svg_available;
   openSvgReason.hidden = r.svg_available;
   if (!r.svg_available) {
     openSvgReason.textContent = "SVG non disponibile: " + r.svg_reason;

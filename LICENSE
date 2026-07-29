@@ -1,0 +1,63 @@
+Balzar — Licenza proprietaria (closed beta)
+Copyright © 2026 Michele Aldeni. Tutti i diritti riservati.
+
+===============================================================================
+1. Proprietà
+===============================================================================
+Il software "Balzar" — comprensivo del codice sorgente, degli eseguibili, dei
+formati di file (BZR1, BZM1, BZX1, BZC1 e successivi), della documentazione e
+di ogni materiale correlato prodotto nell'ambito di questo progetto (di seguito
+il "Software") — è di esclusiva proprietà di Michele Aldeni.
+
+Nessun diritto è concesso se non quelli espressamente indicati di seguito.
+Tutti gli altri diritti sono riservati.
+
+===============================================================================
+2. Concessione per la beta chiusa
+===============================================================================
+Durante la fase di beta chiusa, il Software è messo a disposizione di un
+numero ristretto di tester selezionati, al solo scopo di valutarne il
+funzionamento e fornire riscontri. In questa fase, e salvo diverso accordo
+scritto con il titolare del copyright, al tester NON è consentito:
+
+  a) ridistribuire, pubblicare, rivendere o cedere il Software a terzi;
+  b) usare il Software per scopi commerciali o produttivi;
+  c) modificare, decompilare o creare opere derivate dal Software;
+  d) rimuovere o alterare gli avvisi di copyright o di licenza.
+
+L'accesso alla beta può richiedere una chiave di attivazione fornita dal
+titolare del copyright. La chiave è personale rispetto al programma beta e
+non va condivisa al di fuori del gruppo di tester autorizzati.
+
+===============================================================================
+3. Nessuna garanzia
+===============================================================================
+Il Software è fornito "così com'è", senza garanzie di alcun tipo, esplicite o
+implicite, incluse — a titolo esemplificativo — le garanzie di commerciabilità,
+idoneità a uno scopo particolare e non violazione. In nessun caso il titolare
+del copyright sarà responsabile per danni derivanti dall'uso del Software.
+
+===============================================================================
+4. Sviluppi futuri
+===============================================================================
+Il presente regime di licenza vale per la fase di beta. Al termine della beta,
+il titolare del copyright deciderà a propria discrezione se e come distribuire
+il Software commercialmente o rilasciarlo sotto una licenza diversa. Fino ad
+allora, valgono i termini qui indicati.
+
+===============================================================================
+5. Componenti di terze parti
+===============================================================================
+Il Software incorpora componenti open-source di terze parti, ciascuno regolato
+dalla propria licenza, elencati nel file THIRD-PARTY-NOTICES.md. Nulla nella
+presente licenza limita, restringe o sostituisce i diritti concessi da quelle
+licenze di terze parti sui rispettivi componenti: la "riserva di tutti i
+diritti" di cui sopra riguarda esclusivamente il codice e i materiali originali
+di Balzar, non i componenti di terze parti, che restano soggetti ai propri
+termini. Il rispetto di tali termini (attribuzione, avvisi, obblighi LGPL) è
+documentato in THIRD-PARTY-NOTICES.md.
+
+===============================================================================
+Contatti
+===============================================================================
+Per richieste relative alla licenza: Michele Aldeni.

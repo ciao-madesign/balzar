@@ -1719,7 +1719,7 @@ subito sotto l'`<h1>`.
 
 ### 2.11 Test
 
-342 test, tutti verdi (`python3 -m unittest discover -s tests`):
+346 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1989,24 +1989,13 @@ scansione whole-image su una griglia completa) — vedi §2.4b).
     `_Shape` di `vectorio.py` (già strutturate per kind/geom/layer) nel
     formato a coppie codice/valore DXF — probabilmente il pezzo più
     semplice di questa lista, perché il modello dati esiste già.
-13. **"3D filtered mode"** (nome scelto in sessione): mostrare solo gli
-    assiemi di primo livello nominati dal disegnatore, nascondendo
-    sotto-codici/sotto-assiemi che possono essere informazione
-    riservata (part number proprietari, dettagli costruttivi interni).
-    Proposto e discusso, esplicitamente **rimandato** a valutazione
-    futura, non ancora iniziato. Punto tecnico chiave emerso nella
-    discussione, da tenere presente quando si riprende: **nascondere
-    solo nella UI del viewer non basta** — il `.glb` scaricabile
-    contiene comunque nomi e gerarchia completi di ogni sotto-parte,
-    ispezionabili da chiunque con un viewer glTF generico o un editor
-    di testo (è JSON+binario). Una vera riservatezza richiederebbe
-    unire la geometria sotto il livello scelto già in fase di export
-    (`scene3d.py`/`gltf.py`, non un filtro lato client) — le sotto-parti
-    nascoste diventerebbero una singola mesh anonima, senza nomi né
-    materiali distinti, con il costo esplicito di perdere il
-    click-to-select per quelle sotto-parti specifiche (un compromesso
-    riservatezza-vs-interattività, non un dettaglio implementativo
-    gratuito).
+13. ~~"3D filtered mode"~~ — **fatto**: `merge_named_groups`
+    (`balzar/scene3d.py`, §9.31 — costruito per un motivo diverso,
+    ridurre il payload) risolve esattamente il problema tecnico chiave
+    identificato qui ("nascondere solo nella UI non basta, il `.glb`
+    scaricabile contiene comunque nomi e gerarchia complete") — vedi
+    §9.32 per la verifica esplicita byte-per-byte che i nomi dei
+    sotto-assiemi nascosti non sopravvivono né nel payload né nel GLB.
 
 ## 6. Applicazioni target (valutate, non solo elencate)
 
@@ -3559,11 +3548,54 @@ originali) darebbe un'impressione di pianificazione che non esiste —
 restano idee valutate, non impegni, esattamente come STEP in §7.3.
 
 **Stato**: valutata, non implementata. Nessun modulo `bridge.py` nel
-repository, nessuna dipendenza a protocolli industriali installata,
-nessun formato CSV allarmi esteso. Vedi anche il documento di visione
-separato (vedi §11) per il posizionamento di prodotto (Balzar Studio /
-Balzar Live) — questa sezione resta il riferimento tecnico su cosa
-esiste davvero e cosa mancherebbe.
+repository, nessuna dipendenza a protocolli industriali installata.
+Vedi anche il documento di visione separato (vedi §11) per il
+posizionamento di prodotto (Balzar Studio / Balzar Live) — questa
+sezione resta il riferimento tecnico su cosa esiste davvero e cosa
+mancherebbe.
+
+**Aggiornamento di sessione successiva (nessun codice toccato, solo
+scoping)**: punto 1 della lista sopra ("estendere `parse_alarm_csv` con
+colonne opzionali") è ormai **superato**, non più da fare — la tabella
+componenti è stata generalizzata a contenuto/colonne completamente
+liberi in §9.29 (`ComponentTable`), quindi un eventuale campo
+"documento_procedura" del Bridge non richiede più nessuna estensione:
+è già solo una colonna in più in un CSV a schema libero.
+
+Chiesto esplicitamente all'utente quale sistema reale userebbe da
+integrare (Siemens? quale gamma di PLC? quale protocollo?), la
+risposta è stata di **non decidere ancora**: "principalmente PLC
+Siemens ma non solo", nessun impegno su un modello/protocollo
+specifico, e la richiesta esplicita di **lasciare aperta la strada
+all'automazione** invece di costruire un driver per un sistema preciso
+— la sorgente del segnale potrebbe essere un PLC (via S7comm/OPC UA),
+uno HMI web-based, o altro ancora non identificato. Discussi in sessione
+(nessuna implementazione) i compromessi principali senza impegnarsi:
+OPC UA come protocollo più probabile per coprire "non solo Siemens" in
+un colpo solo (standard aperto IEC 62541, nativo sugli S7-1500,
+supportato da altri vendor) contro S7comm via `python-snap7` (via
+Siemens-specifica, non ufficialmente supportata da Siemens stesso, utile
+solo per PLC più datati senza OPC UA); l'opzione di agganciarsi a uno
+strato SCADA/MES/historian già esistente invece che al PLC direttamente,
+spesso preferibile per motivi di sicurezza di rete OT/IT (segmentazione,
+niente nuovo agente da far approvare sulla rete di fabbrica); il
+vincolo **read-only** (punto 4 sopra) confermato come fermo
+indipendentemente da quale sistema si scelga.
+
+**La conseguenza pratica di "lasciare aperta la strada" è già scritta
+al punto 2 della lista sopra, non un'idea nuova**: un endpoint HTTP
+locale generico (`POST /set_alarm`) sul server già avviato da
+`open_glb_in_browser` è per costruzione **agnostico rispetto al
+protocollo/vendor** — qualunque sistema esterno capace di fare una
+chiamata HTTP (un PLC tramite un piccolo script/gateway, uno HMI
+web-based tramite un webhook, un MES, letteralmente qualunque cosa con
+capacità di scripting minime) può usarlo senza che balzar debba avere
+codice su misura per quel sistema specifico. Quando si riprenderà
+questo lavoro, il punto 2 resta quindi il pezzo giusto da costruire per
+primo — non perché sia "il più facile", ma perché è l'unico dei quattro
+punti che non richiede ancora di sapere con quale sistema reale ci si
+integrerà: i driver di protocollo specifici (punto 3) restano
+esplicitamente rimandati a quando quella decisione sarà presa.
 
 ### 9.20 Demo web riorganizzata in Balzar Studio / Balzar Live; "Apri programma" diventa un apritore generico
 
@@ -4833,10 +4865,67 @@ Xvfb per il dialog GUI (dialog monkeypatchato, mainloop reale pompato):
 prompt mostrato solo per `.3dxml`, nomi passati correttamente fino a
 `encode_3dxml_file`, job completato senza errori. 342 test totali.
 
+### 9.32 "3D filtered mode" chiuso: `merge_names` risolve già la riservatezza, non solo la dimensione
+
+Seguito diretto di sessione, priorità 6 dopo aver chiuso la 1 (§9.30/
+§9.31). Rileggendo §5 punto 13 ("3D filtered mode", mai iniziato):
+l'obiettivo lì descritto — mostrare solo gli assiemi di primo livello
+nominati dal disegnatore, nascondendo sotto-codici/sotto-assiemi che
+possono essere informazione riservata (part number proprietari,
+dettagli costruttivi interni) — e il vincolo tecnico chiave già
+identificato allora ("nascondere solo nella UI del viewer non basta:
+il `.glb` scaricabile contiene comunque nomi e gerarchia complete di
+ogni sotto-parte, ispezionabili da chiunque con un viewer glTF generico
+o un editor di testo") sono **esattamente** ciò che `merge_named_groups`
+(§9.31) già fa, costruito per un motivo diverso (ridurre byte, non
+riservatezza). Confermato con l'utente prima di scrivere altro codice:
+riuso diretto, stessa interfaccia (`merge_names`), nessun meccanismo
+nuovo — l'utente elenca esplicitamente i nomi dei sotto-assiemi da
+nascondere, esattamente come già fa per il risparmio di byte.
+
+**Perché funziona per la riservatezza, non solo per la dimensione**:
+`merge_named_groups` non nasconde solo — **elimina** (`_prune_unreachable`)
+i `Reference`/`Shape` dei sotto-assiemi non più raggiunti dopo la
+fusione. Non c'è nulla da "non mostrare": i nomi/materiali dei
+sotto-assiemi nascosti non esistono più nell'oggetto `Scene3D`, quindi
+non possono comparire né nel payload BZM1 né nel GLB esportato
+**quale che sia il codice a valle** — a differenza di `collapse_names`
+(generate_bom/scene3d_to_glb, §9.21), che raggruppa solo la vista
+BOM/evidenziazione ma lascia intatta l'intera geometria+nomi nel GLB
+scaricabile (nessuna vera riservatezza, esattamente il problema che
+questo punto voleva risolvere).
+
+**Verificato byte-per-byte, non assunto** (`tests/test_scene3d.py::
+TestConfidentialMerge`, 4 nuovi test): costruita una scena sintetica
+con due parti dai nomi deliberatamente proprietari
+(`PN-88213-INTERNAL`, `PN-90144-PROPRIETARY`) sotto un sotto-assieme
+pubblico (`AssiemePubblico`), fusa con `merge_names={"AssiemePubblico"}`:
+- **payload**: nessuna delle due stringhe compare nel corpo decompresso
+  del BZM1 (un controllo sui byte compressi sarebbe stato un test
+  debole — quasi ogni stringa "non c'è" in dati deflate — quindi il
+  test decomprime prima di cercare, verificando i byte che
+  `_deserialize` legge davvero); il nome pubblico del gruppo resta,
+  correttamente (è l'unica identità che deve restare visibile);
+- **BOM**: `generate_bom` mostra **solo** `AssiemePubblico`, zero righe
+  per le parti nascoste;
+- **GLB esportato**: nessuna delle due stringhe compare da nessuna
+  parte nei byte del file — il controllo diretto sul file che un utente
+  scaricherebbe e ispezionerebbe con un viewer glTF generico o un
+  editor di testo, non solo sul percorso di decodifica di balzar;
+- **caso di controllo**: la stessa scena **senza** fusione **lascia
+  davvero trapelare** entrambe le stringhe nel GLB — prova diretta che
+  il test sopra misura una proprietà reale, non una tautologia.
+
+**Nessun codice nuovo nel motore** — solo verifica esplicita di una
+proprietà che il meccanismo già costruito per §9.31 possedeva per
+costruzione, non ancora controllata sotto questa lente. Nessuna
+modifica a CLI/GUI/webapi (già wired in §9.31, stessa interfaccia
+serve entrambi gli scopi). Suite completa: 346 test, tutti verdi.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 342 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 346 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
@@ -4870,3 +4959,327 @@ sostitutivo: le sezioni corrispondenti restano qui, questo file resta la
 fonte tecnica di verità; `VISIONE.md` è la vista di sintesi condivisibile
 con chi non ha bisogno del log di sessione completo. Tenerli allineati a
 mano quando cambia la sostanza di una delle sezioni duplicate.
+
+## 12. Percorso verso la beta: licenza, packaging, roadmap
+
+Decisione di sessione (con l'utente): passare da "codice funzionante" a
+"beta installabile e testabile dai primi utenti". Le funzionalità sono già
+complete — questo lavoro è **packaging, distribuzione e igiene legale**, non
+capacità del motore. Il riferimento operativo vive in `ROADMAP.md` (radice
+del repo); questa sezione è il log tecnico di cosa è stato deciso e fatto.
+
+**Modello di distribuzione scelto**: **programma installabile su licenza**,
+non pubblicazione su store. Verificato in sessione (non a memoria): per
+Windows, macOS e Android questo è possibile **senza** passare da alcun
+marketplace — Windows `.exe`/installer diretto (avviso SmartScreen aggirabile
+se non firmato), macOS `.dmg` con Developer ID (Gatekeeper aggirabile senza
+notarizzazione a pagamento), Android sideload di un `.apk` (la firma è
+auto-generata, requisito di build, non un cancello di store). **iOS** è
+l'unica eccezione (di fatto serve store o enterprise) — fuori scope, non
+richiesto.
+
+**Ordine di rilascio deciso**: prima desktop (macOS/Windows, test sul
+MacBook Air Apple-Silicon dell'utente), poi Android. Onestà dichiarata:
+Android è l'ordine **più difficile**, non il più facile — l'app desktop
+(`gui.py`) esiste già, mentre il motore è portabile ma la UI Tkinter no
+(non gira su mobile). Approccio Android scelto per la beta: **server Python
+locale + WebView dentro l'APK**, che riusa l'intera UI web (`index.html` +
+`webapi.py`) e la scansione QR già lato browser (`jsQR`), senza riscrivere
+la UI. Correzione onesta messa a verbale: questa beta WebView **è già
+pienamente offline** (il server gira su `127.0.0.1` sul telefono, niente
+esce dal dispositivo; `model-viewer`/`jsQR` sono vendorizzati, non da CDN) —
+quindi "WebView" **non** contraddice il "tutto offline". Una futura app
+nativa resta desiderabile ma per **footprint/UX native/avvio**, non per
+l'offline (che è già garantito) — documentato con la motivazione corretta
+in `ROADMAP.md`, per non costruire una roadmap su un presupposto falso.
+
+### 12.1 Licenza: tutti i diritti riservati + note di terzi trasparenti
+
+Regime deciso per la beta: **tutti i diritti riservati a Michele Aldeni**
+(`LICENSE`, proprietaria closed-beta), con **citazione trasparente e
+completa di ogni licenza di terzi** (`THIRD-PARTY-NOTICES.md`) per non
+esporre il progetto a rischi legali. La riserva di diritti copre solo il
+codice originale di Balzar, non i componenti di terze parti, che restano
+soggetti ai propri termini — dichiarato esplicitamente nel `LICENSE` §5.
+
+Licenze di terzi verificate sui file/pacchetti reali (non a memoria): Pillow
+HPND (MIT-CMU), qrcode BSD, pyzbar MIT, **libzbar LGPL-2.1** (l'unico
+non-permissivo — obbligo di linking dinamico soddisfatto: `pyzbar` la carica
+via `ctypes`, mai statica, `libzbar.so.0` bundlata come file separato dal
+build PyInstaller, §9.13), `model-viewer` 4.3.1 Apache-2.0 (con componenti
+BSD-3-Clause di Google/lit incorporati, attribuzioni preservate negli header
+`@license` del file vendorizzato), `jsQR` 1.4.0 Apache-2.0. Dopo la beta:
+decisione su commercializzazione/apertura — rimandata.
+
+### 12.2 Gate di licenza beta: `balzar/license.py` (soft gate, non DRM)
+
+Requisito deciso: all'avvio l'app chiede una **chiave di attivazione**; per
+la beta la chiave è **unica e condivisa**, decisa dall'utente. È un cancello
+beta, non una protezione anti-copia — dichiarato onestamente nel modulo:
+il codice Python è ispezionabile e l'hash della chiave è comunque incorporato
+nel binario (deve esserlo, la chiave è la stessa per tutti), quindi scoraggia
+la condivisione casuale, non un attaccante. Il meccanismo vero (chiavi
+per-utente, firma asimmetrica) verrà dopo la beta.
+
+Meccanismo: confronta l'**hash SHA-256** della chiave inserita con
+`BETA_KEY_SHA256` incorporato (mai la chiave in chiaro; `hmac.compare_digest`
+a tempo costante), persiste l'attivazione in `~/.balzar/activation.json`
+(scrittura atomica tmp+`os.replace`, stessa disciplina di `library.py`;
+override `BALZAR_LICENSE_DIR` per i test). **Fail-closed**: finché
+`BETA_KEY_SHA256` è vuoto (com'è nel repo), il gate rifiuta qualunque chiave
+— una build senza chiave impostata non è utilizzabile, per scelta esplicita.
+L'attivazione salvata memorizza l'hash con cui è stata fatta: cambiare la
+chiave della build (nuovo `BETA_KEY_SHA256`) invalida le attivazioni vecchie.
+L'hash della chiave si imposta in fase di build senza far transitare la
+chiave in chiaro nei sorgenti/git: `python3 -m balzar.license hash-key`
+(input nascosto via `getpass`, stampa il SHA-256 da incollare).
+
+**Non ancora wired nelle interfacce**: `license.py` è il meccanismo + i test
+(9 test in `tests/test_license.py`, logica pura file/JSON — verifica chiave
+corretta/errata, tolleranza spazi, fail-closed quando non configurato,
+persistenza, invalidazione al cambio chiave, file di stato corrotto); il
+wiring all'avvio della GUI desktop (`gui.py`) e della WebView Android è un
+passo della Fase 1/2 di `ROADMAP.md`, non ancora fatto (il gate va agganciato
+alle interfacce impacchettate, non alla CLI di sviluppo). Versione del
+pacchetto portata a `0.9.0b1` (prima linea beta).
+
+**Da questo ambiente Linux è producibile**: i documenti legali, il gate
+`license.py`, e (prossimi) `balzar.spec` rifinito, `requirements.txt`, script
+di build e istruzioni. **Non producibile da qui**: i binari macOS/Windows e
+l'APK Android reali (servono quelle macchine/SDK — li produce l'utente).
+
+### 12.3 Fase 1 desktop — preparazione al packaging (fatta da qui)
+
+Tutto ciò che non richiede una macchina macOS/Windows reale, con verifica.
+
+**Gate di licenza agganciato alla GUI desktop** (`gui.py` `main()` →
+`_ensure_licensed`): all'avvio la root Tk è nascosta finché la licenza non è
+ok. La **politica** (quando applicare il gate) vive in
+`license.startup_decision(frozen)`, testabile senza Tk — 4 esiti:
+`STARTUP_OPEN` (build di sviluppo da sorgente, non configurata → nessun gate,
+comodità di sviluppo), `STARTUP_UNCONFIGURED` (build **impacchettata** senza
+chiave → **rifiutata**, fail-closed, intercetta il "ho dimenticato di
+impostare la chiave"), `STARTUP_ACTIVATED` (già attivata → parte),
+`STARTUP_NEED_KEY` (chiede la chiave, fino a 3 tentativi, annulla = esce).
+`frozen` = `getattr(sys, "frozen", False)` (vero solo sotto PyInstaller).
+**Verificato davvero sotto Xvfb con python3.12** (Tk reale, non solo la logica
+pura): 5 scenari — dev apre senza chiedere, chiave errata rifiuta, chiave
+giusta attiva e passa, già-attivata passa senza chiedere, annulla rifiuta.
+
+**Bug di packaging reale trovato e corretto (non ipotetico)**: `viewer3d.py`
+e `live_scan_server.py` risolvevano i JS vendorizzati
+(`model-viewer.min.js`; `jsQR.min.js`/`qr-transport-core.js`/
+`qr-camera-scanner.js`) via `dirname(dirname(__file__))` = radice del repo —
+sotto un bundle PyInstaller quel percorso punta dentro `_MEIPASS` **senza i
+file**, quindi nel pacchetto la **vista 3D e la scansione fotocamera si
+sarebbero rotte**. Fix all'altitudine giusta: nuovo modulo `balzar/assets.py`
+(`asset_root()`/`vendored_path()`, un solo punto di verità, frozen-aware via
+`sys._MEIPASS`) usato da entrambi i moduli; e `balzar.spec` che aggiunge i 4
+file a `datas` con dest `.` (la radice del bundle, dove `_MEIPASS` li cerca).
+Test `tests/test_assets.py` (3): la radice in dev è il repo, `vendored_path`
+compone il nome, **tutti e 4 i file esistono davvero** (così un rename senza
+aggiornare il `.spec` rompe un test, non il pacchetto silenziosamente).
+
+**`balzar.spec` rifinito**: `datas` dei JS vendorizzati (sopra), icona
+per-piattaforma (`assets/balzar.ico` Windows / `assets/balzar.icns` macOS /
+`.png` fallback) **guardata da `os.path.exists`** (un'icona mancante non rompe
+la build), e un `BUNDLE` `Balzar.app` con `bundle_identifier`/`info_plist` per
+macOS. Build ora via `pyinstaller balzar.spec`, non più il comando `--onefile`
+crudo (che ignorava asset e icona). Icona generata dogfooding Pillow
+(`assets/balzar.png`+`.ico`, quadrato accent #c77a2e + "b" geometrica, nessun
+font di sistema).
+
+**`requirements.txt`**: aggiunto `pyzbar` (richiesto per "Scansiona foto QR"
+nel pacchetto) e documentata la dipendenza **nativa** `libzbar0`/`brew
+install zbar`/wheel Windows, con la nota che senza di essa l'app parte
+comunque (solo la lettura QR da foto è disattivata; la fotocamera via jsQR
+non la richiede).
+
+**`BUILD.md`**: istruzioni per-OS (impostare la chiave beta con
+`license.py hash-key` senza committarla; build macOS su MacBook Air incl.
+generazione `.icns` con `sips`/`iconutil`; build Windows; bypass Gatekeeper/
+SmartScreen per i tester senza firma a pagamento).
+
+**Resta da fare sulla macchina dell'utente** (non producibile da qui): impostare
+`BETA_KEY_SHA256`, `pyinstaller balzar.spec` su macOS (MacBook Air) e su
+Windows, test dei binari reali. Il wiring del gate nella WebView Android è
+Fase 2.
+
+### 12.4 Gap reale trovato dalla prima build reale su Mac: SVG/DXF nel desktop
+
+Alla prima build/uso reale dell'app sul MacBook dell'utente, caricare un
+`.svg` ha dato `UnidentifiedImageError: cannot identify image file`. Causa
+(verificata nel codice, non ipotizzata): il dispatch di `gui.py` (`_worker`/
+`_dispatch_payload_bytes`) gestiva `.3dxml`/`.bzx`/`.b3d`/`.bzr` e per tutto
+il resto cadeva su `_job_from_image` → Pillow, che su un SVG solleva quel-
+l'errore. L'ingestione vettoriale (`vectorio.py`) esiste ed è completa da
+sessioni, ma era esposta **solo** in CLI (`encode-vector`) e nella demo web
+(tab Vettoriale), **mai agganciata all'app desktop** — proprio il caso d'uso
+guida (§6.1, disegni CAD esportati in SVG/DXF).
+
+Fix: nuovo `_job_from_vector` in `gui.py` (mirror di `_job_from_image`, usa
+`vectorio.ingest_vector_file`), più un ramo `.svg/.dxf` in `_worker` prima
+del dispatch generico e le estensioni aggiunte al dialog `open_file`.
+Trattato come un encode "create" (come immagine/3dxml): `is_live_artifact`
+resta `False`, i pulsanti 2D si abilitano (incluso "Esporta SVG", l'output usa
+il sottoinsieme vettoriale-sicuro), i motivi di scarto vengono mostrati nelle
+stats invece che nascosti (stessa onestà della CLI). Verificato sotto Xvfb
+(python3.12, Tk reale) su `examples/flangia_sorgente.svg` (231 B, 2077×) e
+`.dxf` (245 B): nessun crash, job valido, non marcato live-artifact.
+
+### 12.5 Decisione di architettura UI: guscio WebView unico (desktop + mobile), Tkinter come fallback
+
+Nata dalla prima build desktop reale su Mac: la GUI Tkinter è densa, non
+progettata, senza framing Studio/Live, e **molto diversa dalla demo web appena
+ridisegnata**. Constatazione onesta messa a verbale con l'utente: nei documenti
+il desktop è "il prodotto" e la web è "solo vetrina", ma la vetrina è più
+curata del prodotto. Ragionato con l'utente **prima di scrivere codice** e
+deciso.
+
+**Obiettivo finale dichiarato dall'utente** (verbatim del senso): un'app
+desktop/mobile **installabile e usabile come qualsiasi programma tipo Microsoft
+Word** — installazione banale che chiunque sa fare, doppio clic, lavora come un
+normale programma locale (finestra nativa, offline, nessun terminale/browser
+visibile). Chiarito il confine beta→finale: la finestra nativa offline è la
+beta (guscio WebView, sotto); "come Word" nel senso pieno richiede anche un
+**installer** (`.dmg` drag-to-Applicazioni / `setup.exe`) e la **firma del
+codice** (zero avvisi) — entrambi già in `ROADMAP.md`, rimandati oltre la beta
+funzionale. Divisione dei ruoli esplicita: la complessità (build/firma/
+installer) è tutta lato sviluppatore, una volta sola; l'utente finale riceve
+solo il pacchetto e fa il gesto banale.
+
+**Decisione (Strada B)**: unificare tutte le superfici sulla **stessa UI web**
+dentro un **guscio nativo**, invece di lucidare Tkinter (tetto estetico basso,
+e terrebbe tre UI separate da mantenere). Il desktop diventa una finestra
+**pywebview** (webview nativo del SO — WKWebView/WebView2/WebKitGTK) che mostra
+`index.html`+`app.js`+`style.css` serviti da un server locale in-process che
+instrada `/api/*` ai `handle_*` di `webapi.py` con `LOCAL_LIMITS`. Pienamente
+offline (`127.0.0.1`, nessun browser visibile) — lo stesso schema di app
+installabili come VS Code/Slack/Spotify, **non** "un sito". Scelte confermate
+dall'utente: **B**, **pywebview** (finestra app nativa, non browser di
+sistema), **Tkinter tenuta come fallback** (`--classic`/fallback automatico se
+pywebview manca), non cancellata.
+
+**Conseguenza strategica**: il round **stile** si fa **una volta sola** sulla
+web UI e migliora web + desktop + Android insieme (Fase 2 Android usa già lo
+stesso schema WebView, quindi condivide `localserver.py` e la web UI — nessuna
+terza interfaccia). Per questo lo stile viene **dopo** che il guscio è in piedi,
+non prima (altrimenti si stila alla cieca).
+
+**Confine di verifica onesto**: il server locale + il routing `/api/*` sono
+testabili in questo ambiente Linux con Playwright (riuso dell'harness già usato
+per la demo, cfr. `devserver_ux.py`); la **finestra pywebview** no (nessun
+backend webview/display qui) — si valida sul Mac. Dichiarato invece di fingere
+una verifica impossibile.
+
+**Passi stabiliti** (dettaglio in `ROADMAP.md` Fase 1b): 1) `balzar/
+localserver.py` (server+API, testabile qui); 2) bundling del frontend nel
+`.spec` (costruibile qui); 3) finestra pywebview + gate (costruibile qui,
+validabile sul Mac); 4) dettagli desktop — download via API pywebview,
+**Libreria rimandata** nella versione WebView (resta nel fallback Tkinter per
+la beta, è solo-desktop e non esiste nella web UI). Il motore, `webapi.py` (i
+handler restano identici) e la demo web/Vercel **non vengono toccati**.
+
+**Passo 1 ✅ (fatto, verificato qui)**: `balzar/localserver.py` — server
+in-process che serve la UI statica (da `assets.asset_root()`, frozen-aware) e
+instrada `/api/*` ai `handle_*` di `webapi.py` con `LOCAL_LIMITS`; bind
+**solo** a `127.0.0.1`, traversal rifiutato, `start_local_server(port=0)`
+ritorna `(server, url)` per il futuro entry point pywebview, più un `main()`
+standalone (`python3 -m balzar.localserver`). Verificato in due modi: (a) lo
+stesso harness Playwright della demo puntato al server di produzione (non al
+dev server scratch) — tutti i flussi Studio/Live encode/vector/video/QR/3D/
+open verdi, 0 errori JS; (b) `tests/test_localserver.py` (6 test senza
+Playwright, via `urllib`: index servito, file vendorizzato servito, traversal
+→ 404, `/api` sconosciuto → 404, roundtrip reale `/api/render` di un payload
+`BZR1`, corpo non-JSON → 500 onesto invece di crash). I `handle_*` non sono
+stati toccati: server locale ed endpoint Vercel li riusano identici, cambia
+solo il profilo di limiti.
+
+**Passo 2 ✅ (fatto, costruibile qui)**: `balzar.spec` ora bundla **tutto il
+frontend** in `datas` (glob dalla radice: 4 `*.html`, 2 `*.css`, 6 `*.js`
+inclusi i 4 JS vendorizzati e `app.js`, + 4 immagini `landing-img/`) — 16 file
+totali, con dest `.`/`landing-img` così `asset_root()` (=`_MEIPASS` in un
+bundle) li trova. Sostituisce la vecchia lista esplicita dei soli 4 JS
+vendorizzati. La verifica frozen reale (che il `.app` serva davvero la UI da
+`_MEIPASS`) fa parte del Passo 3 sul Mac.
+
+**Passo 3 ✅ (costruito qui; la finestra si valida sul Mac)**: guscio nativo.
+- `balzar/webview_app.py`: entry point del prodotto desktop. `run()` decide via
+  `license.startup_decision` quale pagina aprire (OPEN/ACTIVATED → `/index.html`,
+  NEED_KEY → `/activate.html`, UNCONFIGURED → finestra d'errore), avvia il
+  server locale con un route iniettato `/api/activate`, apre
+  `webview.create_window(...)`. `import webview` è **deferito** dentro `run()`
+  così il modulo importa anche senza pywebview e la logica è testabile in CI.
+- Gate **interamente web-based** (nessun Tkinter nel percorso WebView):
+  `activate.html` (form → `POST /api/activate` → redirect a `/index.html`),
+  route iniettato in `localserver` via il nuovo parametro `extra_routes`
+  (localserver resta disaccoppiato da `license.py`).
+- `balzar-app.py` (entry PyInstaller) ora chiama `webview_app.main`, che ricade
+  sulla **GUI Tkinter** se pywebview manca o con `--classic`. La CLI
+  `balzar gui` resta Tkinter (strumento di sviluppo). `pywebview` aggiunto a
+  `requirements.txt` (senza, fallback Tkinter).
+- Verificato qui: `tests/test_webview_app.py` (6 test — scelta pagina iniziale
+  per ogni decisione, route `/api/activate` con chiave giusta/sbagliata +
+  persistenza, `activate.html` servita, `run()` solleva `ImportError` senza
+  pywebview → fallback raggiungibile) + un **flusso Playwright end-to-end**
+  sull'`activate.html` reale (chiave sbagliata → errore resta sulla pagina;
+  chiave giusta → attiva e redirige a `/index.html` con la UI balzar presente).
+  **Non verificabile qui**: la finestra pywebview nativa (nessun backend webview
+  in Linux headless) — la valida Michele sul Mac (`pip install pywebview`,
+  rebuild, l'app apre una finestra nativa con la UI ridisegnata).
+
+**Validazione sul Mac (fatta da Michele) + Passo 4 avviato**: la finestra
+pywebview reale si apre con la UI web ridisegnata (da sorgente
+`python3 balzar-app.py`), file picker nativo e "genera QR" funzionanti. Due
+problemi reali trovati dall'uso e corretti:
+- **Download rotti in WKWebView** (il sintomo classico): un download via blob
+  `<a download>` **naviga** verso il blob invece di scaricarlo, riempiendo la
+  finestra senza modo di tornare indietro. Fix in un solo punto di
+  strozzatura (`downloadBlob` in `app.js`, usato da tutti i ~25 download):
+  nel guscio pywebview instrada al **ponte nativo** `window.pywebview.api.
+  save_file(filename, b64)` (nuova classe `_JsApi` in `webview_app.py`, apre
+  la finestra "Salva con nome" del SO via `create_file_dialog(SAVE_DIALOG)` e
+  scrive i byte); nel browser resta il classico `<a download>`. Gestisce sia
+  `Uint8Array` sia `Blob` (la scheda ricambio usa `canvas.toBlob`). Passata
+  `js_api=_JsApi()` a `create_window`.
+- **SVG nell'encoder generico dava errore** invece di usare l'encoder
+  dedicato: `handleFile` (scheda "Comprimi immagine") ora, se il file è
+  `.svg`/`.dxf`, passa alla scheda "Vettoriale" e chiama `handleVectorFile`
+  (niente rasterizzazione, come già fa il desktop Tkinter §12.4). Verificato
+  con Playwright: SVG dato a `#file-input` → auto-switch a `panel-vector` +
+  risultato vettoriale, zero errori JS.
+Il ponte di salvataggio nativo (finestra pywebview) si valida sul Mac; la
+logica browser (SVG-route, fallback `<a download>`) è verificata qui con
+Playwright. Suite Python invariata (nessuna riga JS testata da `unittest`).
+
+**`.app` impacchettato validato sul Mac** (Fase 1b chiusa): `rm -rf build dist
+&& pyinstaller balzar.spec` produce un `Balzar.app` che si apre come finestra
+nativa con la UI web ridisegnata; download nativi (finestra "Salva con nome"),
+encode/QR/3D funzionanti nel pacchetto. PyInstaller ha incluso pywebview/pyobjc
+senza hidden-import extra. Restano, per il prodotto "come Word" (Fase 1c): il
+`.dmg`/installer e la firma — rimandati oltre la beta funzionale.
+
+### 12.6 Round stile: professionale chiaro, accento blu (una UI per tutte le superfici)
+
+Deciso con l'utente ("professionale chiaro, niente arancione, più aria, meno
+parole"): ridisegno di `style.css` in passi isolati con harness a guardia,
+mostrato con mockup e screenshot reali prima/durante. Poiché la UI è ora
+condivisa (guscio WebView), lo stile migliora desktop + web + Android insieme.
+- **Token** (passo 1): palette chiara di default + scura curata
+  (`prefers-color-scheme`), accento **blu** `#2563eb`/`#4f83f1`, neutri puliti,
+  nuovi token `--accent-hover/-soft`, `--surface-2`, `--shadow(-sm)`,
+  `--radius*`, scala `--sp-*`.
+- **Tipografia/aria** (passo 2): wordmark da serif Georgia a `system-ui` 650,
+  spaziature più generose (max-width 920px).
+- **Componenti** (passo 3): `.panel` come card (superficie/bordo/ombra),
+  bottone primario blu pieno per l'azione principale (`[id$="dl-payload"]`) e
+  secondario pulito per il resto, `.purpose` come chip badge tenue, fix
+  contrasto `product-tab` attivo, dropzone/hover coerenti.
+- **Icona** (passo 4): `assets/balzar.{png,ico,icns}` rigenerate in blu,
+  accento di `activate.html` da arancione a blu.
+Verificato con l'harness UX (verde) e screenshot light+dark ad ogni giro.
+Nessun file `.py` toccato (solo CSS/HTML/icone). La landing **non** è stata
+toccata (usa il suo `landing.css`). Da validare live sul Mac + rebuild `.app`
+per l'icona blu. Restano possibili rifiniture minori (accento del viewer 3D
+`viewer3d.py`/`live_scan_server.py` ancora arancioni — non nel flusso app
+principale) e il taglio copy "meno parole" tab per tab.
