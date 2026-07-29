@@ -137,6 +137,13 @@ Stesso schema server locale + WebView, dentro un APK — quindi **condivide il
 - [ ] Build APK (SDK Android non presente in questo ambiente Linux) + firma con
       chiave auto-generata (requisito Android, non un cancello di store).
 - [ ] Sideload su device + checklist funzionale.
+- [ ] **Pagina iniziale di default = "Apri" (Balzar Live)**, non "Crea"
+      (Studio): i device Android saranno usati principalmente per **leggere**
+      QR e decodificare i balzar in essi contenuti, non per crearli. Sul
+      desktop il default resta "Crea"/3D. Meccanismo (UI condivisa): il guscio
+      Android carica `index.html` con un parametro (es. `?start=apri`) che
+      `app.js` legge all'avvio per chiamare `activateProduct("apri")` invece
+      del default; nessuna UI duplicata, solo un default per-superficie.
 
 **App nativa mobile futura**: desiderabile per footprint/UX native, **non** per
 l'offline (già garantito dal server locale). Documentata per non perderla, con
