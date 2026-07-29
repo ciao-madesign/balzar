@@ -1712,6 +1712,31 @@ ora porta due link ("torna alla home" verso `landing.html` · il vecchio
 (che prima non aveva alcuna riga `nav-links` di ritorno) una nuova riga
 subito sotto l'`<h1>`.
 
+**Riallineamento al restyling di `style.css` (§12.6), su richiesta
+esplicita di sessione**: il round stile "professionale chiaro, accento
+blu" fatto altrove nel progetto (accento `#2563eb`/`#4f83f1`, wordmark/
+titoli sans-serif system-ui invece di Georgia, nuovi token di ombra) è
+arrivato a `index.html`/`come-funziona.html`/`trasporto-qr.html`
+(condividono `style.css`) ma non a `landing.html`, che ha il suo
+`landing.css` separato e non era stata toccata da quel lavoro —
+verificato confrontando `9cfa83a` (ultimo commit noto della landing)
+con `origin/main` (33 commit più avanti), non assunto. Risultato prima
+del fix: cliccando dalla landing verso una qualunque delle tre pagine
+si passava visibilmente a un accento/font diversi, come un prodotto
+diverso. Fix: stessi valori di token (colore, peso `650`/`letter-
+spacing` dei titoli, favicon) portati in `landing.css`, `landing.css`
+resta comunque un file separato (stessa ragione originale: evitare le
+collisioni di specificità già viste tra pagine che condividono
+`style.css`). Nessuna modifica a copy/contenuti/struttura della
+landing: verificato che nessuna riga di testo fosse diventata
+fattualmente stale (tab riordinate con "Assemblee 3D" ora di default,
+gate di licenza beta solo sull'app desktop pacchettizzata — la demo web
+che la landing linka resta libera, invariata) prima di decidere di non
+toccare altro. Verificato con Playwright dopo l'allineamento: nessun
+errore console, nessun overflow orizzontale mobile, transizione
+landing→demo visivamente coerente; suite Python invariata (374 test,
+nessuna riga toccata era Python).
+
 ### 2.10 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
