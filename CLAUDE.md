@@ -5909,15 +5909,60 @@ e `null` per `handle_encode_3d`/un BZM1 nudo; un nuovo test per
 restituito correttamente, `info_table` resta ai valori di default).
 Suite completa: 402 test, tutti verdi.
 
-### 14.5 Prossimi slice (non ancora fatti)
+### 14.5 Slice 4a — `handle_encode_3d` sa produrre un bundle `KIND_ALARM_GRAPH` (fatto)
 
-- **Slice 4 — editor visivo** in Balzar Studio: drag-to-connect reale,
-  il pezzo più grande e nuovo, verificato dal mockup interattivo prima
-  di scrivere codice di produzione. Servirà anche estendere
-  `handle_encode_3d`/la GUI desktop con un modo di *produrre* un bundle
-  `KIND_ALARM_GRAPH` da input utente (oggi solo `_handle_render_bundle`
-  sa leggerne uno, nessun percorso di codifica da CSV+editor esiste
-  ancora su nessuna delle due interfacce).
+Primo dei due pezzi di Slice 4 (l'altro è l'editor visivo vero e
+proprio, §14.6): finché nessun endpoint sapeva *costruire* un bundle
+con un grafo allarmi da input utente, l'editor non avrebbe avuto nulla
+a cui inviare il risultato. `handle_encode_3d` guadagna un campo
+opzionale `alarm_graph` (un `AlarmGraph.to_json_dict()`, quello che
+l'editor client-side costruirà) — **alternativa più ricca a
+`alarm_csv`, mai insieme**: se entrambi sono presenti nella stessa
+richiesta, `alarm_graph` vince (stesso principio "il più ricco vince"
+già usato lato lettura in `_handle_render_bundle`), e `info_table`
+nella risposta torna ai valori di default invece di riportare una
+tabella che non è mai finita nel bundle.
+
+**Bug reale trovato dal test, non dalla lettura del codice**: il primo
+tentativo rendeva condizionale solo `collapse_names` (derivato da
+`alarm_graph` invece che da `info_table` quando il grafo vince), ma
+lasciava `info_table` calcolato comunque dal CSV piatto se `alarm_csv`
+era anche presente nella richiesta — risultato, la risposta riportava
+ancora la tabella piatta anche quando il grafo aveva vinto e quella
+tabella non era mai entrata nel bundle. `test_alarm_graph_wins_over_alarm_csv_when_both_given`
+ha fallito subito, prima di essere dichiarato pronto — corretto
+azzerando esplicitamente `info_table = None` nello stesso branch dove
+si sceglie `collapse_names` dal grafo.
+
+**Validazione**: prima di finalizzare il bundle,
+`bundle.unresolved_alarm_graph_procedures` (già scritta in Slice 2)
+viene richiamata sull'elenco di item appena costruito — un riferimento
+a procedura senza un documento corrispondente nella stessa richiesta
+fa fallire con un 400 chiaro che nomina l'etichetta mancante, invece
+di produrre silenziosamente un bundle con un pulsante "apri procedura"
+che non aprirebbe mai nulla. Stessa query che l'editor dovrebbe usare
+per decidere se abilitare il proprio bottone "Codifica pacchetto" —
+imposta qui comunque, perché questo endpoint non ha nessun altro
+cancello.
+
+Verificato: 6 test nuovi/estesi in `tests/test_webapi.py`
+(`TestHandleEncode3D`) — bundle prodotto con un vero item
+`KIND_ALARM_GRAPH`, precedenza confermata quando sia `alarm_csv` sia
+`alarm_graph` sono presenti (bug sopra, trovato scrivendo proprio
+questo test), `component` dell'allarme collassa la riga BOM esattamente
+come già faceva la cella della tabella piatta, riferimento a procedura
+senza documento rifiutato con 400 e nome dell'etichetta nel messaggio,
+grafo malformato (chiave mancante) rifiutato con 400 non un 500. Suite
+completa: 407 test, tutti verdi.
+
+### 14.6 Prossimi slice (non ancora fatti)
+
+- **Slice 4b — editor visivo** in Balzar Studio: drag-to-connect reale
+  nel tab "Assemblee 3D", verificato dal mockup interattivo prima di
+  scrivere codice di produzione — porta in `app.js` la stessa
+  interazione già mostrata, collegata al parsing client-side dei due
+  template CSV e alla nuova capacità di `handle_encode_3d` (§14.5) di
+  costruire il bundle finale.
 
 Ogni slice: implementazione mirata (no overcoding), test automatici
 verdi sull'intera suite, nota di decisione qui prima di passare allo

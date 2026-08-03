@@ -283,7 +283,21 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
     since chunk_payload/payload_to_qr_frames treat any payload as opaque
     bytes. `info_table` ({headers, rows}) is returned either way so the
     frontend can wire the 3D viewer's search bar immediately, without a
-    separate client-side CSV upload step."""
+    separate client-side CSV upload step.
+
+    Optional `alarm_graph` field (an AlarmGraph.to_json_dict(), built
+    client-side by the visual block/arrow editor -- Slice 4, CLAUDE.md
+    SS14): the richer alternative to `alarm_csv`, mutually exclusive
+    with it (same rule as everywhere else in this feature, see
+    balzar/bundle.py's module docstring) -- wins if somehow both are
+    given, same "richer one wins" precedent already used on the read
+    side (_handle_render_bundle). Packed as a KIND_ALARM_GRAPH item
+    instead of KIND_ALARM. Rejected with a clear 400 if any procedure it
+    references has no matching document among `documents` (a link the
+    read side could never actually open) -- checked with
+    bundle.unresolved_alarm_graph_procedures, the exact same query the
+    editor itself should run before enabling its own "codifica" button,
+    just enforced here too since this endpoint has no other gate."""
     data_b64 = body.get("data")
     if not data_b64:
         return 400, {"ok": False, "error": "campo 'data' mancante"}
@@ -305,16 +319,38 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
             info_table = parse_component_table_text(alarm_csv_text)
         except ValueError as exc:
             return 400, {"ok": False, "error": str(exc)}
-    # any cell value across the whole table is offered as a candidate to
-    # collapse its own BOM/GLB entry into a single row/highlight group
-    # instead of expanding to every individual leaf part underneath --
-    # see scene3d.generate_bom's collapse_names for why (a table often
-    # names a whole sub-assembly, e.g. "HEATER1", not one physical part).
-    # A candidate that doesn't match a real group name is simply
-    # ignored, so there's no need to know which column is "the
-    # component" here -- that's decided client-side, once this call's
-    # own BOM exists to test candidates against.
-    collapse_names = info_table.all_values() if info_table else None
+
+    # Slice 4 (CLAUDE.md SS14): the richer alarm/cause/procedure graph
+    # from the visual editor, instead of the flat CSV above -- mutually
+    # exclusive with it, wins if both are given (see this function's
+    # docstring).
+    alarm_graph_raw = body.get("alarm_graph")
+    alarm_graph_obj = None
+    if alarm_graph_raw:
+        from .alarm_graph import AlarmGraph
+        try:
+            alarm_graph_obj = AlarmGraph.from_json_dict(alarm_graph_raw)
+        except (KeyError, TypeError, IndexError, AttributeError) as exc:
+            return 400, {"ok": False, "error": f"grafo allarmi non valido: {exc}"}
+
+    # any candidate string (a component-table cell value, or an alarm's
+    # own `component` field) is offered to collapse its own BOM/GLB
+    # entry into a single row/highlight group instead of expanding to
+    # every individual leaf part underneath -- see scene3d.generate_bom's
+    # collapse_names for why (a table/alarm often names a whole
+    # sub-assembly, e.g. "HEATER1", not one physical part). A candidate
+    # that doesn't match a real group name is simply ignored, so there's
+    # no need to know which column/field is "the component" here --
+    # that's decided client-side once this call's own BOM exists.
+    if alarm_graph_obj is not None:
+        collapse_names = {a.component for a in alarm_graph_obj.alarms if a.component} or None
+        # the graph wins over the flat table (see this function's
+        # docstring) -- nulled here too so response["info_table"] below
+        # correctly reports "no flat table" instead of one that was
+        # parsed but never actually bundled.
+        info_table = None
+    else:
+        collapse_names = info_table.all_values() if info_table else None
 
     # extra consultable documents to bundle alongside the model: each
     # {label, data (base64)}. Carried as raw KIND_DOC bytes, no parsing.
@@ -376,18 +412,21 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         "glb_base64": "" if glb_omitted else glb_b64,
     }
 
-    if alarm_csv_text is not None or doc_items:
+    if alarm_csv_text is not None or doc_items or alarm_graph_obj is not None:
         import os as _os
 
-        from .bundle import (KIND_3D, KIND_2D, KIND_ALARM, KIND_DOC, BundleItem,
-                             encode_bundle)
+        from .bundle import (KIND_3D, KIND_2D, KIND_ALARM, KIND_ALARM_GRAPH, KIND_DOC,
+                             BundleItem, encode_bundle, unresolved_alarm_graph_procedures)
         from .payload import MAGIC as BZR1_MAGIC
         from .payload import encode_payload as encode_2d
         from .viewer3d import _render_2d_item
 
         bundle_items = [BundleItem(KIND_3D, "assembly.b3d", result.payload)]
         response_docs = []
-        if alarm_csv_text is not None:
+        if alarm_graph_obj is not None:
+            bundle_items.append(BundleItem(KIND_ALARM_GRAPH, "collegamento_allarmi.json",
+                                          alarm_graph_obj.to_bytes()))
+        elif alarm_csv_text is not None:
             bundle_items.append(BundleItem(KIND_ALARM, "alarms.csv",
                                           alarm_csv_text.encode("utf-8")))
             response_docs.append({"role": "allarmi", "label": "alarms.csv",
@@ -425,6 +464,19 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
                 response_docs.append({"role": "doc", "label": label,
                                      "b64": base64.b64encode(doc_bytes).decode("ascii")})
 
+        if alarm_graph_obj is not None:
+            # a procedure label with no matching document in THIS
+            # request would be a dangling "apri procedura" button the
+            # read side could never open -- rejected here rather than
+            # silently accepted, same query the editor itself should
+            # run before enabling its own "codifica" button (this
+            # endpoint has no other gate, so it enforces it too).
+            unresolved = unresolved_alarm_graph_procedures(bundle_items)
+            if unresolved:
+                return 400, {"ok": False,
+                            "error": "procedure senza documento corrispondente nel bundle: "
+                                    + ", ".join(unresolved)}
+
         bundle_bytes = encode_bundle(bundle_items)
         response.update(_payload_response_fields(bundle_bytes, limits))
         response["bundled"] = True
@@ -436,13 +488,12 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         response["info_table"] = {"headers": [], "rows": []}
         response["documents"] = []
 
-    # This endpoint has no request field yet to build a KIND_ALARM_GRAPH
-    # bundle (that needs the visual editor, Slice 4, CLAUDE.md SS14) --
-    # always null here, present for the same reason every other field is
-    # always present: so the frontend's shared rendering code (see
-    # app.js renderScenePanel) never has to special-case a missing key
-    # depending on which endpoint produced the response.
-    response["alarm_graph"] = None
+    # Present in EVERY response, null unless the request actually built
+    # one -- same reason every other field here is always present, so
+    # the frontend's shared rendering code (app.js renderScenePanel)
+    # never has to special-case a missing key depending on what was
+    # submitted (CLAUDE.md SS14).
+    response["alarm_graph"] = alarm_graph_obj.to_json_dict() if alarm_graph_obj is not None else None
 
     return 200, response
 

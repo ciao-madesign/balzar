@@ -540,6 +540,89 @@ class TestHandleEncode3D(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertFalse(resp["ok"])
 
+    # ---- alarm_graph (Slice 4, CLAUDE.md SS14): the visual editor's
+    # richer alternative to alarm_csv, submitted as an
+    # AlarmGraph.to_json_dict() instead of a flat CSV.
+
+    def test_alarm_graph_field_produces_a_bundle_with_kind_alarm_graph(self):
+        from balzar.bundle import KIND_ALARM_GRAPH, decode_bundle
+        from balzar.payload import from_base64
+        from balzar.alarm_graph import AlarmGraph, AlarmNode, CauseNode, ProcedureNode
+
+        graph = AlarmGraph(
+            alarms=[AlarmNode("E100", "Sovratemperatura", "Bullone-M6")],
+            causes=[CauseNode("cause:1", "Causa di prova")],
+            procedures=[ProcedureNode("proc:1", "procedura.txt")],
+            alarm_links=[("E100", "cause:1")],
+            cause_links=[("cause:1", "proc:1")],
+        )
+        doc_b64 = base64.b64encode(b"contenuto procedura").decode("ascii")
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_bytes()),
+            "alarm_graph": graph.to_json_dict(),
+            "documents": [{"label": "procedura.txt", "data": doc_b64}],
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["bundled"])
+        self.assertEqual(resp["alarm_graph"], graph.to_json_dict())
+        self.assertEqual(resp["info_table"], {"headers": [], "rows": []})
+        items = decode_bundle(from_base64(resp["payload_base64"]))
+        self.assertTrue(any(it.kind == KIND_ALARM_GRAPH for it in items))
+
+    def test_alarm_graph_wins_over_alarm_csv_when_both_given(self):
+        from balzar.alarm_graph import AlarmGraph, AlarmNode
+        graph = AlarmGraph(alarms=[AlarmNode("E100", "x", "")])
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_bytes()),
+            "alarm_csv": _b64(b"codice_allarme,nome_componente\nE900,Bullone-M6\n"),
+            "alarm_graph": graph.to_json_dict(),
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        # the graph won: no flat table ended up in the response, even
+        # though alarm_csv was also submitted
+        self.assertEqual(resp["info_table"], {"headers": [], "rows": []})
+        self.assertEqual(resp["alarm_graph"], graph.to_json_dict())
+
+    def test_alarm_graph_component_collapses_bom_row(self):
+        # same effect alarm_csv's component-name cell already has
+        # (SS9.21 collapse_names), reached through the graph's own
+        # `component` field this time
+        from balzar.alarm_graph import AlarmGraph, AlarmNode
+        graph = AlarmGraph(alarms=[AlarmNode("A06", "x", "HEATER1")])
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_with_group_bytes()),
+            "alarm_graph": graph.to_json_dict(),
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(resp["bom"]), 1)
+        self.assertEqual(resp["bom"][0]["name"], "HEATER1")
+
+    def test_unresolved_procedure_reference_gives_clean_400(self):
+        from balzar.alarm_graph import AlarmGraph, AlarmNode, CauseNode, ProcedureNode
+        graph = AlarmGraph(
+            alarms=[AlarmNode("E100", "x", "")],
+            causes=[CauseNode("cause:1", "y")],
+            procedures=[ProcedureNode("proc:1", "manca.pdf")],
+            alarm_links=[("E100", "cause:1")],
+            cause_links=[("cause:1", "proc:1")],
+        )
+        # no matching "manca.pdf" in documents -- a dangling reference
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_bytes()),
+            "alarm_graph": graph.to_json_dict(),
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+        self.assertIn("manca.pdf", resp["error"])
+
+    def test_malformed_alarm_graph_gives_clean_400_not_500(self):
+        status, resp = handle_encode_3d({
+            "data": _b64(_make_3dxml_bytes()),
+            "alarm_graph": {"alarms": [{"code": "E100"}]},  # missing "description"
+        }, LOCAL_LIMITS)
+        self.assertEqual(status, 400)
+        self.assertFalse(resp["ok"])
+
     def test_alarm_csv_naming_a_subassembly_collapses_its_bom_row(self):
         # end-to-end: an alarm table naming a whole sub-assembly
         # ("HEATER1") collapses it to one BOM row instead of expanding
