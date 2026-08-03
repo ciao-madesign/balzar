@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototipo fontana — mittente (schermo)</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; text-align: center; margin: 0; padding: 1rem; }
+  h1 { font-size: 1.1rem; font-weight: 500; color: #aaa; }
+  #canvas { background: white; image-rendering: pixelated; margin-top: 1rem; }
+  #specs { margin-top: 1rem; color: #8f8; font-family: monospace; font-size: 0.9rem; }
+  #picker { margin-top: 1rem; }
+  input[type=file] { color: #eee; }
+  .note { color: #888; font-size: 0.85rem; max-width: 480px; margin: 1rem auto; }
+</style>
+</head>
+<body>
+  <h1>PROTOTIPO — mittente: mostra questo schermo alla fotocamera del ricevitore</h1>
+  <div id="picker">
+    <input type="file" id="file-input">
+    <span id="file-label">nessun file scelto — verrà usato un payload di prova (50 KB)</span>
+  </div>
+  <canvas id="canvas"></canvas>
+  <div id="specs">in attesa di un file...</div>
+  <p class="note">Non fa parte dell'app balzar — è un prototipo isolato per verificare se la codifica "a
+    fontana" funziona con hardware reale prima di decidere se integrarla. Nessun file di balzar viene
+    toccato da questa pagina.</p>
+
+  <script src="qrcode.min.js"></script>
+  <script src="fountain-protocol.js"></script>
+  <script src="sender.js"></script>
+</body>
+</html>
