@@ -69,6 +69,17 @@ rigenerate al volo (§9.18). **Questo esiste già**, funziona
 completamente offline, non richiede licenza CAD né rete. È il prodotto
 che un tecnico/operatore usa davvero in officina o sul campo.
 
+**Gestione allarmi, in due forme**: la tabella piatta di sempre (CSV a
+colonne libere, ricerca su tutta la riga) resta il percorso semplice;
+accanto, un **grafo allarme → causa/soluzione → procedura** costruito
+in un editor visivo a blocchi con collegamenti trascinati (Balzar
+Studio, tab "Assemblee 3D") — l'utente collega ogni allarme alla sua
+causa/soluzione e, se esiste, alla procedura da aprire, prima di
+codificare il pacchetto. Alla lettura, lo stesso pannello a blocchi (in
+sola lettura, desktop e web) evidenzia il componente 3D collegato e
+apre la procedura con un click. Dettaglio tecnico completo, tutte le
+decisioni di design e la verifica end-to-end in `CLAUDE.md` §14.
+
 **Un'estensione valutata ma non costruita**: collegare Balzar Live allo
 stato reale di una macchina (allarme attivo, letto via OPC UA/Modbus/
 MQTT/REST) per far scattare automaticamente l'evidenziazione del

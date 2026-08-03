@@ -5955,15 +5955,92 @@ senza documento rifiutato con 400 e nome dell'etichetta nel messaggio,
 grafo malformato (chiave mancante) rifiutato con 400 non un 500. Suite
 completa: 407 test, tutti verdi.
 
-### 14.6 Prossimi slice (non ancora fatti)
+### 14.6 Slice 4b — editor visivo drag-to-connect nel tab "Assemblee 3D" (fatto)
 
-- **Slice 4b — editor visivo** in Balzar Studio: drag-to-connect reale
-  nel tab "Assemblee 3D", verificato dal mockup interattivo prima di
-  scrivere codice di produzione — porta in `app.js` la stessa
-  interazione già mostrata, collegata al parsing client-side dei due
-  template CSV e alla nuova capacità di `handle_encode_3d` (§14.5) di
-  costruire il bundle finale.
+Ultimo pezzo di §14: l'interazione già mostrata nel mockup (§14, nota
+introduttiva) portata in `app.js` come codice di produzione, collegata
+a upload reali e a `handle_encode_3d` (§14.5).
 
-Ogni slice: implementazione mirata (no overcoding), test automatici
-verdi sull'intera suite, nota di decisione qui prima di passare allo
-slice successivo.
+**Scelta di modalità, non sostituzione**: nuovo `<fieldset>` a scelta
+singola dentro "Gestione manutenzione" — "Tabella semplice (CSV)"
+(comportamento di sempre, **invariato in ogni dettaglio**, un file 3D
+scelto codifica ancora immediatamente) contro "Grafo allarmi (editor
+visivo)" (nuovo). Selezionare "grafo" **sospende** l'auto-codifica al
+volo di sempre: scegliere il file 3D in questa modalità memorizza solo
+il file e mostra uno stato di attesa, invece di inviarlo subito — a
+differenza di una tabella piatta, un grafo va rivisto/collegato prima
+che abbia senso codificarlo.
+
+**Parser CSV client-side** (`parseAlarmGraphCsvs`, `app.js`): porting
+diretto di `parse_alarm_graph_csvs` (`balzar/alarm_graph.py`) — stessa
+regola di lettura per posizione (header sempre riga 0, mai indovinato),
+stesso comportamento su codice duplicato (eccezione), codice sconosciuto
+in `allarmi_collegati` (avviso, non blocco), etichetta procedura ripetuta
+(deduplicata a un solo nodo). L'oggetto grafo prodotto ha **esattamente**
+la forma di `AlarmGraph.to_json_dict()` — zero traduzione prima di
+inviarlo al campo `alarm_graph` di `/api/encode_3d`.
+
+**Editor** (`createAlarmGraphEditor`): stessa meccanica del mockup —
+canvas SVG per le frecce bezier, blocchi trascinabili verticalmente,
+drag da un pallino "out" a un pallino "in" della colonna adiacente crea
+un collegamento, click su una freccia la rimuove. Differenza di
+convenzione rispetto al mockup (una scelta di pulizia, non un dettaglio
+cosmetico): le chiavi dei nodi canvas per causa/procedura sono i loro
+id già univoci e auto-descrittivi (`"cause:1"`, `"proc:1"`, generati dal
+parser) usati **direttamente**, non ri-prefissati — solo gli allarmi
+(la cui identità è il solo codice, senza namespace proprio) ricevono un
+prefisso `"alarm:"` per la chiave canvas.
+
+**Validazione live, stesso principio del mockup ma su dati reali**:
+`unlinkedAlarmCodes`/`unresolvedProcedureLabels` (mirror client-side di
+`AlarmGraph.unlinked_alarm_codes()`/`bundle.unresolved_alarm_graph_procedures`)
+si ricalcolano dopo ogni modifica al grafo **e** dopo ogni cambio ai
+"documenti aggiuntivi" (un riferimento a procedura può risolversi o
+smettere di esserlo da entrambi i lati) — il bottone "Codifica
+pacchetto" resta disabilitato finché non sono zero entrambi, con un
+messaggio che nomina esplicitamente cosa manca.
+
+**Verificato con Playwright contro un devserver locale reale** (route
+`/api/encode_3d` verso il vero `handle_encode_3d`, non un mock): CSV
+allarmi+cause caricati → editor con 4 blocchi, un allarme (`E200`)
+inizialmente non collegato → **drag-to-connect reale** (evento mouse
+completo, non simulato via API) da `E200` alla causa esistente →
+badge "non collegato" sparisce → bottone resta comunque disabilitato
+(manca il documento della procedura) → caricato il documento →
+bottone abilitato, messaggio "Grafo pronto per la codifica" → click
+→ bundle codificato e reso **nello stesso tab**, pannello allarmi di
+sola lettura (Slice 3b) con **entrambi** gli allarmi collegati →
+riletti causa e contenuto procedura **attraverso il giro completo
+codifica→bundle→decodifica**, testo esatto confermato, non solo "si
+apre qualcosa". **Non-regressione esplicita**: la modalità "Tabella
+semplice" (default) continua a codificare immediatamente alla scelta
+del file 3D, zero click aggiuntivi, esattamente come prima di questo
+slice. Zero errori console in ogni fase.
+
+**Bug di ambiente scoperto e risolto durante la verifica, non nel
+codice di produzione**: il primo tentativo di drag-and-drop falliva
+(`document.elementFromPoint` restituiva `null` nel punto di rilascio)
+— causa isolata: il viewport di test era troppo basso e i blocchi
+dell'editor, più in basso nella pagina reale, cadevano fuori
+dall'area effettivamente renderizzata dal browser headless. Le
+coordinate usate da `portCenter()` (`getBoundingClientRect()`, sempre
+relative al viewport corrente) sono indipendenti dallo scroll per
+costruzione, quindi un utente reale che trascina con lo scroll
+naturale della pagina non incontra questo problema — confermato
+alzando l'altezza del viewport di test e aggiungendo uno
+`scrollIntoViewIfNeeded()` esplicito prima del drag, stessa classe di
+correzione già vista per l'attesa del caricamento di `<model-viewer>`
+in Slice 3b.
+
+**Non fatto per scelta di scope**: nessun test Python per l'editor
+stesso (comportamento client-side puro, stesso principio già seguito
+per il resto della UI 3D del progetto — verifica Playwright manuale in
+sessione, non nella suite `unittest`); nessuna wire dell'editor sulla
+GUI desktop (`viewer3d.py` legge già un grafo esistente da un bundle,
+§14.3, ma non ha un editor per *crearne* uno — resterebbe un ulteriore
+sotto-slice se richiesto).
+
+Con questo, i quattro slice pianificati per il grafo allarmi sono
+tutti completi: modello dati (§14.1), integrazione bundle (§14.2),
+pannello di lettura desktop (§14.3) e web (§14.4), produzione lato
+server (§14.5) ed editor visivo (§14.6).

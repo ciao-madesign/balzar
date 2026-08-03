@@ -868,3 +868,72 @@ footer a { color: var(--accent); }
 }
 .fountain-result { margin-top: 0.8rem; }
 .fountain-result .done { color: var(--good); font-weight: 600; }
+
+/* Alarm graph visual editor (Slice 4b, CLAUDE.md SS14) -- lives in the
+   normal page flow (light theme, real app tokens) unlike the read-only
+   panel's dark canvas overlay (Slice 3/3b): the editor appears BEFORE
+   any 3D model is shown, as a page-level tool alongside the rest of
+   Balzar Studio's controls, not on top of a model-viewer canvas. */
+.alarm-editor-lane-labels {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.4rem;
+}
+.alarm-editor-lane-labels span {
+  flex: 1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding-left: 0.9rem;
+}
+.alarm-editor-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+.alarm-editor-canvas { position: relative; width: 880px; height: 320px; }
+.alarm-editor-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.ae-wire-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+.ae-wire { fill: none; stroke: var(--accent); stroke-width: 2; pointer-events: none; }
+.ae-wire.dragging { stroke-dasharray: 5 4; opacity: 0.8; }
+.ae-wire-hit:hover + .ae-wire { stroke: var(--bad); stroke-width: 2.5; }
+.ae-node {
+  position: absolute;
+  width: 216px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  padding: 0.5rem 0.6rem 0.5rem 0.65rem;
+  cursor: grab;
+  user-select: none;
+  border-left: 3px solid transparent;
+}
+.ae-node:active { cursor: grabbing; }
+.ae-node.alarm { border-left-color: #b45309; }
+.ae-node.cause { border-left-color: #0f766e; }
+.ae-node.proc { border-left-color: #6d28d9; }
+.ae-node .ae-code { font-family: ui-monospace, monospace; font-size: 0.76rem; font-weight: 700; color: #b45309; }
+.ae-node .ae-desc { font-size: 0.76rem; color: var(--muted); margin-top: 0.1rem; line-height: 1.3; }
+.ae-node.proc .ae-desc { color: var(--fg); font-weight: 600; }
+.ae-node.unlinked { border-style: dashed; border-color: var(--bad); border-left-style: solid; }
+.ae-unlinked-chip {
+  display: inline-block; margin-top: 0.25rem; font-size: 0.62rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--bad);
+  background: #fbe9e9; border-radius: var(--radius-sm); padding: 0.1rem 0.35rem;
+}
+.ae-port {
+  position: absolute; top: 50%; width: 11px; height: 11px; margin-top: -5.5px;
+  border-radius: 50%; background: var(--bg); border: 2px solid var(--muted); cursor: crosshair;
+}
+.ae-port:hover { border-color: var(--accent); background: var(--accent-soft); }
+.ae-port.out { right: -6px; }
+.ae-port.in { left: -6px; }
+.alarm-editor-hint { font-size: 0.78rem; color: var(--muted); margin: 0.6rem 0; }
+.alarm-editor-status { font-size: 0.85rem; font-weight: 600; margin: 0 0 0.6rem; }
+.alarm-editor-status.ok { color: var(--good); }
+.alarm-editor-status.warn { color: var(--bad); }

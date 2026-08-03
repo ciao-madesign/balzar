@@ -1461,6 +1461,306 @@ function renderScenePanel(ctrl, r) {
   ctrl.renderAlarmGraph(r.alarm_graph);
 }
 
+// ------------------------------------------------- alarm graph editor (Slice 4b)
+// Client-side counterpart of balzar/alarm_graph.py's parse_alarm_graph_csvs
+// + the drag-to-connect editor already prototyped as a standalone mockup
+// (CLAUDE.md SS14) -- ported here as real code wired to real file uploads
+// instead of hardcoded example data. The graph object built/edited here
+// has EXACTLY the shape of AlarmGraph.to_json_dict() (same keys), so it
+// can be sent to /api/encode_3d's `alarm_graph` field with zero
+// translation (see handle_encode_3d, CLAUDE.md SS14 Slice 4a).
+
+// Header (row 0) always dropped by position, blank rows kept and
+// skipped downstream by content (an empty first cell) -- mirrors
+// balzar/alarm_graph.py's _read_rows exactly, including NOT pre-
+// filtering blank lines (a genuinely blank FIRST line must still count
+// as "the header", never mistaken for "no header at all").
+function alarmGraphCsvRows(text) {
+  const lines = String(text).split(/\r?\n/);
+  return lines.length ? lines.slice(1) : [];
+}
+
+// Same "no quoted-comma support" limitation already declared for
+// parseComponentTableCsv -- a full RFC4180 parser is overkill
+// client-side for a fixed 2-3 column format.
+function splitAlarmGraphCsvLine(line) {
+  return line.split(",").map(c => c.trim());
+}
+
+// Parses the two fixed-schema template CSVs into a starting graph, plus
+// human-readable warnings for anything skipped -- same behavior as
+// parse_alarm_graph_csvs (balzar/alarm_graph.py): a duplicate alarm
+// code throws (it's the join key, ambiguous otherwise), an
+// allarmi_collegati code with no matching alarm is a warning not a
+// crash (that row's other codes still link), a procedure referenced
+// twice by the same filename is deduplicated to one node.
+function parseAlarmGraphCsvs(alarmsText, causesText) {
+  const warnings = [];
+  const alarms = [];
+  const seenCodes = new Set();
+  for (const line of alarmGraphCsvRows(alarmsText)) {
+    const cells = splitAlarmGraphCsvLine(line);
+    const code = (cells[0] || "").trim();
+    if (!code) continue;
+    if (seenCodes.has(code)) throw new Error(`codice allarme duplicato nel file allarmi: "${code}"`);
+    seenCodes.add(code);
+    alarms.push({ code, description: (cells[1] || "").trim(), component: (cells[2] || "").trim() });
+  }
+
+  const causes = [];
+  const procedures = [];
+  const alarmLinks = [];
+  const causeLinks = [];
+  const procIdByLabel = new Map();
+  for (const line of alarmGraphCsvRows(causesText)) {
+    const cells = splitAlarmGraphCsvLine(line);
+    const text = (cells[0] || "").trim();
+    if (!text) continue;
+    const causeId = `cause:${causes.length + 1}`;
+    causes.push({ id: causeId, text });
+
+    for (const rawCode of (cells[1] || "").split(";")) {
+      const code = rawCode.trim();
+      if (!code) continue;
+      if (!seenCodes.has(code)) {
+        warnings.push(`causa "${causeId}": codice allarme "${code}" non trovato nel file allarmi, collegamento ignorato`);
+        continue;
+      }
+      alarmLinks.push([code, causeId]);
+    }
+
+    const label = (cells[2] || "").trim();
+    if (label) {
+      let procId = procIdByLabel.get(label);
+      if (procId === undefined) {
+        procId = `proc:${procedures.length + 1}`;
+        procIdByLabel.set(label, procId);
+        procedures.push({ id: procId, label });
+      }
+      causeLinks.push([causeId, procId]);
+    }
+  }
+
+  return {
+    graph: { alarms, causes, procedures, alarm_links: alarmLinks, cause_links: causeLinks },
+    warnings,
+  };
+}
+
+// Alarm codes with no outgoing link -- mirrors AlarmGraph.unlinked_alarm_codes.
+// A cause with no linked procedure is NOT flagged (procedures are
+// optional, "eventuali") -- only an alarm without any cause is.
+function unlinkedAlarmCodes(graph) {
+  const linked = new Set(graph.alarm_links.map(l => l[0]));
+  return graph.alarms.filter(a => !linked.has(a.code)).map(a => a.code);
+}
+
+// A procedure whose label has no matching file among the currently
+// selected "documenti aggiuntivi" -- the client-side mirror of
+// bundle.unresolved_alarm_graph_procedures, checked here so the
+// "Codifica pacchetto" button can stay disabled instead of the user
+// discovering the same problem only after a rejected server round-trip.
+function unresolvedProcedureLabels(graph, docFiles) {
+  const docNames = new Set(docFiles.map(f => f.name));
+  return graph.procedures.filter(p => !docNames.has(p.label)).map(p => p.label);
+}
+
+const AE_COL_X = { alarm: 16, cause: 332, proc: 648 };
+const AE_ROW_H = 78;
+
+// One canvas position per node, keyed by a string that also encodes
+// which column it belongs to (kindOfAeKey/idOfAeKey below decode it) --
+// cause/procedure ids are already globally unique and self-describing
+// ("cause:N"/"proc:N", from parseAlarmGraphCsvs above) so they're used
+// as-is; an alarm code has no such built-in namespace, hence the
+// "alarm:" prefix only for that column.
+function aeKeyForAlarm(code) { return "alarm:" + code; }
+function kindOfAeKey(key) {
+  if (key.startsWith("cause:")) return "cause";
+  if (key.startsWith("proc:")) return "proc";
+  return "alarm";
+}
+function idOfAeKey(key) { return key.startsWith("alarm:") ? key.slice(6) : key; }
+
+function buildAlarmEditorLayout(graph) {
+  const pos = new Map();
+  graph.alarms.forEach((a, i) => pos.set(aeKeyForAlarm(a.code), { x: AE_COL_X.alarm, y: 20 + i * AE_ROW_H }));
+  graph.causes.forEach((c, i) => pos.set(c.id, { x: AE_COL_X.cause, y: 20 + i * AE_ROW_H }));
+  graph.procedures.forEach((p, i) => pos.set(p.id, { x: AE_COL_X.proc, y: 20 + i * AE_ROW_H }));
+  return pos;
+}
+
+// Wires up the interactive canvas (drag-to-connect, block reorder,
+// click-to-delete a link) in place, mutating `graph` directly -- the
+// caller keeps the same reference and reads it back when ready to
+// encode. `onChange` fires after every edit (link added/removed) so the
+// caller can re-check "is this ready to encode" and update its own UI.
+function createAlarmGraphEditor(canvasEl, svgEl, graph, onChange) {
+  const pos = buildAlarmEditorLayout(graph);
+
+  function nodeEl(key) { return canvasEl.querySelector(`[data-key="${CSS.escape(key)}"]`); }
+  function portEl(key, side) { return nodeEl(key).querySelector(".ae-port." + side); }
+
+  function renderNodes() {
+    canvasEl.querySelectorAll(".ae-node").forEach(n => n.remove());
+    function build(key, cls, inner, hasIn, hasOut) {
+      const p = pos.get(key);
+      const el = document.createElement("div");
+      el.className = "ae-node " + cls;
+      el.dataset.key = key;
+      el.style.left = p.x + "px";
+      el.style.top = p.y + "px";
+      el.innerHTML = inner + (hasIn ? '<span class="ae-port in"></span>' : "") +
+        (hasOut ? '<span class="ae-port out"></span>' : "");
+      canvasEl.appendChild(el);
+    }
+    graph.alarms.forEach(a => build(aeKeyForAlarm(a.code), "alarm",
+      `<div class="ae-code">${escapeHtml(a.code)}</div><div class="ae-desc">${escapeHtml(a.description)}</div>`,
+      false, true));
+    graph.causes.forEach(c => build(c.id, "cause",
+      `<div class="ae-desc">${escapeHtml(c.text)}</div>`, true, true));
+    graph.procedures.forEach(p => build(p.id, "proc",
+      `<div class="ae-desc">📄 ${escapeHtml(p.label)}</div>`, true, false));
+
+    const maxY = Math.max(60, ...Array.from(pos.values()).map(p => p.y));
+    canvasEl.style.height = (maxY + 100) + "px";
+    wireDrag();
+    redraw();
+  }
+
+  function markUnlinked() {
+    graph.alarms.forEach(a => {
+      const el = nodeEl(aeKeyForAlarm(a.code));
+      const has = graph.alarm_links.some(l => l[0] === a.code);
+      el.classList.toggle("unlinked", !has);
+      let chip = el.querySelector(".ae-unlinked-chip");
+      if (!has && !chip) {
+        chip = document.createElement("div");
+        chip.className = "ae-unlinked-chip";
+        chip.textContent = "non collegato";
+        el.querySelector(".ae-desc").after(chip);
+      } else if (has && chip) {
+        chip.remove();
+      }
+    });
+  }
+
+  function portCenter(key, side) {
+    const r = portEl(key, side).getBoundingClientRect();
+    const c = canvasEl.getBoundingClientRect();
+    return { x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top };
+  }
+  function bezier(p1, p2) {
+    const dx = Math.max(40, (p2.x - p1.x) * 0.5);
+    return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
+  }
+
+  // Every link as {from, to, remove()} regardless of which array it
+  // lives in (alarm_links vs cause_links) -- removal splices by the
+  // index captured at render time, safe because redraw() always
+  // recomputes this list fresh right after any single removal (never
+  // two removals without a redraw in between).
+  function allEdges() {
+    return [
+      ...graph.alarm_links.map((l, i) => ({
+        from: aeKeyForAlarm(l[0]), to: l[1], remove: () => graph.alarm_links.splice(i, 1),
+      })),
+      ...graph.cause_links.map((l, i) => ({
+        from: l[0], to: l[1], remove: () => graph.cause_links.splice(i, 1),
+      })),
+    ];
+  }
+
+  function renderWires() {
+    svgEl.innerHTML = "";
+    allEdges().forEach(edge => {
+      const p1 = portCenter(edge.from, "out"), p2 = portCenter(edge.to, "in");
+      const d = bezier(p1, p2);
+      const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      hit.setAttribute("d", d);
+      hit.setAttribute("class", "ae-wire-hit");
+      hit.addEventListener("click", () => { edge.remove(); redraw(); });
+      const wire = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      wire.setAttribute("d", d);
+      wire.setAttribute("class", "ae-wire");
+      svgEl.appendChild(hit);
+      svgEl.appendChild(wire);
+    });
+  }
+
+  function redraw() {
+    markUnlinked();
+    renderWires();
+    onChange();
+  }
+
+  function wireDrag() {
+    canvasEl.querySelectorAll(".ae-node").forEach(el => {
+      el.addEventListener("mousedown", (e) => {
+        if (e.target.classList.contains("ae-port")) return;
+        e.preventDefault();
+        const p = pos.get(el.dataset.key);
+        const startY = e.clientY, origY = p.y;
+        function move(ev) {
+          p.y = Math.max(4, origY + (ev.clientY - startY));
+          el.style.top = p.y + "px";
+          renderWires();
+        }
+        function up() {
+          window.removeEventListener("mousemove", move);
+          window.removeEventListener("mouseup", up);
+        }
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+      });
+    });
+
+    canvasEl.querySelectorAll(".ae-port.out").forEach(p => {
+      p.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const fromKey = p.closest(".ae-node").dataset.key;
+        const start = portCenter(fromKey, "out");
+        const temp = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        temp.setAttribute("class", "ae-wire dragging");
+        svgEl.appendChild(temp);
+        function move(ev) {
+          const c = canvasEl.getBoundingClientRect();
+          temp.setAttribute("d", bezier(start, { x: ev.clientX - c.left, y: ev.clientY - c.top }));
+        }
+        function up(ev) {
+          window.removeEventListener("mousemove", move);
+          window.removeEventListener("mouseup", up);
+          temp.remove();
+          const target = document.elementFromPoint(ev.clientX, ev.clientY);
+          const toEl = (target && target.classList.contains("ae-port") && target.classList.contains("in"))
+            ? target.closest(".ae-node") : null;
+          if (toEl) {
+            const toKey = toEl.dataset.key;
+            const fromKind = kindOfAeKey(fromKey), toKind = kindOfAeKey(toKey);
+            if (fromKind === "alarm" && toKind === "cause") {
+              const code = idOfAeKey(fromKey), causeId = toKey;
+              if (!graph.alarm_links.some(l => l[0] === code && l[1] === causeId)) {
+                graph.alarm_links.push([code, causeId]);
+              }
+            } else if (fromKind === "cause" && toKind === "proc") {
+              const causeId = fromKey, procId = toKey;
+              if (!graph.cause_links.some(l => l[0] === causeId && l[1] === procId)) {
+                graph.cause_links.push([causeId, procId]);
+              }
+            }
+          }
+          redraw();
+        }
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+      });
+    });
+  }
+
+  renderNodes();
+}
+
 const threedDrop = document.getElementById("threed-drop");
 const threedFileInput = document.getElementById("threed-file-input");
 const threedBrowseBtn = document.getElementById("threed-browse-btn");
@@ -1526,9 +1826,129 @@ threedAlarmCsvInput.addEventListener("change", () => {
   reader.readAsText(file);
 });
 
+// alarm_mode picker (Slice 4b): "table" is the original flat-CSV flow,
+// unchanged in every way -- a 3D file selection there still auto-
+// encodes immediately, exactly as before this slice existed. "graph"
+// defers encoding until the user has finished editing the graph and
+// presses the dedicated button below, since (unlike a flat CSV) the
+// graph needs review/editing before it makes sense to submit.
+const threedAlarmTableMode = document.getElementById("threed-alarm-table-mode");
+const threedAlarmGraphMode = document.getElementById("threed-alarm-graph-mode");
+function threedAlarmMode() {
+  return document.querySelector('input[name="threed-alarm-mode"]:checked').value;
+}
+function updateThreedAlarmModeUI() {
+  const graphMode = threedAlarmMode() === "graph";
+  threedAlarmTableMode.hidden = graphMode;
+  threedAlarmGraphMode.hidden = !graphMode;
+}
+document.querySelectorAll('input[name="threed-alarm-mode"]').forEach(r =>
+  r.addEventListener("change", updateThreedAlarmModeUI));
+updateThreedAlarmModeUI();
+
+const threedGraphAlarmsInput = document.getElementById("threed-graph-alarms-input");
+const threedGraphCausesInput = document.getElementById("threed-graph-causes-input");
+const threedGraphStatusEl = document.getElementById("threed-graph-status");
+const threedGraphEditorWrap = document.getElementById("threed-graph-editor-wrap");
+const threedGraphCanvas = document.getElementById("threed-graph-canvas");
+const threedGraphWires = document.getElementById("threed-graph-wires");
+const threedGraphLinkStatusEl = document.getElementById("threed-graph-link-status");
+const threedGraphEncodeBtn = document.getElementById("threed-graph-encode-btn");
+
+let threedGraphState = null;       // { graph } once both CSVs parse successfully
+let threedPendingGraphFile = null; // the 3D File, held until "Codifica pacchetto" is clicked
+
+// Re-checked after every graph edit AND every documents-input change
+// (a procedure reference can become resolved/unresolved from either
+// side) -- mirrors bundle.unresolved_alarm_graph_procedures /
+// AlarmGraph.unlinked_alarm_codes, client-side, so the button reflects
+// reality before a submit is even attempted.
+function updateThreedGraphReadiness() {
+  if (!threedGraphState) return;
+  const graph = threedGraphState.graph;
+  const unlinked = unlinkedAlarmCodes(graph);
+  const unresolved = unresolvedProcedureLabels(graph, Array.from(threedBundleDocsInput.files || []));
+  const problems = [];
+  if (unlinked.length) problems.push(`${unlinked.length} allarme/i non collegato/i (${unlinked.join(", ")})`);
+  if (unresolved.length) {
+    problems.push(`${unresolved.length} procedura/e senza documento corrispondente (${unresolved.join(", ")})`);
+  }
+  if (problems.length) {
+    threedGraphLinkStatusEl.textContent = problems.join(" · ");
+    threedGraphLinkStatusEl.classList.add("warn");
+    threedGraphLinkStatusEl.classList.remove("ok");
+    threedGraphEncodeBtn.disabled = true;
+  } else {
+    threedGraphLinkStatusEl.textContent = "Grafo pronto per la codifica.";
+    threedGraphLinkStatusEl.classList.add("ok");
+    threedGraphLinkStatusEl.classList.remove("warn");
+    threedGraphEncodeBtn.disabled = false;
+  }
+}
+
+async function tryBuildAlarmGraphFromCsvs() {
+  const aFile = threedGraphAlarmsInput.files[0];
+  const cFile = threedGraphCausesInput.files[0];
+  threedGraphStatusEl.classList.remove("error");
+  if (!aFile || !cFile) {
+    threedGraphStatusEl.textContent = "Carica entrambi i file (allarmi + cause/soluzioni) per iniziare.";
+    threedGraphEditorWrap.hidden = true;
+    threedGraphState = null;
+    return;
+  }
+  try {
+    const [aText, cText] = await Promise.all([aFile.text(), cFile.text()]);
+    const { graph, warnings } = parseAlarmGraphCsvs(aText, cText);
+    threedGraphStatusEl.textContent =
+      `${graph.alarms.length} allarme/i, ${graph.causes.length} causa/e, ${graph.procedures.length} procedura/e` +
+      (warnings.length ? ` — ${warnings.length} avviso/i: ${warnings.join("; ")}` : "");
+    threedGraphEditorWrap.hidden = false;
+    threedGraphState = { graph };
+    createAlarmGraphEditor(threedGraphCanvas, threedGraphWires, graph, updateThreedGraphReadiness);
+    updateThreedGraphReadiness();
+  } catch (e) {
+    threedGraphStatusEl.classList.add("error");
+    threedGraphStatusEl.textContent = "Errore: " + e.message;
+    threedGraphEditorWrap.hidden = true;
+    threedGraphState = null;
+  }
+}
+threedGraphAlarmsInput.addEventListener("change", tryBuildAlarmGraphFromCsvs);
+threedGraphCausesInput.addEventListener("change", tryBuildAlarmGraphFromCsvs);
+threedBundleDocsInput.addEventListener("change", updateThreedGraphReadiness);
+
+threedGraphEncodeBtn.addEventListener("click", async () => {
+  if (!threedGraphState || !threedPendingGraphFile) return;
+  const file = threedPendingGraphFile;
+  const docFiles = Array.from(threedBundleDocsInput.files || []);
+  threedResultEl.hidden = true;
+  setThreedStatus(`Analisi di "${file.name}" + grafo allarmi in corso…`);
+  try {
+    const data = await fileToBase64(file);
+    const body = { data, alarm_graph: threedGraphState.graph };
+    if (docFiles.length) {
+      body.documents = [];
+      for (const df of docFiles) body.documents.push({ label: df.name, data: await fileToBase64(df) });
+    }
+    const json = await postJSON("/api/encode_3d", body);
+    lastThreedResult = json;
+    renderThreedResult(json);
+    setThreedStatus(`Fatto: ${file.name} + grafo allarmi (bundle BZX1)`);
+  } catch (err) {
+    setThreedStatus("Errore: " + err.message, true);
+  }
+});
+
 threedBrowseBtn.addEventListener("click", () => threedFileInput.click());
 threedFileInput.addEventListener("change", () => {
-  if (threedFileInput.files[0]) handleThreedFile(threedFileInput.files[0]);
+  const file = threedFileInput.files[0];
+  if (!file) return;
+  if (threedAlarmMode() === "graph") {
+    threedPendingGraphFile = file;
+    setThreedStatus(`File 3D pronto: "${file.name}". Completa il grafo allarmi e premi "Codifica pacchetto".`);
+  } else {
+    handleThreedFile(file);
+  }
 });
 threedBundleCsvClearBtn.addEventListener("click", () => { threedBundleCsvInput.value = ""; });
 threedBundleDocsClearBtn.addEventListener("click", () => { threedBundleDocsInput.value = ""; });
@@ -1540,7 +1960,13 @@ threedBundleDocsClearBtn.addEventListener("click", () => { threedBundleDocsInput
 );
 threedDrop.addEventListener("drop", e => {
   const file = e.dataTransfer.files[0];
-  if (file) handleThreedFile(file);
+  if (!file) return;
+  if (threedAlarmMode() === "graph") {
+    threedPendingGraphFile = file;
+    setThreedStatus(`File 3D pronto: "${file.name}". Completa il grafo allarmi e premi "Codifica pacchetto".`);
+  } else {
+    handleThreedFile(file);
+  }
 });
 
 function setThreedStatus(msg, isError) {

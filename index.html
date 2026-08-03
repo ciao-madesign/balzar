@@ -366,42 +366,84 @@
           formato di visualizzazione a parte (<code>gltf.py</code>), non quello che viaggia nel QR.</p>
       </details>
 
-      <!-- In lavorazione (CLAUDE.md §14): il grafo allarme -> causa/
-           soluzione -> procedura non ha ancora un editor collegato qui
-           (Slice 4) -- solo i due template scaricabili per chi vuole
-           già iniziare a compilarli offline. Sezione separata dalla
-           "Gestione manutenzione" sotto apposta: quella è il flusso
-           CSV piatto già funzionante oggi, questo è il formato nuovo
-           in arrivo, non va confuso con l'altro. -->
-      <p class="honesty">In lavorazione: un editor a blocchi per collegare allarmi, cause/soluzioni
-        e procedure (vedi <code>CLAUDE.md</code> §14). Nel frattempo puoi scaricare i due template
-        CSV a schema fisso e compilarli offline:
-        <a href="examples/template_allarmi.csv" download>allarmi.csv</a> ·
-        <a href="examples/template_cause_soluzioni.csv" download>cause_soluzioni.csv</a>.</p>
-
       <!-- Manutenzione/bundle: opzionale, collassato di default così il
            flusso principale (carica il modello) resta pulito. Gli id dei
            file input restano invariati (JS in app.js li trova comunque). -->
       <details class="panel-help">
-        <summary>Gestione manutenzione: includi tabella allarmi e documenti nel bundle (opzionale)</summary>
-        <p class="honesty">Puoi includere nello stesso QR anche una tabella allarmi e
-          altri documenti consultabili: scegli i file qui sotto <strong>prima</strong> di
-          caricare il file 3D — tutto viene impacchettato in un bundle (<code>BZX1</code>,
-          <code>balzar/bundle.py</code>) e il viewer apre già con la ricerca allarmi
-          pronta e un indice navigabile dei documenti. I documenti aggiuntivi sono solo
-          da consultare (non collegati al 3D): testo/CSV/immagini si aprono inline, i
-          formati strutturati (pdf/html/xml/…) si scaricano. Un file <code>.bzr</code>/
-          <code>.bzp</code> (un programma/payload balzar 2D — una tavola tecnica) viene
-          invece <strong>rigenerato al volo</strong> in PNG/SVG e mostrato come le
-          immagini — nessun pixel salvato, solo il programma che lo disegna. Opzionale:
-          senza extra il payload resta un semplice <code>BZM1</code> come prima.</p>
+        <summary>Gestione manutenzione: includi allarmi e documenti nel bundle (opzionale)</summary>
+        <p class="honesty">Puoi includere nello stesso QR una gestione allarmi e altri documenti
+          consultabili: scegli i file qui sotto <strong>prima</strong> di caricare il file 3D —
+          tutto viene impacchettato in un bundle (<code>BZX1</code>, <code>balzar/bundle.py</code>)
+          e il viewer apre già con la ricerca/il pannello allarmi pronto e un indice navigabile
+          dei documenti. I documenti aggiuntivi sono solo da consultare (non collegati al 3D):
+          testo/CSV/immagini si aprono inline, i formati strutturati (pdf/html/xml/…) si scaricano.
+          Un file <code>.bzr</code>/<code>.bzp</code> (un programma/payload balzar 2D — una tavola
+          tecnica) viene invece <strong>rigenerato al volo</strong> in PNG/SVG e mostrato come le
+          immagini — nessun pixel salvato, solo il programma che lo disegna. Opzionale: senza
+          nulla di quanto segue il payload resta un semplice <code>BZM1</code> come prima.</p>
+
+        <fieldset class="qr-mode-picker" id="threed-alarm-mode-fieldset">
+          <legend>Come vuoi gestire gli allarmi? (opzionale)</legend>
+          <label class="mode-option">
+            <input type="radio" name="threed-alarm-mode" value="table" checked>
+            <span>
+              <strong>Tabella semplice (CSV)</strong>
+              <span class="mode-pro-con">Un solo file, colonne libere, ricerca su tutta la riga.</span>
+            </span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="threed-alarm-mode" value="graph">
+            <span>
+              <strong>Grafo allarmi (editor visivo)</strong>
+              <span class="mode-pro-con">Due file (allarmi + cause/soluzioni): collega a mano
+                allarme → causa/soluzione → procedura prima di codificare
+                (<a href="examples/template_allarmi.csv" download>template allarmi</a> ·
+                <a href="examples/template_cause_soluzioni.csv" download>template cause/soluzioni</a>).</span>
+            </span>
+          </label>
+        </fieldset>
+
+        <div id="threed-alarm-table-mode">
+          <p>
+            <label>Tabella allarmi da includere nel bundle (opzionale):
+              <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
+            <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
+          </p>
+        </div>
+
+        <div id="threed-alarm-graph-mode" hidden>
+          <p>
+            <label>File allarmi (codice, descrizione, componente):
+              <input type="file" id="threed-graph-alarms-input" accept=".csv,text/csv"></label>
+          </p>
+          <p>
+            <label>File cause e soluzioni (causa/soluzione, allarmi collegati, procedura):
+              <input type="file" id="threed-graph-causes-input" accept=".csv,text/csv"></label>
+          </p>
+          <p id="threed-graph-status" class="status"></p>
+
+          <div id="threed-graph-editor-wrap" hidden>
+            <div class="alarm-editor-lane-labels">
+              <span>Allarmi</span><span>Cause e soluzioni</span><span>Procedure</span>
+            </div>
+            <div class="alarm-editor-scroll">
+              <div class="alarm-editor-canvas" id="threed-graph-canvas">
+                <svg id="threed-graph-wires"></svg>
+              </div>
+            </div>
+            <p class="alarm-editor-hint">Trascina da un pallino a un blocco della colonna accanto
+              per collegarli. Clicca una freccia per rimuoverla. Trascina un blocco per riordinare
+              la colonna. Le procedure vanno referenziate per nome file esatto tra i "documenti
+              aggiuntivi" qui sotto.</p>
+            <p id="threed-graph-link-status" class="alarm-editor-status"></p>
+            <button id="threed-graph-encode-btn" type="button" class="btn primary" disabled>
+              Codifica pacchetto (con grafo allarmi)</button>
+          </div>
+        </div>
+
         <p>
-          <label>Tabella allarmi da includere nel bundle (opzionale):
-            <input type="file" id="threed-bundle-csv-input" accept=".csv,text/csv"></label>
-          <button id="threed-bundle-csv-clear-btn" type="button">Rimuovi CSV</button>
-        </p>
-        <p>
-          <label>Documenti aggiuntivi da consultare (opzionale, selezione multipla):
+          <label>Documenti aggiuntivi da consultare (opzionale, selezione multipla — anche le
+            procedure referenziate dal grafo allarmi vanno incluse qui, per nome file esatto):
             <input type="file" id="threed-bundle-docs-input" multiple></label>
           <button id="threed-bundle-docs-clear-btn" type="button">Rimuovi documenti</button>
         </p>
