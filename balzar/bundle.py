@@ -10,19 +10,22 @@ Format:  b"BZX1" | u16 version | u16 item_count | u32 body_length
          | u32 crc32(body) | deflate(body)
 
 body = concatenation of items, each:
-    u8  kind_len | kind (ascii)     -- KIND_3D / KIND_2D / KIND_ALARM / KIND_DOC
+    u8  kind_len | kind (ascii)     -- KIND_3D / KIND_2D / KIND_ALARM / KIND_ALARM_GRAPH / KIND_DOC
     u8  label_len | label (utf-8)   -- human-readable, e.g. a filename
     u32 data_len | data             -- the item's own native bytes
 
 The `kind` is a ROLE, not a file type: it tells the reader how to
 dispatch the item (KIND_3D -> the model viewer + BOM; KIND_2D -> a BZR1
 program rendered fresh into the doc index, see viewer3d._render_2d_item;
-KIND_ALARM -> the search bar; KIND_DOC -> the navigable document index,
-just consultable, not linked to the 3D). A .csv is KIND_ALARM only when
-the user explicitly marks it as the component info table (any columns --
-component name, alarm code, spare part, maintenance notes... in any
-order, with a header row, see viewer3d.parse_component_table); an
-unmarked .csv (or
+KIND_ALARM -> the flat search bar (viewer3d.ComponentTable); KIND_ALARM_GRAPH
+-> the richer alarm/cause/procedure link graph (balzar/alarm_graph.py,
+CLAUDE.md SS14) -- a bundle uses AT MOST ONE of these two alarm
+mechanisms at a time, never both, see is_alarm_kind's docstring; KIND_DOC
+-> the navigable document index, just consultable, not linked to the 3D).
+A .csv is KIND_ALARM only when the user explicitly marks it as the
+component info table (any columns -- component name, alarm code, spare
+part, maintenance notes... in any order, with a header row, see
+viewer3d.parse_component_table); an unmarked .csv (or
 any other non-3D/non-2D file) is a KIND_DOC. Content type for a KIND_DOC
 is inferred from its label's extension at view time, not stored here;
 KIND_2D always gets rendered, its content type is never ambiguous.
@@ -61,6 +64,7 @@ _HEADER_LEN = 4 + 2 + 2 + 4 + 4
 # so the reader knows how to dispatch it, independent of its content type
 KIND_3D = "3d"        # a BZM1 3D assembly -> the model viewer + BOM
 KIND_ALARM = "alarm"  # a component info CSV (any columns) -> wired to the search bar
+KIND_ALARM_GRAPH = "alarm_graph"  # alarm_graph.AlarmGraph, JSON bytes -> the block/arrow alarm panel
 KIND_2D = "2d"        # a BZR1 2D program (drawing/schematic) -> rendered PNG/GIF/SVG in the index
 KIND_DOC = "doc"      # a generic consultable document -> the navigable index, not linked to the 3D
 
@@ -144,6 +148,33 @@ def is_alarm_kind(kind: str) -> bool:
     "csv" tag as well as KIND_ALARM so a bundle written before the role
     was renamed still wires its search bar."""
     return kind in (KIND_ALARM, "csv")
+
+
+def unresolved_alarm_graph_procedures(items: list[BundleItem]) -> list[str]:
+    """Procedure labels a KIND_ALARM_GRAPH item references that have NO
+    matching KIND_DOC item in the same list -- a dangling "apri
+    procedura" link the viewer could never actually open. Pure query,
+    like AlarmGraph.unlinked_alarm_codes(): it reports, it does not
+    raise -- the caller decides whether a dangling reference should
+    block encoding (this belongs in bundle.py, not alarm_graph.py,
+    because it is a cross-item bundle concern: alarm_graph.py has no
+    idea what other items share its bundle).
+
+    Only the FIRST KIND_ALARM_GRAPH item is checked, mirroring the
+    already-documented convention for a bundle with more than one
+    KIND_3D item (valid to build, the viewer only ever shows the
+    first) -- a bundle is meant to carry at most one alarm graph, this
+    does not newly enforce that, just does not pretend to validate a
+    second one. Returns [] (nothing dangling) when there is no
+    KIND_ALARM_GRAPH item at all -- absence is not an error here."""
+    from .alarm_graph import AlarmGraph
+
+    graph_item = next((it for it in items if it.kind == KIND_ALARM_GRAPH), None)
+    if graph_item is None:
+        return []
+    graph = AlarmGraph.from_bytes(graph_item.data)
+    doc_labels = {it.label for it in items if it.kind == KIND_DOC}
+    return [p.label for p in graph.procedures if p.label not in doc_labels]
 
 
 # ------------------------------------------------------ file-based helper

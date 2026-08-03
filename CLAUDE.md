@@ -5675,13 +5675,61 @@ risolvono a 200 con il contenuto reale dei template, testato anche con
 un `fetch()` dalla pagina vera (non solo `curl` diretto), zero errori
 console.
 
-### 14.2 Prossimi slice (non ancora fatti)
+### 14.2 Slice 2 — integrazione bundle (fatto)
 
-- **Slice 2 — integrazione bundle**: nuovo `KIND_ALARM_GRAPH` in
-  `balzar/bundle.py` (JSON del grafo come bytes di un item bundle,
-  distinto da `KIND_ALARM`/`KIND_DOC` esistenti — mai in sostituzione),
-  validazione che ogni `ProcedureNode.label` corrisponda a un vero item
-  `KIND_DOC` incluso nello stesso bundle.
+Nuovo `KIND_ALARM_GRAPH = "alarm_graph"` in `balzar/bundle.py`, accanto
+a `KIND_ALARM`/`KIND_DOC` esistenti — mai in sostituzione, un bundle usa
+uno dei due meccanismi di allarmi alla volta (la tabella piatta di oggi
+o il grafo nuovo), mai entrambi insieme. L'item porta semplicemente
+`AlarmGraph.to_bytes()` (nuovo metodo, JSON UTF-8 — stesse
+`to_json_dict()`/`from_json_dict()` di Slice 1, solo serializzate a
+bytes): **nessuna modifica a `_pack_item`/`_unpack_items`/`encode_bundle`/
+`decode_bundle`** — il formato bundle è già agnostico al contenuto di
+ogni item per costruzione (stesso principio già verificato per
+`KIND_3D`/`KIND_ALARM` in §9.16), quindi un nuovo `kind` non richiede
+toccare il livello di packing, solo dichiararlo.
+
+**L'unica logica realmente nuova**: `unresolved_alarm_graph_procedures(items)`,
+una funzione di sola query (non solleva mai un'eccezione, stesso principio
+di `AlarmGraph.unlinked_alarm_codes()`) che confronta le etichette
+`ProcedureNode.label` del (primo) item `KIND_ALARM_GRAPH` contro le
+label dei `KIND_DOC` presenti nello stesso bundle, restituendo quelle
+senza un documento corrispondente — un collegamento "apri procedura"
+che il viewer non potrebbe mai aprire davvero. **Decisione di
+collocazione deliberata**: questa funzione vive in `bundle.py`, non in
+`alarm_graph.py` — è un problema di coerenza *tra* item di uno stesso
+bundle (quali documenti sono davvero inclusi), non qualcosa che il
+modello dati del grafo può sapere da solo (non ha visibilità sugli
+altri item). Se una scena futura (Slice 4, l'editor) vuole bloccare la
+codifica su un riferimento non risolto, decide lei cosa fare con la
+lista restituita — la funzione stessa resta una query pura, non una
+policy.
+
+**Solo il primo item `KIND_ALARM_GRAPH` viene controllato** se un
+bundle (per costruzione valido, non impedito) ne contiene più di uno —
+stessa convenzione già documentata per `KIND_3D` multipli (§9.16: il
+viewer ne mostra comunque solo il primo).
+
+Verificato: 9 test nuovi — 2 in `tests/test_alarm_graph.py`
+(`to_bytes`/`from_bytes`, incluso un controllo esplicito che il
+risultato sia JSON testuale leggibile, non un formato binario),
+7 in `tests/test_bundle.py` (round-trip encode/decode di un item
+`KIND_ALARM_GRAPH`, `unresolved_alarm_graph_procedures` con
+documento presente/assente, nessun item grafo → lista vuota non un
+errore, una causa senza procedura non compare mai come "non risolta",
+solo il primo item controllato su due presenti, e un test dedicato che
+fa transitare un item `KIND_ALARM_GRAPH` reale attraverso
+`chunk_payload`/`assemble_chunks` — non bastava fidarsi dell'argomento
+architetturale "qualunque kind funziona già", verificato con dati
+veri). **Nota di misura durante la scrittura del test**: un primo
+tentativo con solo 80 nodi si comprimeva sotto la soglia di un singolo
+chunk QR (deflate su JSON ripetitivo è molto efficace) — il test non
+avrebbe esercitato `chunk_payload` per niente; corretto a 300 nodi con
+testo variato per riga, misurato restare sopra soglia con margine.
+Suite completa: 398 test, tutti verdi.
+
+### 14.3 Prossimi slice (non ancora fatti)
+
 - **Slice 3 — pannello di lettura** nel viewer (`viewer3d.py`/`app.js`):
   sola lettura, riusa il click-to-highlight 3D e l'anteprima documenti
   già esistenti (§9.11/§9.17), stessa UI a blocchi del mockup ma sui

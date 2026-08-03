@@ -1,8 +1,8 @@
-"""balzar/alarm_graph.py -- Slice 1 of the "collega allarmi" feature:
-data model, fixed-schema CSV template parsing, JSON round-trip.
-
-No bundle/UI integration exists yet (that's later slices), so this
-suite only exercises the module directly."""
+"""balzar/alarm_graph.py -- Slices 1-2 of the "collega allarmi" feature:
+data model, fixed-schema CSV template parsing, JSON round-trip (Slice
+1), and the bytes<->AlarmGraph form a bundle item carries (Slice 2 --
+the bundle.py side of that integration is covered separately in
+test_bundle.py, this file only tests the module directly)."""
 
 import os
 import sys
@@ -140,6 +140,21 @@ class TestJsonRoundtrip(unittest.TestCase):
         # not crash -- every key defaults to empty via .get(..., [])
         restored = AlarmGraph.from_json_dict({})
         self.assertEqual(restored, AlarmGraph())
+
+    def test_to_bytes_and_back_preserves_everything(self):
+        # the form a KIND_ALARM_GRAPH bundle item actually carries
+        graph, _ = parse_alarm_graph_csvs(ALARMS_CSV, CAUSES_CSV)
+        data = graph.to_bytes()
+        self.assertIsInstance(data, bytes)
+        self.assertEqual(AlarmGraph.from_bytes(data), graph)
+
+    def test_to_bytes_is_utf8_json_text(self):
+        # not a binary format -- should decode and parse as plain JSON,
+        # inspectable like any other small text file in the project
+        import json
+        graph, _ = parse_alarm_graph_csvs(ALARMS_CSV, CAUSES_CSV)
+        parsed = json.loads(graph.to_bytes().decode("utf-8"))
+        self.assertEqual([a["code"] for a in parsed["alarms"]], ["E100", "E102", "E115"])
 
 
 if __name__ == "__main__":

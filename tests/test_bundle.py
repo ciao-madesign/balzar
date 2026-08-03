@@ -16,9 +16,12 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 from test_scene3d import _write_fixture_3dxml
 
-from balzar.bundle import (KIND_2D, KIND_3D, KIND_ALARM, KIND_CSV, KIND_DOC,
+from balzar.bundle import (KIND_2D, KIND_3D, KIND_ALARM, KIND_ALARM_GRAPH,
+                           KIND_CSV, KIND_DOC,
                            BundleError, BundleItem, decode_bundle, encode_bundle,
-                           encode_bundle_files, is_bundle)
+                           encode_bundle_files, is_bundle,
+                           unresolved_alarm_graph_procedures)
+from balzar.alarm_graph import AlarmGraph, AlarmNode, CauseNode, ProcedureNode
 from balzar.payload import assemble_chunks, chunk_payload
 from balzar.scene3d import decode_payload as decode_scene, generate_bom
 
@@ -241,6 +244,69 @@ class TestRender2DItem(unittest.TestCase):
         self.assertNotIn("rumore.svg", labels)
 
 
+class TestAlarmGraphBundleItem(unittest.TestCase):
+    """KIND_ALARM_GRAPH (Slice 2, CLAUDE.md SS14): the item is just
+    AlarmGraph.to_bytes()/from_bytes(), packed like any other bundle
+    item -- no special-casing needed in encode_bundle/decode_bundle
+    itself, only unresolved_alarm_graph_procedures is new logic."""
+
+    def _graph_with_one_procedure(self, label="PR-014_reset.pdf"):
+        return AlarmGraph(
+            alarms=[AlarmNode("E100", "Sovratemperatura")],
+            causes=[CauseNode("cause:1", "Termostato intervenuto")],
+            procedures=[ProcedureNode("proc:1", label)],
+            alarm_links=[("E100", "cause:1")],
+            cause_links=[("cause:1", "proc:1")],
+        )
+
+    def test_roundtrips_through_encode_decode_bundle(self):
+        graph = self._graph_with_one_procedure()
+        items = [BundleItem(KIND_ALARM_GRAPH, "collegamento_allarmi.json", graph.to_bytes())]
+        back = decode_bundle(encode_bundle(items))
+        self.assertEqual(back[0].kind, KIND_ALARM_GRAPH)
+        self.assertEqual(AlarmGraph.from_bytes(back[0].data), graph)
+
+    def test_unresolved_when_matching_doc_present(self):
+        graph = self._graph_with_one_procedure("PR-014_reset.pdf")
+        items = [
+            BundleItem(KIND_ALARM_GRAPH, "graph.json", graph.to_bytes()),
+            BundleItem(KIND_DOC, "PR-014_reset.pdf", b"%PDF-fake"),
+        ]
+        self.assertEqual(unresolved_alarm_graph_procedures(items), [])
+
+    def test_unresolved_when_no_matching_doc(self):
+        graph = self._graph_with_one_procedure("PR-014_reset.pdf")
+        items = [BundleItem(KIND_ALARM_GRAPH, "graph.json", graph.to_bytes())]
+        self.assertEqual(unresolved_alarm_graph_procedures(items), ["PR-014_reset.pdf"])
+
+    def test_no_alarm_graph_item_is_not_an_error(self):
+        items = [BundleItem(KIND_3D, "assembly.b3d", b"fake")]
+        self.assertEqual(unresolved_alarm_graph_procedures(items), [])
+
+    def test_a_cause_with_no_procedure_never_appears_as_unresolved(self):
+        # procedures are optional -- a graph with zero procedures has
+        # nothing to resolve, not a dangling reference
+        graph = AlarmGraph(
+            alarms=[AlarmNode("E100", "x")],
+            causes=[CauseNode("cause:1", "y")],
+            alarm_links=[("E100", "cause:1")],
+        )
+        items = [BundleItem(KIND_ALARM_GRAPH, "graph.json", graph.to_bytes())]
+        self.assertEqual(unresolved_alarm_graph_procedures(items), [])
+
+    def test_only_the_first_alarm_graph_item_is_checked(self):
+        # mirrors the already-documented convention for a bundle with
+        # more than one KIND_3D item: valid to build, only the first is
+        # actually looked at
+        first = self._graph_with_one_procedure("missing.pdf")
+        second = self._graph_with_one_procedure("also_missing.pdf")
+        items = [
+            BundleItem(KIND_ALARM_GRAPH, "first.json", first.to_bytes()),
+            BundleItem(KIND_ALARM_GRAPH, "second.json", second.to_bytes()),
+        ]
+        self.assertEqual(unresolved_alarm_graph_procedures(items), ["missing.pdf"])
+
+
 class TestBundleThroughQrCarrier(unittest.TestCase):
     """The core design claim: chunk_payload/assemble_chunks (and by the
     same logic payload_to_qr_frames/LiveScanner, which build on the same
@@ -262,6 +328,32 @@ class TestBundleThroughQrCarrier(unittest.TestCase):
         reassembled = assemble_chunks(shuffled)
         self.assertEqual(reassembled, original)
         self.assertEqual(decode_bundle(reassembled), decode_bundle(original))
+
+    def test_alarm_graph_item_survives_chunking_too(self):
+        # double-checks the same claim specifically for KIND_ALARM_GRAPH
+        # (a brand new kind) rather than just trusting that "any kind
+        # works" by architectural argument alone. 300 varied-text nodes
+        # measured to survive deflate well above the single-QR-chunk
+        # capacity (~2953 B) -- a small fixed count risked compressing
+        # down to one chunk and not exercising chunk_payload at all.
+        graph = AlarmGraph(
+            alarms=[AlarmNode(f"E{i}", f"descrizione allarme numero {i} con testo variato {i * 7}")
+                    for i in range(300)],
+            causes=[CauseNode(f"cause:{i}", f"causa e soluzione per il caso {i} valore {i * 13}")
+                    for i in range(300)],
+            alarm_links=[(f"E{i}", f"cause:{i}") for i in range(300)],
+        )
+        items = [BundleItem(KIND_ALARM_GRAPH, "graph.json", graph.to_bytes())]
+        original = encode_bundle(items)
+        chunks = chunk_payload(original)
+        self.assertGreater(len(chunks), 1, "test payload should need more than one chunk")
+        import random
+        shuffled = chunks[:]
+        random.shuffle(shuffled)
+        reassembled = assemble_chunks(shuffled)
+        self.assertEqual(reassembled, original)
+        restored = AlarmGraph.from_bytes(decode_bundle(reassembled)[0].data)
+        self.assertEqual(restored, graph)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from dataclasses import dataclass, field
 
 
@@ -85,6 +86,18 @@ class AlarmGraph:
             alarm_links=[(l[0], l[1]) for l in d.get("alarm_links", [])],
             cause_links=[(l[0], l[1]) for l in d.get("cause_links", [])],
         )
+
+    def to_bytes(self) -> bytes:
+        """UTF-8 JSON -- the native form carried by a KIND_ALARM_GRAPH
+        bundle item (balzar/bundle.py, Slice 2). A graph is a handful of
+        short strings, nowhere near the size where a binary format would
+        earn its own inspectability cost (unlike BZM1, see CLAUDE.md
+        SS9.4 point 2), so plain JSON stays the whole story here."""
+        return json.dumps(self.to_json_dict(), ensure_ascii=False).encode("utf-8")
+
+    @staticmethod
+    def from_bytes(data: bytes) -> AlarmGraph:
+        return AlarmGraph.from_json_dict(json.loads(data.decode("utf-8")))
 
 
 def _read_rows(text: str) -> list[list[str]]:
