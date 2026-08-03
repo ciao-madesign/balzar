@@ -186,13 +186,31 @@ non è fattibile con l'architettura attuale.
   il caso d'uso "manutenzione senza rete" sia la riservatezza del
   disegno). Alternativa realistica identificata ma non implementata:
   FreeCAD/`pythonocc`, entrambi offline e scriptabili.
-- **"3D filtered mode"** (nascondere sotto-assiemi riservati) — proposta
-  e discussa, non iniziata. Punto tecnico da tenere presente quando si
-  riprende: nascondere solo nella UI del viewer non basta, il `.glb`
-  scaricabile contiene comunque nomi e gerarchia completi — una vera
-  riservatezza richiederebbe unire la geometria sotto il livello scelto
-  già in fase di export, col costo esplicito di perdere il
-  click-to-select per quelle sotto-parti.
+- **"3D filtered mode"** (nascondere sotto-assiemi riservati) — **fatto**:
+  risolto riusando `merge_names` (pensato in origine per ridurre i byte,
+  vedi `CLAUDE.md` §9.31/§9.32), che elimina davvero (non solo nasconde
+  nella UI) i nomi/la geometria dei sotto-assiemi fusi sia dal payload
+  sia dal `.glb` esportato — verificato byte-per-byte che le stringhe
+  proprietarie non sopravvivono in nessuno dei due.
+- **Fountain coding (LT/rateless) come trasporto QR alternativo** —
+  valutato con un prototipo reale e isolato (`experiments/fountain-qr-poc/`,
+  porting fedele di un progetto MIT esterno, mai integrato nel motore
+  balzar), non un'estensione teorica. Risolve un problema reale che il
+  trasporto QR classico di balzar (`BZC1`, indici fissi) ha sotto
+  cattura con perdita: con la fontana, il ricevitore accetta **qualunque**
+  sottoinsieme di ~K×1,15 fotogrammi, non deve ricevere esattamente
+  quelli mancanti — misurato utile soprattutto nello scenario "schermo
+  attivo che trasmette" (es. 3D+allarmi da un pannello macchina), meno
+  per etichette statiche stampate (il caso guida di balzar oggi, dove
+  il trasporto QR classico resta la scelta giusta). Guadagno reale
+  misurato (Monte Carlo + browser reale): 2-4× più veloce, fino a 5,7×
+  meno esposizioni nel caso peggiore, sullo stesso payload/scala di un
+  assieme 3D reale. **Non integrato**: manca ancora una verifica con
+  fotocamera/schermo fisici reali (solo simulazione/browser finora);
+  nessuna decisione presa su un eventuale modulo `balzar/fountain.py`
+  come modalità di trasporto aggiuntiva ed esplicita, mai in
+  sostituzione del trasporto QR classico. Vedi `CLAUDE.md` §13 per i
+  numeri completi.
 
 ---
 

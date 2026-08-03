@@ -5308,3 +5308,175 @@ toccata (usa il suo `landing.css`). Da validare live sul Mac + rebuild `.app`
 per l'icona blu. Restano possibili rifiniture minori (accento del viewer 3D
 `viewer3d.py`/`live_scan_server.py` ancora arancioni — non nel flusso app
 principale) e il taglio copy "meno parole" tab per tab.
+
+## 13. Fountain coding — valutato con prototipo reale, non integrato
+
+Idea esterna, portata dall'utente: un progetto trovato su GitHub,
+[bashalarmistalt/decimen-optical-transfer](https://github.com/bashalarmistalt/decimen-optical-transfer)
+(licenza MIT), risolve lo stesso problema del trasporto QR di balzar
+(schermo → fotocamera, canale monodirezionale) con una tecnica diversa
+dal chunking a indice fisso (`BZC1`) già usato ovunque nel progetto:
+**fountain coding** (Luby Transform). Valutato con un prototipo reale,
+**non integrato nel prodotto** — vive isolato in `experiments/
+fountain-qr-poc/`, zero file esistenti toccati.
+
+### 13.1 Il problema che risolve, in breve
+
+`BZC1` (chunking a indice fisso, `balzar/payload.py`) richiede che il
+ricevente veda **ogni singolo capitolo, con il suo indice esatto**,
+almeno una volta — se un fotogramma specifico è sistematicamente perso
+(sfocatura, autofocus), bisogna aspettare che torni esattamente quello.
+È il problema matematico del "coupon collector", che peggiora in modo
+non lineare con payload grandi e condizioni di lettura imperfette —
+esattamente il caso già sofferto per gli assiemi 3D (§9.10/§9.24/§9.25).
+
+Il fountain coding elimina questo problema strutturalmente: il mittente
+genera un flusso "infinito" di fotogrammi, ognuno lo XOR di un
+sottoinsieme pseudocasuale dei blocchi del payload (sottoinsieme e
+dimensione derivati deterministicamente da un seme condiviso — stessa
+disciplina di determinismo cross-piattaforma già seguita da
+`balzar/rng.py`, incluso un logaritmo naturale scritto a mano perché
+`Math.log` diverge tra motori JS diversi). Il ricevente raccoglie
+**~K×1,15 fotogrammi qualsiasi**, non importa quali né in che ordine —
+un fotogramma perso costa tempo, mai correttezza.
+
+### 13.2 Perché non tocca il motore di balzar, e perché resta un'aggiunta, non una sostituzione
+
+Vincolo esplicito dell'utente rispettato per costruzione: **nessun file
+esistente modificato**. `chunk_payload`/`assemble_chunks`
+(`balzar/payload.py`) sono già agnostici al contenuto e al carrier —
+il fountain coding è un secondo "carrier" alternativo che vivrebbe
+accanto a `balzar/qr.py`, mai al suo posto. Il passo "apri il payload
+ricostruito nel viewer" (`open_bundle_in_browser`, decodifica `BZM1`,
+generazione GLB) è **identico** in entrambi i casi — cambia solo come i
+byte arrivano dal mittente al ricevente, non cosa succede dopo.
+
+**Scope deciso esplicitamente con l'utente**: utile solo per lo
+scenario "mittente attivo" (uno schermo — PC, HMI macchina, o un
+piccolo display dedicato — che trasmette in streaming continuo) — non
+sostituisce il flusso a QR statici/stampati, che resta per il caso
+guida del progetto (etichetta stampata su una carcassa, senza corrente,
+letta anni dopo, §6.1/§9.19). I due flussi condividono tutto tranne il
+trasporto:
+
+```
+Balzar Studio: 3DXML + CSV allarmi -> payload/bundle (.bzx)   [INVARIATO in entrambi]
+      |
+      +-- Flusso A (oggi): griglie QR statiche -> foto discrete -> LiveScanner
+      +-- Flusso B (prototipo): stream fountain continuo -> fotocamera continua -> LTDecoder
+      |
+Apertura nel viewer 3D (open_bundle_in_browser)                [INVARIATO in entrambi]
+```
+
+### 13.3 Il prototipo (`experiments/fountain-qr-poc/`)
+
+Porting **fedele** (algoritmo invariato, solo sintassi TS→JS) da
+`shared/fountain.ts`/`shared/protocol.ts` della repo originale, non una
+riscrittura. Due pagine web isolate, nessuna dipendenza dal resto del
+progetto: `sender.html` (schermo, genera lo stream), `receiver.html`
+(fotocamera, ricostruisce), `serve_https.py` (certificato locale
+autofirmato incluso — la fotocamera richiede un contesto sicuro).
+Decoder QR: `jsQR` (lo stesso già vendorizzato per `trasporto-qr.html`,
+§2.4d — nessuna libreria nuova per la lettura). Generatore QR lato
+mittente: `qrcode` (npm, bundlata con esbuild, licenza MIT).
+
+### 13.4 Cosa è stato misurato per davvero (non solo letto/simulato)
+
+**Verifica end-to-end con codice reale, non solo l'algoritmo isolato**:
+60 fotogrammi catturati da uno screenshot reale del mittente in
+esecuzione in un browser (Playwright), decodificati con `jsQR`,
+ricostruiti con il decoder fountain — **bit-identico**, hash verificato,
+completato in 50 fotogrammi (K=36, teoria ~42).
+
+**Confronto Monte Carlo** (simulazione, ma con l'encoder/decoder LT
+reale della repo, non reimplementato) tra `BZC1` a indice fisso e
+fountain coding, su payload alla stessa scala dei due benchmark 3D già
+misurati nel progetto (§9.10: 239.491 B/K=109; §9.24: 555.922 B/K=253),
+a diverse probabilità di successo per lettura (simula sfocatura/motion):
+
+| p successo | BZC1: esposizioni medie/peggior caso | Fountain: medie/peggior caso | Rapporto medio |
+|---|---|---|---|
+| 0,95 (K=109) | 213 / 318 | 156 / 211 | 1,4× |
+| 0,70 (K=109) | 486 / 1.020 | 216 / 283 | 2,25× |
+| 0,50 (K=109) | 844 / 1.715 | 297 / 412 | 2,84× |
+| 0,50 (K=253) | 2.251 / 4.456 | 625 / 778 | 3,60× |
+
+Il divario **si allarga** con payload più grandi e condizioni di lettura
+peggiori — il caso peggiore (coda) è 3,6-5,7× peggiore per `BZC1`,
+esattamente il rischio che rovina l'esperienza reale.
+
+**Confronto diretto end-to-end, file sorgente reale, nessun payload
+balzar in mezzo** (`chunks --raw`-equivalente contro il prototipo),
+stesso PDF già usato altrove in sessione (51.318 B) e un payload
+sintetico alla stessa dimensione di un vero assieme 3D (239.491 B,
+§9.10) — generazione+lettura, condizioni ideali (nessuna perdita reale,
+nessuna fotocamera vera):
+
+| Caso | Metodo classico (grid_dim=4) | Fountain | Rapporto |
+|---|---|---|---|
+| PDF, 51.318 B | 5,26 s totali | 2,38 s totali | 2,2× |
+| Scala assieme 3D, 239.491 B | 35,56 s totali | 9,00 s totali | 4,0× |
+
+Entrambi bit-identici, hash verificato.
+
+### 13.5 Onestà sui numeri — due fattori di confusione dichiarati esplicitamente
+
+1. **La generazione non è un confronto alla pari linguisticamente**: il
+   metodo classico usa la libreria QR di Python (quella reale di
+   balzar), il prototipo usa una libreria QR JavaScript — gran parte
+   dello scarto in generazione (~135-274 ms/QR vs ~16 ms/QR) riflette
+   la velocità del linguaggio/libreria, non lo schema di codifica in sé.
+2. **La lettura invece è un vantaggio strutturale reale, non solo
+   d'implementazione**: il metodo classico deve cercare più QR dentro
+   una singola foto (una griglia), pagando un costo di ritaglio anche
+   nella sua versione già ottimizzata (`_tile_boxes`/`_decode_tiled`,
+   §2.4b); il fountain mostra un codice alla volta, quindi non paga mai
+   quel costo.
+3. **Il test più importante manca ancora**: tutti i numeri sopra sono
+   o simulati (Monte Carlo) o misurati in condizioni perfette (nessuna
+   sfocatura reale, nessuna fotocamera vera — solo screenshot/immagini
+   generate al computer). Il vero valore del fountain coding (tenuta
+   sotto perdita reale) non è ancora stato confermato con hardware
+   fisico — richiede un umano con un telefono e uno schermo veri, non
+   qualcosa che questo ambiente sandboxed può fare.
+
+### 13.6 Hardware mittente a basso costo — valutazione ragionata, non testata
+
+Domanda diretta di sessione: uno schermo piccolo/economico tipo
+etichetta può fare da mittente? Risposta ragionata (nessun hardware
+fisico disponibile per verificarlo qui):
+
+- **E-paper è la scelta sbagliata per questo caso**: refresh 1-5s per
+  fotogramma (200-300ms anche per le varianti a refresh parziale più
+  recenti), strutturalmente incompatibile con uno stream che deve
+  cambiare fotogramma più volte al secondo. Buono per il QR statico di
+  oggi, non per il fountain coding.
+- **LCD/OLED piccolo ed economico va bene per il refresh** (60fps è
+  banale anche per moduli da pochi euro), il vincolo vero è la
+  **risoluzione fisica**: pochi pixel disponibili limitano quanto un QR
+  può essere denso restando leggibile a distanza. La leva è
+  `blockLen`/`FRAME_BYTES` (byte per fotogramma) — ridurlo produce QR
+  più semplici (meno moduli), al costo di più fotogrammi per completare.
+- **Il calcolo non deve avvenire sul dispositivo economico**: i
+  fotogrammi si possono pre-generare una volta sola su un computer
+  normale (esattamente come fatto nei test di §13.4 — un file di
+  immagini pronte) e il dispositivo a basso costo (es. un
+  microcontrollore classe ESP32 con un piccolo schermo, ordine di
+  10-15€ totali) si limita a rimandarli in loop — nessun motore
+  JS/fountain a bordo, solo un framebuffer e un ciclo. Si aggancia
+  all'idea già registrata in §5 punto 3 ("supporto hardware dedicato").
+- Non implementato, non testato con hardware reale — solo una
+  valutazione tecnica ragionata sui vincoli noti dei componenti.
+
+### 13.7 Stato e prossimo passo
+
+**Valutato, prototipo funzionante e verificato in automatico, non
+integrato nel prodotto.** Nessuna decisione presa su se/come
+integrarlo — dipende dal test con hardware reale (schermo + fotocamera
+veri), che è il prossimo passo esplicito, non ancora fatto. Se
+confermato, l'integrazione naturale sarebbe un nuovo modulo
+`balzar/fountain.py` (stesso principio di `balzar/qr.py`: carrier
+alternativo dietro la stessa astrazione `chunk_payload`/
+`assemble_chunks`), raggiungibile con un flag esplicito — mai un
+comportamento di default cambiato silenziosamente, stesso principio
+già seguito per ogni altra estensione di questo genere nel progetto.
