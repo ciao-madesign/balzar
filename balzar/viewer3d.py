@@ -124,6 +124,26 @@ model-viewer{{width:100%;height:100%}}
 #search-results th,#search-results td{{padding:4px 8px;border-bottom:1px solid #333;
                                        text-align:left;color:#eee}}
 #search-results th{{background:#2a2a2a;position:sticky;top:0}}
+#alarm-panel{{position:absolute;bottom:52px;left:12px;right:12px;max-height:55vh;overflow-y:auto;
+             background:rgba(20,20,20,0.92);border-radius:6px;padding:4px 0}}
+.ag-item{{border-bottom:1px solid #333}}
+.ag-item:last-child{{border-bottom:none}}
+.ag-head{{width:100%;text-align:left;background:none;border:none;color:#eee;font:inherit;
+         padding:8px 10px;cursor:pointer;display:flex;gap:10px;align-items:baseline}}
+.ag-head:hover{{background:#2a2a2a}}
+.ag-code{{font-family:monospace;font-weight:bold;color:#f2a154;white-space:nowrap}}
+.ag-desc{{color:#ccc;font-size:13px;flex:1}}
+.ag-body{{display:none;padding:0 10px 10px 10px;font-size:13px}}
+.ag-item.open .ag-body{{display:block}}
+.ag-cause{{margin-bottom:8px}}
+.ag-cause-label{{margin:0 0 2px;font-size:11px;text-transform:uppercase;color:#7fd1c5;letter-spacing:0.04em}}
+.ag-cause-text{{margin:0 0 6px;color:#eee}}
+.ag-proc-btn{{background:#2a2340;border:1px solid #6d28d9;color:#c9a8ff;border-radius:4px;
+             padding:4px 8px;font:inherit;font-size:12px;cursor:pointer}}
+.ag-proc-btn:hover{{background:#352a52}}
+#alarm-search-bar{{position:absolute;bottom:12px;left:12px;right:12px}}
+#alarm-search-input{{width:100%;padding:6px 10px;border-radius:6px;border:1px solid #555;
+                    background:rgba(20,20,20,0.85);color:#eee;font:inherit;box-sizing:border-box}}
 #doc-index{{position:absolute;top:54px;left:12px;max-width:260px;max-height:60vh;overflow-y:auto;
            background:rgba(20,20,20,0.85);color:#eee;padding:8px 12px;border-radius:6px;
            font-size:13px}}
@@ -165,6 +185,7 @@ window.__BALZAR_INFO_TABLE__ = {info_table_json};
 window.__BALZAR_DOCS__ = {docs_json};
 {select_js}
 {doc_js}
+{alarm_graph_js}
 </script>
 </body>
 </html>
@@ -173,11 +194,17 @@ window.__BALZAR_DOCS__ = {docs_json};
 # The 3D cluster (model-viewer + its controls), interpolated into
 # {threed_section} only when the bundle actually has a 3D item -- a
 # document-only bundle omits it entirely and shows just the index.
+# {search_or_alarm_html} is filled in by _render_viewer_page with EITHER
+# _SEARCH_SECTION (the flat component-table search, today's default) OR
+# _alarm_graph_html's output (Slice 3, CLAUDE.md SS14) -- never both: a
+# bundle carries one alarm mechanism at a time (balzar/bundle.py).
 _THREED_SECTION = """<model-viewer id="mv" src="model.glb" camera-controls auto-rotate
              shadow-intensity="0.6" exposure="1.1" field-of-view="30deg"></model-viewer>
 <button id="reset-btn" type="button">Mostra tutto</button>
 <button id="export-btn" type="button" disabled>Esporta scheda ricambio</button>
-<div id="search-panel">
+{search_or_alarm_html}"""
+
+_SEARCH_SECTION = """<div id="search-panel">
   <div id="search-results"></div>
   <p id="search-note"></p>
 </div>
@@ -293,12 +320,17 @@ _SELECT_JS = """
       originalColors.set(m, m.pbrMetallicRoughness.baseColorFactor.slice());
     });
     loadInfoTable(window.__BALZAR_INFO_TABLE__);
-    if (tableRows.length){
+    // searchNote/searchInput only exist when _SEARCH_SECTION was
+    // rendered -- absent when the alarm-graph panel (Slice 3) replaced
+    // it, so this whole block is skipped rather than crashing on a null
+    // element (the alarm panel handles its own ?q= automation instead,
+    // see _ALARM_GRAPH_JS).
+    if (searchNote && tableRows.length){
       searchNote.textContent = 'Tabella disponibile (' + tableRows.length + ' riga/e, ' +
         tableHeaders.length + ' colonne: ' + tableHeaders.join(', ') + ') -- cerca subito un valore.';
     }
     var q = new URLSearchParams(location.search).get('q');
-    if (q){ searchInput.value = q; runSearch(q); }
+    if (q && searchInput){ searchInput.value = q; runSearch(q); }
   }
   function resetAll(){
     if (!originalColors) return;
@@ -473,22 +505,34 @@ _SELECT_JS = """
   document.querySelectorAll('#bom tr.part').forEach(function(row){
     row.addEventListener('click', function(){ selectByName(row.dataset.partName); });
   });
-  searchBtn.addEventListener('click', function(){ runSearch(searchInput.value); });
-  searchInput.addEventListener('keydown', function(ev){
-    if (ev.key === 'Enter') runSearch(searchInput.value);
-  });
-  alarmCsvInput.addEventListener('change', function(){
-    var file = alarmCsvInput.files[0];
-    if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function(){
-      loadInfoTable(parseComponentTable(String(reader.result)));
-      renderResultsTable(null, null);
-      searchNote.textContent = 'Tabella caricata: ' + tableRows.length + ' riga/e, ' +
-        tableHeaders.length + ' colonne (' + tableHeaders.join(', ') + ').';
-    };
-    reader.readAsText(file);
-  });
+  // searchBtn/searchInput/alarmCsvInput are all part of _SEARCH_SECTION,
+  // absent when the alarm-graph panel (Slice 3) took its place instead --
+  // guarded as one block since all three only ever exist together.
+  if (searchBtn) {
+    searchBtn.addEventListener('click', function(){ runSearch(searchInput.value); });
+    searchInput.addEventListener('keydown', function(ev){
+      if (ev.key === 'Enter') runSearch(searchInput.value);
+    });
+    alarmCsvInput.addEventListener('change', function(){
+      var file = alarmCsvInput.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(){
+        loadInfoTable(parseComponentTable(String(reader.result)));
+        renderResultsTable(null, null);
+        searchNote.textContent = 'Tabella caricata: ' + tableRows.length + ' riga/e, ' +
+          tableHeaders.length + ' colonne (' + tableHeaders.join(', ') + ').';
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  // Small global entry points so the alarm-graph panel script (a
+  // separate IIFE, _ALARM_GRAPH_JS) can reuse the SAME highlight/reset
+  // logic instead of reimplementing it -- no duplication of the
+  // material-recolor code for a second UI surface.
+  window.balzarHighlightNames = highlightNames;
+  window.balzarResetAll = resetAll;
 })();
 """
 
@@ -525,6 +569,64 @@ def _doc_index_html(documents: list[dict] | None) -> str:
         for i, d in enumerate(documents)
     )
     return f'<div id="doc-index"><h3>Documenti nel bundle</h3><ul>{lis}</ul></div>'
+
+
+def _alarm_graph_html(alarm_graph: dict | None, documents: list[dict] | None) -> str:
+    """Render the read-only alarm/cause/procedure panel (Slice 3,
+    CLAUDE.md SS14) -- shown INSTEAD of _SEARCH_SECTION (the flat
+    component-table search) when the bundle carries a KIND_ALARM_GRAPH
+    item; the two are mutually exclusive per bundle, same as the two
+    alarm mechanisms in bundle.py. `alarm_graph` is an AlarmGraph's
+    to_json_dict() output (plain dict, not the dataclass itself -- this
+    module has no reason to import alarm_graph.py just for a type).
+
+    A procedure's "Apri procedura" button resolves to a document index
+    HERE, server-side, by matching ProcedureNode.label against
+    `documents`' labels -- a label with no matching document (already
+    flagged earlier by bundle.unresolved_alarm_graph_procedures, not
+    re-checked here) is simply rendered without a button: the same
+    "don't crash on a dangling reference, just don't offer it" principle
+    used throughout this feature."""
+    if not alarm_graph:
+        return ""
+    doc_index_by_label = {d["label"]: i for i, d in enumerate(documents or [])}
+    causes_by_id = {c["id"]: c for c in alarm_graph["causes"]}
+    procs_by_id = {p["id"]: p for p in alarm_graph["procedures"]}
+    cause_ids_by_alarm: dict[str, list[str]] = {}
+    for code, cause_id in alarm_graph["alarm_links"]:
+        cause_ids_by_alarm.setdefault(code, []).append(cause_id)
+    proc_id_by_cause: dict[str, str] = dict(alarm_graph["cause_links"])
+
+    items = []
+    for a in alarm_graph["alarms"]:
+        cause_blocks = []
+        for cause_id in cause_ids_by_alarm.get(a["code"], []):
+            cause = causes_by_id.get(cause_id)
+            if not cause:
+                continue
+            proc_html = ""
+            proc = procs_by_id.get(proc_id_by_cause.get(cause_id, ""))
+            if proc:
+                doc_i = doc_index_by_label.get(proc["label"])
+                if doc_i is not None:
+                    proc_html = (f'<button class="ag-proc-btn" type="button" data-doc-index="{doc_i}">'
+                                f'Apri procedura — {html.escape(proc["label"])}</button>')
+            cause_blocks.append(
+                f'<div class="ag-cause"><p class="ag-cause-label">Causa e soluzione</p>'
+                f'<p class="ag-cause-text">{html.escape(cause["text"])}</p>{proc_html}</div>')
+        body = "".join(cause_blocks) if cause_blocks else '<p class="ag-cause-text">Nessuna causa collegata.</p>'
+        items.append(
+            f'<div class="ag-item" data-code="{html.escape(a["code"].lower())}" '
+            f'data-desc="{html.escape(a["description"].lower())}" '
+            f'data-component="{html.escape(a.get("component", ""))}">'
+            f'<button class="ag-head" type="button">'
+            f'<span class="ag-code">{html.escape(a["code"])}</span>'
+            f'<span class="ag-desc">{html.escape(a["description"])}</span></button>'
+            f'<div class="ag-body">{body}</div></div>')
+
+    return (f'<div id="alarm-panel">{"".join(items)}</div>'
+            f'<div id="alarm-search-bar">'
+            f'<input id="alarm-search-input" type="text" placeholder="Cerca allarme…"></div>')
 
 
 # Client-side document index + inline viewer. Kept a separate literal
@@ -610,6 +712,72 @@ _DOC_JS = """
   document.getElementById('doc-overlay-close').addEventListener('click', function(){
     overlay.classList.remove('open');
   });
+
+  // Entry point for the alarm-graph panel's "Apri procedura" buttons
+  // (_ALARM_GRAPH_JS, a separate IIFE) -- reuses this exact preview/
+  // download logic instead of a second copy of it.
+  window.balzarOpenDoc = function(i){ open(docs[i]); };
+})();
+"""
+
+# The read-only alarm/cause/procedure panel's interactivity (Slice 3):
+# expand a block, highlight its 3D component (reusing _SELECT_JS's
+# balzarHighlightNames/balzarResetAll, never reimplementing the
+# material-recolor logic), open a linked procedure (reusing _DOC_JS's
+# balzarOpenDoc). A no-op (early return) when the panel isn't in the
+# page at all -- the flat search UI is what's rendered instead in the
+# far more common case today.
+_ALARM_GRAPH_JS = """
+(function(){
+  var panel = document.getElementById('alarm-panel');
+  if (!panel) return;
+  var searchInput = document.getElementById('alarm-search-input');
+  var items = panel.querySelectorAll('.ag-item');
+
+  items.forEach(function(item){
+    item.querySelector('.ag-head').addEventListener('click', function(){
+      var willOpen = !item.classList.contains('open');
+      items.forEach(function(o){ if (o !== item) o.classList.remove('open'); });
+      item.classList.toggle('open', willOpen);
+      var component = item.dataset.component;
+      if (willOpen && component && window.balzarHighlightNames){
+        window.balzarHighlightNames([component]);
+      } else if (!willOpen && window.balzarResetAll){
+        window.balzarResetAll();
+      }
+    });
+    item.querySelectorAll('.ag-proc-btn').forEach(function(btn){
+      btn.addEventListener('click', function(ev){
+        ev.stopPropagation();  // don't also toggle the block open/closed
+        if (window.balzarOpenDoc) window.balzarOpenDoc(+btn.dataset.docIndex);
+      });
+    });
+  });
+
+  function applyFilter(query){
+    var q = (query || '').trim().toLowerCase();
+    items.forEach(function(item){
+      var match = !q || item.dataset.code.indexOf(q) >= 0 || item.dataset.desc.indexOf(q) >= 0;
+      item.style.display = match ? '' : 'none';
+    });
+  }
+  if (searchInput){
+    searchInput.addEventListener('input', function(){ applyFilter(searchInput.value); });
+  }
+
+  // ?q=<codice> automation, same idea as the flat search panel's own
+  // (guarded there, see cacheColors) -- opens the matching block
+  // instead of typing it, for a page reopened from a script/HMI/QR.
+  var q = new URLSearchParams(location.search).get('q');
+  if (q && searchInput){
+    searchInput.value = q;
+    var ql = q.trim().toLowerCase();
+    var match = null;
+    items.forEach(function(item){
+      if (!match && item.dataset.code.indexOf(ql) >= 0) match = item;
+    });
+    if (match) match.querySelector('.ag-head').click();
+  }
 })();
 """
 
@@ -696,7 +864,7 @@ def parse_component_table(path: str) -> ComponentTable:
 
 
 def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
-                        work_dir: str) -> http.server.HTTPServer:
+                        work_dir: str, alarm_graph: dict | None = None) -> http.server.HTTPServer:
     """Write model.glb (if any) + viewer.html + a copy of
     model-viewer.min.js, then serve `work_dir` on an ephemeral localhost
     port and open the default browser. The single page builder behind
@@ -708,7 +876,16 @@ def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
     running server (`.server_address[1]` is the port), so a caller that
     wants to avoid spawning a second server for content it already has
     open (gui.py's library panel) can reopen a browser tab at the same
-    port instead, and can `.shutdown()` it explicitly when done."""
+    port instead, and can `.shutdown()` it explicitly when done.
+
+    `alarm_graph` (optional, an AlarmGraph.to_json_dict() -- Slice 3,
+    CLAUDE.md SS14) swaps the flat component-table search UI for the
+    read-only alarm/cause/procedure block panel. Mutually exclusive with
+    `info_table` by construction (a bundle carries one alarm mechanism
+    at a time, see open_bundle_in_browser) -- when both happen to be
+    given, `alarm_graph` wins and `info_table` is ignored for the panel
+    choice, though it still gets embedded for the (unlikely) case some
+    other caller wants it available."""
     if glb is not None:
         with open(os.path.join(work_dir, "model.glb"), "wb") as fh:
             fh.write(glb)
@@ -720,15 +897,18 @@ def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
         info_table.to_json_dict() if info_table else {"headers": [], "rows": []}
     ).replace("</", "<\\/")
     docs_json = json.dumps(documents or []).replace("</", "<\\/")
+    search_or_alarm_html = _alarm_graph_html(alarm_graph, documents) if alarm_graph else _SEARCH_SECTION
     html_out = _PAGE_TEMPLATE.format(
         body_class="" if glb is not None else "no-3d",
-        threed_section=_THREED_SECTION if glb is not None else "",
+        threed_section=_THREED_SECTION.format(search_or_alarm_html=search_or_alarm_html)
+                      if glb is not None else "",
         bom_html=_bom_html(bom_lines) if glb is not None else "",
         doc_index_html=_doc_index_html(documents),
         info_table_json=info_table_json,
         docs_json=docs_json,
         select_js=_SELECT_JS if glb is not None else "",
-        doc_js=_DOC_JS)
+        doc_js=_DOC_JS,
+        alarm_graph_js=_ALARM_GRAPH_JS if alarm_graph else "")
     with open(os.path.join(work_dir, "viewer.html"), "w", encoding="utf-8") as fh:
         fh.write(html_out)
     if os.path.exists(_MODEL_VIEWER_JS):
@@ -747,7 +927,8 @@ def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
 def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] | None,
                         work_dir: str,
                         info_table: ComponentTable | None = None,
-                        documents: list[dict] | None = None) -> "http.server.HTTPServer":
+                        documents: list[dict] | None = None,
+                        alarm_graph: dict | None = None) -> "http.server.HTTPServer":
     """Write model.glb + viewer.html + a copy of model-viewer.min.js into
     `work_dir`, serve it on an ephemeral localhost port, open the default
     browser. `work_dir` is the caller's responsibility (a TemporaryDirectory
@@ -766,8 +947,13 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] 
     index of consultable documents alongside the model -- see
     open_bundle_in_browser, which builds it from a bundle's doc items.
 
+    `alarm_graph` (optional, an AlarmGraph.to_json_dict() -- Slice 3,
+    CLAUDE.md SS14) shows the read-only alarm/cause/procedure block
+    panel INSTEAD of the `info_table` search UI (mutually exclusive,
+    see _render_viewer_page).
+
     Returns the running server (see _render_viewer_page)."""
-    return _render_viewer_page(glb, bom_lines, info_table, documents, work_dir)
+    return _render_viewer_page(glb, bom_lines, info_table, documents, work_dir, alarm_graph)
 
 
 def _render_2d_item(item) -> list[dict]:
@@ -846,12 +1032,13 @@ def _documents_from_items(items) -> list[dict]:
 
 def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HTTPServer":
     """Open a multi-document bundle (balzar/bundle.py): the "3d" item
-    (if any) becomes the model.glb + BOM this module already shows, any
-    alarm item wires the search bar with no manual upload, and every
-    alarm/doc item also appears in a navigable document index that can
-    be consulted inline (text/CSV/image) or downloaded (structured
-    formats). A bundle with NO 3D item is valid -- it renders an
-    index-only page of its documents.
+    (if any) becomes the model.glb + BOM this module already shows, an
+    alarm item wires either the flat search bar (KIND_ALARM) or the
+    block/procedure panel (KIND_ALARM_GRAPH -- Slice 3, CLAUDE.md SS14)
+    with no manual upload, and every alarm/doc item also appears in a
+    navigable document index that can be consulted inline (text/CSV/
+    image) or downloaded (structured formats). A bundle with NO 3D item
+    is valid -- it renders an index-only page of its documents.
 
     Deliberately local imports (scene3d.py/gltf.py, not used by the rest
     of this module) so the plain GLB+BOM path stays as decoupled from the
@@ -859,8 +1046,9 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HT
     viewer3d.py that needs to know a bundle exists.
 
     Returns the running server (see _render_viewer_page)."""
+    from .alarm_graph import AlarmGraph
     from .bundle import BundleError, decode_bundle, is_alarm_kind
-    from .bundle import KIND_3D
+    from .bundle import KIND_3D, KIND_ALARM_GRAPH
     from .gltf import scene3d_to_glb
     from .scene3d import Scene3DError, decode_payload as decode_scene, generate_bom
 
@@ -871,29 +1059,45 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HT
 
     documents = _documents_from_items(items)
 
-    # a bundle with more than one alarm-marked CSV is valid (the format
-    # doesn't forbid it) but they could have entirely different columns
-    # -- concatenating rows across mismatched schemas the way the old
-    # fixed two-column format safely could doesn't generalize, so only
-    # the first one becomes the info table, same "first one wins, not
-    # silently merged" principle already used below for multiple 3D items
+    # The two alarm mechanisms are mutually exclusive per bundle (see
+    # bundle.py's module docstring) -- KIND_ALARM_GRAPH wins if somehow
+    # both are present, same "first/richer one wins, not silently
+    # merged" principle already used below for multiple 3D items.
+    alarm_graph_item = next((it for it in items if it.kind == KIND_ALARM_GRAPH), None)
     info_table = None
-    for it in items:
-        if is_alarm_kind(it.kind):
-            info_table = parse_component_table_text(it.data.decode("utf-8"))
-            break
-    # any cell value across the whole table is offered as a candidate to
-    # collapse its own BOM/GLB entry into a single row/highlight group
-    # instead of expanding to every leaf part underneath -- see
-    # scene3d.generate_bom's collapse_names; a candidate that doesn't
-    # match a real group name is simply ignored, so this doesn't need to
-    # know which column is "the component" (that's decided later,
-    # client-side, once the BOM this very call produces actually exists)
-    collapse_names = info_table.all_values() if info_table else None
+    alarm_graph = None
+    if alarm_graph_item is not None:
+        alarm_graph = AlarmGraph.from_bytes(alarm_graph_item.data).to_json_dict()
+    else:
+        # a bundle with more than one alarm-marked CSV is valid (the
+        # format doesn't forbid it) but they could have entirely
+        # different columns -- concatenating rows across mismatched
+        # schemas the way the old fixed two-column format safely could
+        # doesn't generalize, so only the first one becomes the info
+        # table
+        for it in items:
+            if is_alarm_kind(it.kind):
+                info_table = parse_component_table_text(it.data.decode("utf-8"))
+                break
+
+    # any candidate string (a component-table cell value, or an alarm's
+    # own `component` field) is offered to collapse its own BOM/GLB
+    # entry into a single row/highlight group instead of expanding to
+    # every leaf part underneath -- see scene3d.generate_bom's
+    # collapse_names; a candidate that doesn't match a real group name
+    # is simply ignored, so neither branch needs to know which string
+    # is "the component" ahead of time.
+    if alarm_graph is not None:
+        collapse_names = {a["component"] for a in alarm_graph["alarms"] if a.get("component")} or None
+    else:
+        collapse_names = info_table.all_values() if info_table else None
 
     three_d_items = [it for it in items if it.kind == KIND_3D]
     if not three_d_items:
-        # a document-only bundle: no model, just the navigable index
+        # a document-only bundle: no model, just the navigable index --
+        # the alarm panel (like the flat search before it) has nothing
+        # to highlight without a 3D model, so it is not rendered here
+        # either, same existing limitation, not a new one
         if not documents:
             raise ValueError("il bundle e' vuoto: niente da mostrare")
         return _render_viewer_page(None, None, None, documents, work_dir)
@@ -910,4 +1114,5 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HT
     bom_lines = [(e.name, e.count, e.material_names)
                 for e in generate_bom(scene, collapse_names)]
     return open_glb_in_browser(glb, bom_lines, work_dir, info_table=info_table,
+                               alarm_graph=alarm_graph,
                                documents=documents or None)

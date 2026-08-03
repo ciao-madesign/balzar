@@ -1,3 +1,3 @@
-codice,descrizione
-E100,Sovratemperatura vasca riscaldo
-E102,Quadro elettrico non raggiungibile
+codice,descrizione,componente
+E100,Sovratemperatura vasca riscaldo,VASCA_RISCALDO
+E102,Quadro elettrico non raggiungibile,QUADRO_EL_DU

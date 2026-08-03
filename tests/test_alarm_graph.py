@@ -39,6 +39,20 @@ class TestParseAlarmGraphCsvs(unittest.TestCase):
         self.assertEqual(sorted(p.label for p in graph.procedures),
                           ["PR-014_reset_termostato.pdf", "PR-021_ripristino_QE.pdf"])
 
+    def test_alarms_csv_without_a_component_column_defaults_to_blank(self):
+        # ALARMS_CSV (shared fixture, used by most tests in this file) is
+        # deliberately 2-column -- this is the backward-compatibility
+        # path most other tests already exercise implicitly; asserted
+        # explicitly here once.
+        graph, _ = parse_alarm_graph_csvs(ALARMS_CSV, CAUSES_CSV)
+        self.assertTrue(all(a.component == "" for a in graph.alarms))
+
+    def test_third_column_is_the_optional_3d_component_name(self):
+        alarms_csv = "codice,descrizione,componente\nE100,Sovratemperatura,VASCA_RISCALDO\nE200,Senza componente,\n"
+        graph, _ = parse_alarm_graph_csvs(alarms_csv, "")
+        self.assertEqual(graph.alarms[0].component, "VASCA_RISCALDO")
+        self.assertEqual(graph.alarms[1].component, "")
+
     def test_alarm_row_with_no_alarms_collegati_column_gets_no_procedure_link(self):
         graph, warnings = parse_alarm_graph_csvs(ALARMS_CSV, CAUSES_CSV)
         # second cause row ("Interruttore generale...") has a blank
@@ -129,6 +143,12 @@ class TestJsonRoundtrip(unittest.TestCase):
         graph, _ = parse_alarm_graph_csvs(ALARMS_CSV, CAUSES_CSV)
         restored = AlarmGraph.from_json_dict(graph.to_json_dict())
         self.assertEqual(restored, graph)
+
+    def test_non_blank_component_survives_the_roundtrip(self):
+        alarms_csv = "codice,descrizione,componente\nE100,x,VASCA_RISCALDO\n"
+        graph, _ = parse_alarm_graph_csvs(alarms_csv, "")
+        restored = AlarmGraph.from_json_dict(graph.to_json_dict())
+        self.assertEqual(restored.alarms[0].component, "VASCA_RISCALDO")
 
     def test_empty_graph_roundtrip(self):
         graph = AlarmGraph()

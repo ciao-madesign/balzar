@@ -34,6 +34,13 @@ class AlarmGraphError(ValueError):
 class AlarmNode:
     code: str
     description: str
+    # optional BOM part/group name to highlight in the 3D viewer when this
+    # alarm is opened (Slice 3) -- blank if the alarm has no single 3D
+    # component to point at. Matched by generate_bom/scene3d_to_glb's
+    # existing "any candidate string, unmatched ones ignored" convention
+    # (SS9.21), same as ComponentTable's collapse_names today -- no new
+    # matching logic needed for this to be safe.
+    component: str = ""
 
 
 @dataclass
@@ -70,7 +77,8 @@ class AlarmGraph:
 
     def to_json_dict(self) -> dict:
         return {
-            "alarms": [{"code": a.code, "description": a.description} for a in self.alarms],
+            "alarms": [{"code": a.code, "description": a.description, "component": a.component}
+                       for a in self.alarms],
             "causes": [{"id": c.id, "text": c.text} for c in self.causes],
             "procedures": [{"id": p.id, "label": p.label} for p in self.procedures],
             "alarm_links": [[code, cause_id] for code, cause_id in self.alarm_links],
@@ -80,7 +88,8 @@ class AlarmGraph:
     @staticmethod
     def from_json_dict(d: dict) -> AlarmGraph:
         return AlarmGraph(
-            alarms=[AlarmNode(a["code"], a["description"]) for a in d.get("alarms", [])],
+            alarms=[AlarmNode(a["code"], a["description"], a.get("component", ""))
+                    for a in d.get("alarms", [])],
             causes=[CauseNode(c["id"], c["text"]) for c in d.get("causes", [])],
             procedures=[ProcedureNode(p["id"], p["label"]) for p in d.get("procedures", [])],
             alarm_links=[(l[0], l[1]) for l in d.get("alarm_links", [])],
@@ -119,8 +128,15 @@ def parse_alarm_graph_csvs(alarms_csv_text: str, causes_csv_text: str) -> tuple[
     silently dropped -- same "declare what didn't make it" principle
     vectorio.py's ingest functions already use for skipped entities).
 
-    allarmi_template.csv          columns: codice, descrizione
+    allarmi_template.csv          columns: codice, descrizione, componente (opzionale)
     cause_soluzioni_template.csv  columns: causa_soluzione, allarmi_collegati, procedura_collegata
+
+    componente: il nome del gruppo/parte 3D da evidenziare quando questo
+    allarme viene aperto nel pannello di lettura (Slice 3) -- vuoto se
+    l'allarme non punta a un componente singolo. Un valore che non
+    corrisponde a nessun gruppo reale dell'assieme viene semplicemente
+    ignorato al momento della vista, mai un errore qui: questo modulo non
+    ha visibilita' sulla scena 3D per verificarlo.
       - allarmi_collegati: alarm codes separated by ';', pre-linking this
         cause to those alarms -- a starting point the visual editor
         (Slice 4) then lets the user refine by hand, not a locked-in
@@ -144,7 +160,8 @@ def parse_alarm_graph_csvs(alarms_csv_text: str, causes_csv_text: str) -> tuple[
             raise AlarmGraphError(f"codice allarme duplicato nel file allarmi: {code!r}")
         seen_codes.add(code)
         description = (row[1] if len(row) > 1 else "").strip()
-        alarms.append(AlarmNode(code, description))
+        component = (row[2] if len(row) > 2 else "").strip()
+        alarms.append(AlarmNode(code, description, component))
 
     causes: list[CauseNode] = []
     procedures: list[ProcedureNode] = []

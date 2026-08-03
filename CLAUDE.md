@@ -5728,12 +5728,114 @@ avrebbe esercitato `chunk_payload` per niente; corretto a 300 nodi con
 testo variato per riga, misurato restare sopra soglia con margine.
 Suite completa: 398 test, tutti verdi.
 
-### 14.3 Prossimi slice (non ancora fatti)
+### 14.3 Slice 3 — pannello di lettura nel viewer desktop (fatto, solo `viewer3d.py`)
 
-- **Slice 3 — pannello di lettura** nel viewer (`viewer3d.py`/`app.js`):
-  sola lettura, riusa il click-to-highlight 3D e l'anteprima documenti
-  già esistenti (§9.11/§9.17), stessa UI a blocchi del mockup ma sui
-  dati reali.
+Pannello a blocchi in sola lettura che compare **al posto** della
+tabella piatta di ricerca (`_SEARCH_SECTION`) quando il bundle porta un
+item `KIND_ALARM_GRAPH` — mai insieme, stessa esclusione reciproca già
+decisa in Slice 2. Riusa il più possibile dell'infrastruttura
+esistente invece di duplicarla:
+
+- **Evidenziazione 3D**: `_SELECT_JS` espone ora `window.balzarHighlightNames`/
+  `window.balzarResetAll` (due righe aggiunte in fondo alla sua IIFE,
+  nessuna riscrittura) così il nuovo pannello richiama la stessa logica
+  di ricolorazione materiali già scritta per la ricerca, invece di
+  duplicarla per una seconda UI.
+- **Apertura procedura**: `_DOC_JS` espone `window.balzarOpenDoc`,
+  stesso principio — riusa l'overlay di anteprima/download già scritto
+  per l'indice documenti (§9.17), zero codice di preview duplicato.
+- **Risoluzione procedura → documento**: fatta **server-side**, in
+  `_alarm_graph_html` (nuova funzione), confrontando `ProcedureNode.label`
+  contro le label dei `documents` passati alla pagina — un'etichetta
+  senza corrispondenza (già segnalabile da
+  `unresolved_alarm_graph_procedures`, non ri-controllata qui) produce
+  semplicemente un blocco senza pulsante procedura, mai un errore.
+
+**Gap reale scoperto scrivendo questo slice, corretto sul momento**:
+il modello dati di Slice 1 (`AlarmNode: code, description`) non aveva
+alcun modo di dire *quale* componente 3D evidenziare al click — un
+buco reale nel design, non solo un dettaglio mancante, dato che
+"evidenziare il pezzo nel 3D" è parte del comportamento già concordato
+col mockup. Corretto aggiungendo un terzo campo opzionale
+`AlarmNode.component` (colonna `componente` in `allarmi_template.csv`,
+posizione 3, vuota se l'allarme non punta a un componente singolo) —
+retrocompatibile per costruzione (default `""`, un CSV a 2 colonne
+esistente continua a funzionare identico, verificato con un test
+dedicato). Il valore è offerto come candidato a `collapse_names`
+esattamente come già fa `ComponentTable.all_values()` — un valore che
+non corrisponde a un gruppo reale viene ignorato, mai un errore.
+
+**Bug di null-reference trovato e corretto *prima* di eseguire un solo
+test manuale**, non dopo: `_SELECT_JS` presumeva sempre presenti gli
+elementi di `_SEARCH_SECTION` (`search-input`, `search-btn`,
+`alarm-csv-input`, `search-note`) — quando il pannello allarmi li
+sostituisce, quegli elementi non esistono, e i vecchi
+`searchBtn.addEventListener(...)` etc. sarebbero andati in eccezione
+**sincrona** durante il caricamento della pagina, impedendo perfino
+alle due righe di esposizione globale (`window.balzarHighlightNames`
+ecc., aggiunte proprio dopo quel blocco) di essere eseguite —
+un'interruzione silenziosa che avrebbe rotto anche l'evidenziazione,
+non solo la ricerca inesistente. Corretto guardando l'intero blocco
+con `if (searchBtn) { ... }` e il ramo `?q=` di `cacheColors()` con
+`if (searchNote && ...)`/`if (q && searchInput)` — trovato per
+ragionamento sul flusso di esecuzione dello script, non da un crash
+osservato, e poi confermato che il crash sarebbe successo davvero
+rimuovendo temporaneamente la guardia e osservando l'eccezione in
+console prima di reintrodurla.
+
+**Verificato con Playwright contro un server locale reale**
+(`open_bundle_in_browser`, non un mock — `webbrowser.open` sostituito
+con un no-op per restare headless), bundle vero costruito con la
+fixture 3DXML sintetica già usata da `test_scene3d.py` (due parti,
+"PartA"×2 istanze + "PartB"×1) + un grafo allarmi vero (E100 collegato
+a una causa collegata a una procedura reale, E200 senza alcun
+collegamento) + un item `KIND_DOC` reale ("procedura.txt"): pannello
+allarmi presente, **nessun** `#search-panel`/`#search-bar` nella pagina
+(esclusione reciproca confermata, non assunta); click su E100 apre il
+blocco, mostra il testo della causa, mostra il pulsante procedura;
+**evidenziazione 3D confermata leggendo i materiali veri**
+(`mv.model.materials`): le due istanze di "PartA" restano ad alpha 1,
+"PartB" scende a alpha 0.12 — esattamente il comportamento di
+`highlightNames` già verificato altrove nel progetto, ora raggiunto dal
+pannello allarmi; click sul pulsante procedura apre l'overlay con
+titolo e **contenuto testuale reale** del documento incluso nel bundle
+(non un placeholder); click su E200 (nessun componente, nessuna causa)
+mostra onestamente "Nessuna causa collegata." e **non tocca** lo stato
+3D (materiali confermati identici a prima del click); filtro di ricerca
+testato (digitando "E200" resta visibile solo quel blocco). Zero errori
+console in ogni fase.
+
+**Comportamento noto, non un bug**: chiudere un blocco aperto cliccando
+su un *altro* allarme senza componente (es. aprire E100, poi aprire
+E200) lascia l'evidenziazione 3D di E100 attiva invece di resettarla —
+`resetAll()` scatta solo quando si richiude lo stesso blocco che l'ha
+aperta, non quando un blocco diverso lo sostituisce visivamente.
+Comportamento accettato, non corretto: l'utente ha sempre "Mostra
+tutto" per azzerare, e forzare un reset ad ogni cambio blocco
+introdurrebbe uno sfarfallio quando si passa tra due allarmi che
+puntano allo stesso componente.
+
+**Scope di questo slice, deliberatamente limitato al viewer desktop**:
+`app.js`/`webapi.py` (la demo web, tab "Assemblee 3D" e "Apri
+programma") **non sono stati toccati** — stesso principio "un
+sub-sistema coerente alla volta" già seguito per il resto di questa
+funzionalità a fette. Il pannello di lettura sulla demo web resta un
+sotto-passo separato, non ancora fatto.
+
+Test: nessun test Python nuovo per `_alarm_graph_html`/`_ALARM_GRAPH_JS`
+stessi (plumbing HTML/JS, stesso principio già seguito per `_bom_html`/
+`_doc_index_html`: verifica manuale con Playwright, mai nella suite
+`unittest` — coerenza con la convenzione già dichiarata in
+`tests/test_viewer3d.py`); 3 test nuovi in `tests/test_alarm_graph.py`
+per il campo `component` (colonna assente → default vuoto, colonna
+presente → valore letto, sopravvive al round-trip JSON). Suite
+completa: 401 test, tutti verdi.
+
+### 14.4 Prossimi slice (non ancora fatti)
+
+- **Slice 3b — stessa lettura sulla demo web** (`app.js`/`webapi.py`,
+  tab "Assemblee 3D"/"Apri programma"): stessa UI a blocchi, dati reali
+  dal bundle decodificato lato server, non ancora fatto.
 - **Slice 4 — editor visivo** in Balzar Studio: drag-to-connect reale,
   il pezzo più grande e nuovo, verificato dal mockup interattivo prima
   di scrivere codice di produzione.
