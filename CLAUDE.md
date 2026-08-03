@@ -5556,3 +5556,124 @@ solo reso quel test raggiungibile da un URL pubblico, non lo ha
 sostituito); nessuna integrazione nel motore balzar (CLI/GUI
 desktop/`balzar/fountain.py`), che resta esplicitamente il passo
 successivo, condizionato al risultato di quel test con hardware vero.
+
+## 14. Grafo allarmi (collega allarmi ai 3D con un editor a blocchi/frecce)
+
+Richiesta diretta di sessione: standardizzare il file "Allarmi" caricato
+insieme a un 3D con 1-2 template CSV/Excel, e sostituire la tabella
+piatta di oggi (`ComponentTable`, §9.29) — per questo flusso specifico —
+con un vero grafo a tre livelli **allarme → causa/soluzione →
+procedura**, modificabile in un editor a blocchi con frecce trascinate
+(stile connettori Figma prototype). Alla decodifica, il pannello
+allarmi accanto al viewer 3D userebbe la stessa UI a blocchi in sola
+lettura, con i blocchi cliccabili per evidenziare il pezzo nel 3D e
+aprire l'eventuale procedura collegata.
+
+**Decisione di scope, presa prima di scrivere codice**: `ComponentTable`
+(tabella piatta, colonna-componente auto-rilevata per contenuto) **non
+viene sostituita** — resta il percorso semplice per chi carica un CSV
+senza voler passare dall'editor visivo. Il grafo allarmi è un percorso
+**alternativo e più ricco**, per lo stesso tipo di informazione, non
+un'estensione di `ComponentTable` (i due modelli dati sono strutturalmente
+diversi: righe piatte contro un grafo a tre nodi tipizzati con
+collegamenti molti-a-molti).
+
+**Piano a fasi, con doppio controllo (test automatici + revisione) ad
+ogni passaggio, richiesto esplicitamente**: prima il modello dati +
+template + pannello di lettura (riusa il più possibile
+dell'infrastruttura già esistente — bundle, click-to-highlight,
+anteprima documenti), poi l'editor visivo di collegamento (il pezzo
+davvero nuovo, drag-to-connect). Un mockup interattivo (HTML+SVG+JS
+autonomo, verificato con Playwright: drag reale da un pallino all'altro,
+stato "non collegato" che si aggiorna dal vivo, clic-per-evidenziare nel
+3D, apertura di una procedura) ha guidato le decisioni di interazione
+prima di scrivere il codice di produzione — non incluso nel repository
+(era un file scratch, non un artefatto del prodotto).
+
+### 14.1 Slice 1 — modello dati + parsing dei template CSV (fatto)
+
+`balzar/alarm_graph.py` (nuovo modulo, zero dipendenze nuove, stesso
+stile di `viewer3d.ComponentTable`/`vectorio.py`): nessuna UI, nessuna
+integrazione col bundle ancora — solo il modello dati e il parsing dei
+due CSV a schema fisso.
+
+**Perché non un grafo generico**: la scelta esplicita è stata modellare
+*esattamente* la forma del problema (tre tipi di nodo, due livelli di
+collegamento fissi) invece di costruire un'astrazione a grafo
+tipizzato generica — con un grafo generico, un `id` sintetico di una
+causa/procedura potrebbe in teoria collidere con un codice allarme
+reale (dato utente, formato arbitrario), costringendo a un
+namespacing artificiale. Modellando invece **due liste di
+collegamenti separate e tipizzate** (`alarm_links: (codice, id_causa)`,
+`cause_links: (id_causa, id_procedura)`) la collisione è semplicemente
+impossibile per costruzione — un codice allarme e un id sintetico non
+vengono mai confrontati tra loro. Scelta esplicita di "no overcoding"
+sulla richiesta di sessione.
+
+**Template CSV** (`examples/template_allarmi.csv`,
+`examples/template_cause_soluzioni.csv`), colonne fisse per
+**posizione**, non per nome — l'intestazione è documentazione per
+l'utente, non viene interpretata dal parser (nessuna euristica di
+riconoscimento colonna, a differenza di `ComponentTable`: qui lo schema
+è già fisso per design, quindi non c'è nulla da indovinare):
+- `allarmi.csv`: `codice, descrizione`
+- `cause_soluzioni.csv`: `causa_soluzione, allarmi_collegati (codici
+  separati da `;`, precollegamento di partenza che l'editor visivo poi
+  lascia modificare), procedura_collegata (nome file, vuoto se nessuna
+  — le procedure sono "eventuali")`
+
+**Parsing tollerante ma non silenzioso**: un codice allarme duplicato
+nel file allarmi è un errore bloccante (è la chiave di join, un
+duplicato rende ambiguo ogni collegamento — `AlarmGraphError`, nome del
+codice incluso nel messaggio); un codice allarme referenziato da una
+causa ma assente dal file allarmi è invece un **warning**, non un
+crash — quella singola voce viene scartata, le altre voci valide sulla
+stessa riga restano collegate, stesso principio già usato da
+`vectorio.py` per le entità DXF non supportate (dichiara cosa è stato
+scartato e perché, mai in silenzio). Una procedura con lo stesso nome
+file referenziata da più righe causa viene deduplicata a un solo nodo
+`ProcedureNode` (stesso principio già usato da `qr.py` per i chunk
+duplicati: non un errore, un caso normale). `AlarmGraph.unlinked_alarm_codes()`
+è la funzione di validazione centrale (query pura, riusabile sia da un
+futuro comando/endpoint di validazione sia dall'editor Slice 4): un
+allarme senza nessun collegamento a una causa è segnalato (bloccherà
+la codifica nell'editor), una causa senza procedura no — coerente con
+"procedure eventuali".
+
+`to_json_dict()`/`from_json_dict()` (stesso pattern già usato da
+`ComponentTable`): il grafo si serializza a un piccolo JSON leggibile,
+non un formato binario — a differenza della scelta binaria fatta per
+`BZM1` (§9.4 punto 2), qui i numeri in gioco sono minuscoli (poche
+decine di nodi tipici), quindi non c'è nessun compromesso di dimensione
+da giustificare, e restare testuale mantiene il file ispezionabile a
+mano, coerente con la filosofia generale del progetto dove possibile.
+
+Verificato: 15 test nuovi in `tests/test_alarm_graph.py` (parsing di
+base, collegamento multi-codice via `;`, deduplica procedura, warning
+su codice sconosciuto senza crash, errore su codice duplicato con il
+codice nominato nel messaggio, righe vuote scartate, input vuoti →
+grafo vuoto non un errore, round-trip JSON, tolleranza a chiavi
+mancanti in `from_json_dict`) — tutti verdi. I due template reali in
+`examples/` sono stati fatti passare per il parser vero (non solo
+scritti a mano e assunti corretti): zero warning, zero allarmi non
+collegati. Suite completa: 389 test, tutti verdi, nessuna riga
+esistente toccata.
+
+### 14.2 Prossimi slice (non ancora fatti)
+
+- **Slice 2 — integrazione bundle**: nuovo `KIND_ALARM_GRAPH` in
+  `balzar/bundle.py` (JSON del grafo come bytes di un item bundle,
+  distinto da `KIND_ALARM`/`KIND_DOC` esistenti — mai in sostituzione),
+  validazione che ogni `ProcedureNode.label` corrisponda a un vero item
+  `KIND_DOC` incluso nello stesso bundle.
+- **Slice 3 — pannello di lettura** nel viewer (`viewer3d.py`/`app.js`):
+  sola lettura, riusa il click-to-highlight 3D e l'anteprima documenti
+  già esistenti (§9.11/§9.17), stessa UI a blocchi del mockup ma sui
+  dati reali.
+- **Slice 4 — editor visivo** in Balzar Studio: drag-to-connect reale,
+  il pezzo più grande e nuovo, verificato dal mockup interattivo prima
+  di scrivere codice di produzione.
+
+Ogni slice: implementazione mirata (no overcoding), test automatici
+verdi sull'intera suite, nota di decisione qui prima di passare allo
+slice successivo.
