@@ -1,3 +1,13 @@
+// Frontend della demo web (index.html). Organizzato a blocchi isolati,
+// ciascuno delimitato da un banner "// ----- <nome> -----":
+//   - Helper condivisi: setStatus/fileToBase64/postJSON/fmtBytes/render/
+//     downloadBlob/base64ToBytes/setupQrButton (usati da tutti i blocchi).
+//   - tabs: navigazione a due livelli (activateProduct/activateTab).
+//   - un blocco per encoder/consultatore: encode immagine, vettoriale,
+//     video, sequenza, assiemi 3D, apri programma (Balzar Live).
+// Ogni chiamata a un endpoint /api/* passa da postJSON (un solo punto per
+// il contratto {ok,...}); nessun blocco reimplementa fetch/parse/errore.
+
 const dropzone = document.getElementById("drop");
 const fileInput = document.getElementById("file-input");
 const browseBtn = document.getElementById("browse-btn");
@@ -50,12 +60,36 @@ function fileToBase64(file) {
   });
 }
 
+// Shared POST-to-JSON helper: every encoder/render/QR call in this file
+// hits a serverless endpoint with the same shape (POST JSON, expect
+// {ok, ...} or {ok:false, error}). Consolidated here so the 8 call
+// sites are one line each and the error contract lives in one place.
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+  return json;
+}
+
 // Vercel rifiuta body oltre ~4.5MB; il base64 aggiunge ~33%, quindi il
 // file originale deve stare sotto ~3.3MB. Meglio dirlo subito e chiaro.
 const MAX_FILE_BYTES = 3.3 * 1024 * 1024;
 
 async function handleFile(file) {
   resultEl.hidden = true;
+  // Un file vettoriale (SVG/DXF) finito nell'encoder generico non va
+  // rasterizzato (Pillow fallirebbe): passa alla scheda "Vettoriale" e usa
+  // l'ingestione dedicata, invece di dare un errore.
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith(".svg") || lower.endsWith(".dxf")) {
+    activateTab("vector");
+    handleVectorFile(file);
+    return;
+  }
   if (file.size > MAX_FILE_BYTES) {
     setStatus(
       `File troppo grande (${(file.size / 1048576).toFixed(1)} MB): il limite di upload è ~3.3 MB. ` +
@@ -81,13 +115,7 @@ async function handleFile(file) {
 
     const data = dataUrl.split(",", 2)[1];
 
-    const res = await fetch("/api/encode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, max_dim: maxDimVal }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode", { data, max_dim: maxDimVal });
 
     lastResult = json;
     render(json, file);
@@ -140,14 +168,37 @@ function render(r, file) {
   resultEl.hidden = false;
 }
 
-function downloadBlob(bytes, filename, mime) {
-  const blob = new Blob([bytes], { type: mime });
+function downloadBlob(data, filename, mime) {
+  // Nel guscio desktop (pywebview/WKWebView) i download via blob NON
+  // funzionano: il webview naviga verso il blob invece di scaricarlo,
+  // riempiendo la finestra senza modo di tornare indietro. In quel caso
+  // usa il ponte nativo (finestra "Salva con nome" del SO). Nel browser
+  // (demo web) resta il classico <a download>. `data` puo' essere un
+  // Uint8Array/ArrayBuffer o un Blob (es. canvas.toBlob della scheda ricambio).
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_file) {
+    _saveViaNative(data, filename);
+    return;
+  }
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function _saveViaNative(data, filename) {
+  // Passa i byte come base64 all'API Python (window.pywebview.api.save_file),
+  // che apre la finestra di salvataggio nativa e scrive il file.
+  if (data instanceof Blob) {
+    const r = new FileReader();
+    r.onload = () => window.pywebview.api.save_file(filename, r.result.split(",", 2)[1]);
+    r.readAsDataURL(data);
+  } else {
+    const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+    window.pywebview.api.save_file(filename, bytesToB64(u8));
+  }
 }
 
 function base64ToBytes(b64) {
@@ -167,6 +218,14 @@ function base64ToBytes(b64) {
 function setupQrButton(prefix, getPayloadBase64) {
   const btn = document.getElementById(`${prefix}-gen-qr-btn`);
   const modeSelect = document.getElementById(`${prefix}-qr-mode`);
+  // Optional: only present on the "Apri programma" (Balzar Live) QR
+  // blocks -- absent everywhere else, so this stays a no-op for the
+  // other 5 tabs (grid_dim stays hardcoded at 4 for them, unchanged).
+  // grid_dim=1 is the only value ContinuousQrScanner (qr-camera-scanner.js)
+  // can reliably read continuously from a live camera (CLAUDE.md §2.4g);
+  // forcing mode=gif alongside it isn't optional -- "pages"/"single" at
+  // grid_dim=1 would just be a slower sequence with no auto-play benefit.
+  const continuousCheckbox = document.getElementById(`${prefix}-qr-continuous`);
   const resultEl = document.getElementById(`${prefix}-qr-result`);
   const imgEl = document.getElementById(`${prefix}-qr-img`);
   const pagesEl = document.getElementById(`${prefix}-qr-pages`);
@@ -182,7 +241,9 @@ function setupQrButton(prefix, getPayloadBase64) {
       noteEl.classList.add("error");
       return;
     }
-    const mode = modeSelect.value;
+    const continuous = !!(continuousCheckbox && continuousCheckbox.checked);
+    const mode = continuous ? "gif" : modeSelect.value;
+    const gridDim = continuous ? 1 : 4;
     const originalLabel = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Genero…";
@@ -191,13 +252,7 @@ function setupQrButton(prefix, getPayloadBase64) {
     dlBtn.hidden = (mode === "pages");
     lastDownload = null;
     try {
-      const res = await fetch("/api/qr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload_base64: payloadB64, mode, grid_dim: 4 }),
-      });
-      const json = await res.json();
-      if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+      const json = await postJSON("/api/qr", { payload_base64: payloadB64, mode, grid_dim: gridDim });
 
       noteEl.classList.remove("error");
       if (json.mode === "single") {
@@ -270,12 +325,24 @@ dlProgramBtn.addEventListener("click", () => {
 setupQrButton("encode", () => (lastResult && !lastResult.payload_omitted) ? lastResult.payload_base64 : null);
 
 // ---------------------------------------------------------- tabs
+//
+// Two-level navigation, kept deliberately thin so the level-2 mechanism
+// (activateTab + the tab-*/panel-* id contract) is UNCHANGED from before
+// the level-1 (Crea/Apri) wrapper was added on top of it:
+//   level 1: activateProduct("crea"|"apri") -> shows one tab-group, hides
+//            the other, and makes sure a tab within it is active.
+//   level 2: activateTab(name) -> the original single-panel switch.
 
 const TAB_NAMES = ["encode", "vector", "video", "sequence", "3d", "open"];
 const tabButtons = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`tab-${n}`)]));
 const tabPanels = Object.fromEntries(TAB_NAMES.map(n => [n, document.getElementById(`panel-${n}`)]));
 
+let activeTab = "3d";  // 3D is the promoted default landing (front-and-center
+                       // feature); tracked so activateProduct can tell whether
+                       // the current tab already belongs to the target product
+
 function activateTab(tab) {
+  activeTab = tab;
   for (const name of TAB_NAMES) {
     const active = name === tab;
     tabButtons[name].classList.toggle("active", active);
@@ -284,6 +351,29 @@ function activateTab(tab) {
 }
 for (const name of TAB_NAMES) {
   tabButtons[name].addEventListener("click", () => activateTab(name));
+}
+
+// level 1: which modes belong to each product, and which group container
+// to reveal. The tab lists mirror the two .tab-group blocks in index.html.
+const PRODUCTS = {
+  crea: { group: "group-studio", tabs: ["3d", "encode", "vector", "video", "sequence"] },
+  apri: { group: "group-live", tabs: ["open"] },
+};
+const productButtons = { crea: document.getElementById("product-crea"),
+                         apri: document.getElementById("product-apri") };
+
+function activateProduct(name) {
+  for (const [p, cfg] of Object.entries(PRODUCTS)) {
+    const active = p === name;
+    productButtons[p].classList.toggle("active", active);
+    document.getElementById(cfg.group).hidden = !active;
+  }
+  // only switch the active mode if the current one isn't in this product,
+  // so toggling back and forth keeps your place within a product
+  if (!PRODUCTS[name].tabs.includes(activeTab)) activateTab(PRODUCTS[name].tabs[0]);
+}
+for (const name of Object.keys(PRODUCTS)) {
+  productButtons[name].addEventListener("click", () => activateProduct(name));
 }
 
 // -------------------------------------------------------- ingestione vettoriale (SVG/DXF)
@@ -341,13 +431,8 @@ async function handleVectorFile(file) {
   setVectorStatus(`Ingestione di "${file.name}" in corso…`);
   try {
     const data = await fileToBase64(file);
-    const res = await fetch("/api/encode_vector", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, filename: file.name, max_dim: parseInt(vectorMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_vector",
+      { data, filename: file.name, max_dim: parseInt(vectorMaxDim.value, 10) });
 
     lastVectorResult = json;
     if (lower.endsWith(".svg")) {
@@ -462,13 +547,8 @@ async function handleVideoFile(file) {
     videoImgOriginal.src = dataUrl;
     const data = dataUrl.split(",", 2)[1];
 
-    const res = await fetch("/api/encode_video", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data, max_dim: parseInt(videoMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_video",
+      { data, max_dim: parseInt(videoMaxDim.value, 10) });
 
     lastVideoResult = json;
     renderVideoResult(json);
@@ -642,13 +722,8 @@ sequenceEncodeBtn.addEventListener("click", async () => {
       filename: f.name,
       data: await fileToBase64(f),
     })));
-    const res = await fetch("/api/encode_sequence", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, mode, max_dim: parseInt(sequenceMaxDim.value, 10) }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_sequence",
+      { files, mode, max_dim: parseInt(sequenceMaxDim.value, 10) });
 
     if (mode === "independent") {
       renderIndependentResults(json);
@@ -733,13 +808,7 @@ function renderIndependentResults(resp) {
       const btn = e.currentTarget;
       btn.disabled = true;
       try {
-        const res = await fetch("/api/qr", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ payload_base64: item.payload_base64 }),
-        });
-        const qrJson = await res.json();
-        if (!qrJson.ok) throw new Error(qrJson.error || "errore sconosciuto");
+        const qrJson = await postJSON("/api/qr", { payload_base64: item.payload_base64 });
         lastQrB64 = qrJson.qr_png_base64;
         qrImg.src = "data:image/png;base64," + lastQrB64;
         qrNote.textContent = qrJson.single_qr
@@ -934,6 +1003,7 @@ function createSceneViewerController(ids) {
   const searchInput = document.getElementById(ids.searchInput);
   const searchBtn = document.getElementById(ids.searchBtn);
   const searchNote = document.getElementById(ids.searchNote);
+  const searchResultsEl = document.getElementById(ids.searchResults);
   const docsBlock = document.getElementById(ids.docsBlock);
   const docsIndex = document.getElementById(ids.docsIndex);
 
@@ -941,9 +1011,15 @@ function createSceneViewerController(ids) {
     originalColors: null, // Map<Material, [r,g,b,a]>, cached on model load
     selectedNames: [],    // names currently highlighted -- 0, 1 or many
     selectedCount: null,  // BOM count, only meaningful for exactly 1 name
-    // alarm code (trimmed, uppercased) -> [component name, ...]; an alarm
-    // can affect several components at once, hence an array per code
-    alarmMap: new Map(),
+    // The component info table: arbitrary headers/rows (no assumption
+    // about column meaning -- real tables have whatever columns the
+    // maintenance team already keeps, in whatever order). Which column
+    // drives the 3D highlight is auto-detected once per table load (see
+    // detectComponentColumn) by testing content against real BOM part
+    // names, not by header wording or position.
+    tableHeaders: [],
+    tableRows: [],
+    componentColumnIndex: -1,
     // display label (BOM row name, e.g. "RESERVOIR1") -> exact glTF
     // material names to highlight for it -- a single-item array equal to
     // the label itself for an ordinary leaf row, or a whole collapsed
@@ -1024,37 +1100,101 @@ function createSceneViewerController(ids) {
     exportBtn.disabled = (state.selectedNames.length !== 1);
   }
 
-  function setAlarmRows(rows) {
-    state.alarmMap = new Map();
-    (rows || []).forEach(([code, name]) => {
-      const key = code.trim().toUpperCase();
-      if (!state.alarmMap.has(key)) state.alarmMap.set(key, []);
-      state.alarmMap.get(key).push(name);
+  function allPartNames() {
+    return Array.from(bomTable.querySelectorAll("tr.part")).map(row => row.dataset.partName);
+  }
+
+  // For each column, count how many of its (trimmed, case-insensitive)
+  // values match a real BOM part name -- the column with the most
+  // matches is "the component column" for highlighting purposes. Not
+  // header wording or position: real tables call this column anything
+  // ("componente", "nome componente", "parte"...), and testing content
+  // instead of the header name means zero configuration and zero
+  // assumption about column order. -1 (no highlight-driving column)
+  // when nothing matches -- rows still search/display fine.
+  function detectComponentColumn(headers, rows) {
+    if (!headers.length || !rows.length) return -1;
+    const partNameSet = new Set(allPartNames().map(n => n.toLowerCase()));
+    let bestCol = -1, bestCount = 0;
+    for (let col = 0; col < headers.length; col++) {
+      let count = 0;
+      rows.forEach(row => {
+        const v = (row[col] || "").trim().toLowerCase();
+        if (v && partNameSet.has(v)) count++;
+      });
+      if (count > bestCount) { bestCount = count; bestCol = col; }
+    }
+    return bestCount > 0 ? bestCol : -1;
+  }
+
+  function setInfoTable(table) {
+    state.tableHeaders = (table && table.headers) || [];
+    state.tableRows = (table && table.rows) || [];
+    state.componentColumnIndex = detectComponentColumn(state.tableHeaders, state.tableRows);
+  }
+
+  function renderResultsTable(headers, rows) {
+    if (!searchResultsEl) return;
+    if (!headers || !rows || !rows.length) {
+      searchResultsEl.innerHTML = "";
+      searchResultsEl.classList.remove("open");
+      return;
+    }
+    let html = "<table><thead><tr>" +
+      headers.map(h => `<th>${escapeHtml(h)}</th>`).join("") + "</tr></thead><tbody>";
+    rows.forEach(row => {
+      html += "<tr>" + row.map(c => `<td>${escapeHtml(c)}</td>`).join("") + "</tr>";
     });
+    html += "</tbody></table>";
+    searchResultsEl.innerHTML = html;
+    searchResultsEl.classList.add("open");
   }
 
   function runSearch(query) {
     query = (query || "").trim();
-    if (!query) { resetSelection(); return; }
-    const key = query.toUpperCase();
-    if (state.alarmMap.has(key)) {
-      const names = state.alarmMap.get(key);
-      highlightNames(names);
-      searchNote.textContent =
-        `Allarme ${query}: ${names.length} componente/i evidenziato/i (${names.join(", ")}).`;
-      return;
-    }
-    const allNames = Array.from(bomTable.querySelectorAll("tr.part"))
-      .map(row => row.dataset.partName);
+    if (!query) { resetSelection(); renderResultsTable(null, null); return; }
     const qLower = query.toLowerCase();
+
+    if (state.tableHeaders.length && state.tableRows.length) {
+      const matchedRows = state.tableRows.filter(row =>
+        row.some(cell => cell.toLowerCase().includes(qLower)));
+      if (matchedRows.length) {
+        const componentValues = new Set();
+        if (state.componentColumnIndex >= 0) {
+          matchedRows.forEach(row => {
+            const v = row[state.componentColumnIndex];
+            if (v) componentValues.add(v);
+          });
+        }
+        if (componentValues.size) {
+          highlightNames(Array.from(componentValues));
+        } else {
+          // a purely informational row (no recognized component value)
+          // is not a failed search -- show it, just without touching
+          // the 3D view, rather than dimming the whole model for no
+          // reason.
+          resetSelection();
+        }
+        renderResultsTable(state.tableHeaders, matchedRows);
+        searchNote.textContent = `${matchedRows.length} riga/e trovata/e per "${query}".`;
+        return;
+      }
+    }
+
+    // no table loaded, or nothing matched in it -- fall back to
+    // searching BOM part names directly, same as before this table
+    // existed at all.
+    const allNames = allPartNames();
     const exact = allNames.filter(n => n.toLowerCase() === qLower);
     const matches = exact.length ? exact : allNames.filter(n => n.toLowerCase().includes(qLower));
     if (matches.length) {
       highlightNames(matches);
+      renderResultsTable(null, null);
       searchNote.textContent = `${matches.length} componente/i trovato/i per "${query}".`;
     } else {
       resetSelection();
-      searchNote.textContent = `Nessun componente o codice allarme trovato per "${query}".`;
+      renderResultsTable(null, null);
+      searchNote.textContent = `Nessuna corrispondenza trovata per "${query}".`;
     }
   }
 
@@ -1137,7 +1277,7 @@ function createSceneViewerController(ids) {
 
   return {
     viewer, statsTable, bomTable, searchNote,
-    resetSelection, highlightNames, selectByName, setAlarmRows, renderDocsIndex,
+    resetSelection, highlightNames, selectByName, setInfoTable, renderDocsIndex,
     clearSelectionState, setBomMaterialMap,
   };
 }
@@ -1178,11 +1318,12 @@ function renderScenePanel(ctrl, r) {
 
   ctrl.clearSelectionState(); // new model: colors/selection recached on its own 'load' event
 
-  ctrl.setAlarmRows(r.alarm_rows);
-  if (r.alarm_rows && r.alarm_rows.length) {
+  ctrl.setInfoTable(r.info_table);
+  if (r.info_table && r.info_table.rows && r.info_table.rows.length) {
     ctrl.searchNote.textContent =
-      `Tabella allarmi disponibile (${r.alarm_rows.length} riga/e, ` +
-      `${new Set(r.alarm_rows.map(x => x[0])).size} codici) -- cerca subito per nome o codice.`;
+      `Tabella disponibile (${r.info_table.rows.length} riga/e, ` +
+      `${r.info_table.headers.length} colonne: ${r.info_table.headers.join(", ")}) -- ` +
+      `cerca subito un valore.`;
   } else {
     ctrl.searchNote.textContent = "";
   }
@@ -1208,38 +1349,46 @@ const threedCtrl = createSceneViewerController({
   viewer: "threed-viewer", statsTable: "threed-stats-table", bomTable: "threed-bom-table",
   resetBtn: "threed-reset-btn", exportBtn: "threed-export-btn",
   searchInput: "threed-search-input", searchBtn: "threed-search-btn", searchNote: "threed-search-note",
+  searchResults: "threed-search-results",
   docsBlock: "threed-docs-block", docsIndex: "threed-docs-index",
 });
 
 let lastThreedResult = null;
 let lastThreedGlbUrl = null;
 
+// Generic CSV -> {headers, rows}, arbitrary columns -- no quoted-comma
+// support (a full RFC4180 parser is overkill client-side, declared
+// honestly rather than silently mishandling an edge case nobody asked
+// for). The first row is ALWAYS the header: with free-form columns
+// (component name, alarm code, spare part, "cleans every 6 months"...)
+// there is no way to know what a column means without one, so unlike
+// the old fixed two-column format this is a hard requirement now.
+function parseComponentTableCsv(text) {
+  const lines = String(text).split(/\r?\n/).filter(l => l.trim().length > 0);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = lines[0].split(",").map(h => h.trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    let cells = lines[i].split(",").map(c => c.trim());
+    while (cells.length < headers.length) cells.push("");
+    if (cells.length > headers.length) cells = cells.slice(0, headers.length);
+    rows.push(cells);
+  }
+  return { headers, rows };
+}
+
 threedAlarmCsvInput.addEventListener("change", () => {
   const file = threedAlarmCsvInput.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    // manual CSV upload path (client-side only, not from a bundle): same
-    // simple two-column parser (codice_allarme,nome_componente), no
-    // quoted-comma support -- a full RFC4180 parser is overkill for a
-    // two-field lookup table, declared honestly rather than silently
-    // mishandling an edge case nobody asked for. name is parts[1] alone
-    // (a third column -- e.g. a linked procedure document -- is accepted
-    // and ignored), not every trailing part joined: joining would glue a
-    // real third column onto the name instead, found on a real alarm
-    // table that has one.
-    const rows = [];
-    String(reader.result).split(/\r?\n/).forEach((line, i) => {
-      if (!line.trim()) return;
-      const parts = line.split(",");
-      if (parts.length < 2) return;
-      const code = parts[0].trim();
-      if (i === 0 && /codice|code|allarme|alarm/i.test(code)) return; // skip header row
-      rows.push([code, parts[1].trim()]);
-    });
-    threedCtrl.setAlarmRows(rows);
-    threedCtrl.searchNote.textContent =
-      `Tabella allarmi caricata: ${new Set(rows.map(x => x[0].trim().toUpperCase())).size} codici allarme.`;
+    // manual CSV upload path (client-side only, not from a bundle)
+    const table = parseComponentTableCsv(String(reader.result));
+    threedCtrl.setInfoTable(table);
+    threedCtrl.searchNote.textContent = table.rows.length
+      ? `Tabella caricata: ${table.rows.length} riga/e, ${table.headers.length} colonne ` +
+        `(${table.headers.join(", ")}).`
+      : "Nessuna riga trovata (serve una riga di intestazione seguita dai dati).";
   };
   reader.readAsText(file);
 });
@@ -1293,13 +1442,7 @@ async function handleThreedFile(file) {
         body.documents.push({ label: df.name, data: await fileToBase64(df) });
       }
     }
-    const res = await fetch("/api/encode_3d", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/encode_3d", body);
 
     lastThreedResult = json;
     renderThreedResult(json);
@@ -1343,9 +1486,9 @@ function renderThreedResult(r) {
   // previous bundle upload in this same session, so search doesn't
   // silently use stale data from an unrelated model
   renderScenePanel(threedCtrl, r);
-  if (r.bundled && r.alarm_rows && r.alarm_rows.length) {
+  if (r.bundled && r.info_table && r.info_table.rows && r.info_table.rows.length) {
     threedCtrl.searchNote.textContent =
-      `Bundle: tabella allarmi già inclusa -- cerca subito per nome o codice.`;
+      `Bundle: tabella già inclusa -- cerca subito un valore.`;
   }
 }
 
@@ -1379,6 +1522,11 @@ const openProgramText = document.getElementById("open-program-text");
 const openDlPng = document.getElementById("open-dl-png");
 const openDlGif = document.getElementById("open-dl-gif");
 const openDlSvg = document.getElementById("open-dl-svg");
+// "Altre opzioni" in questo pannello ha come unico figlio il download SVG:
+// tienilo nascosto quando l'SVG non c'e', cosi' la disclosure non si apre
+// mai su una sezione vuota (l'SVG e' disponibile solo per un programma 2D
+// vettoriale, non per un raster o un multi-frame).
+const openMoreActions = document.getElementById("open-more-actions");
 const openDlPayload = document.getElementById("open-dl-payload");
 const openSvgReason = document.getElementById("open-svg-reason");
 
@@ -1389,6 +1537,7 @@ const open3dCtrl = createSceneViewerController({
   viewer: "open-3d-viewer", statsTable: "open-3d-stats-table", bomTable: "open-3d-bom-table",
   resetBtn: "open-3d-reset-btn", exportBtn: "open-3d-export-btn",
   searchInput: "open-3d-search-input", searchBtn: "open-3d-search-btn", searchNote: "open-3d-search-note",
+  searchResults: "open-3d-search-results",
   docsBlock: "open-3d-docs-block", docsIndex: "open-3d-docs-index",
 });
 let lastOpen3dGlbUrl = null;
@@ -1420,27 +1569,18 @@ function setOpenStatus(msg, isError) {
   openStatusEl.classList.toggle("error", !!isError);
 }
 
-async function handleOpenFile(file) {
+// Shared by both ways of getting bytes into Balzar Live: a local file
+// upload (handleOpenFile below) and a QR sequence reconstructed
+// client-side (handleOpenScanBytes, further down) -- /api/render's
+// magic-byte dispatch (BZR1/BZM1/BZX1) doesn't care how the bytes
+// arrived, so neither does this function.
+async function handleOpenData(dataB64, label) {
   openResultEl.hidden = true;
   open3dResultEl.hidden = true;
   openDocsResultEl.hidden = true;
-  setOpenStatus(`Apertura di "${file.name}" in corso…`);
+  setOpenStatus(`Apertura di ${label} in corso…`);
   try {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
-    const data = dataUrl.split(",", 2)[1];
-
-    const res = await fetch("/api/render", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "errore sconosciuto");
+    const json = await postJSON("/api/render", { data: dataB64 });
 
     lastOpenResult = null;
     lastOpen3dResult = null;
@@ -1454,7 +1594,22 @@ async function handleOpenFile(file) {
       lastOpenResult = json;
       renderOpenResult(json);
     }
-    setOpenStatus(`Fatto: ${file.name}`);
+    setOpenStatus(`Fatto: ${label}`);
+  } catch (err) {
+    setOpenStatus("Errore: " + err.message, true);
+  }
+}
+
+async function handleOpenFile(file) {
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    const data = dataUrl.split(",", 2)[1];
+    await handleOpenData(data, `"${file.name}"`);
   } catch (err) {
     setOpenStatus("Errore: " + err.message, true);
   }
@@ -1482,6 +1637,7 @@ function renderOpenResult(r) {
   }
 
   openDlSvg.hidden = !r.svg_available;
+  openMoreActions.hidden = !r.svg_available;
   openSvgReason.hidden = r.svg_available;
   if (!r.svg_available) {
     openSvgReason.textContent = "SVG non disponibile: " + r.svg_reason;
@@ -1559,3 +1715,178 @@ openDlSvg.addEventListener("click", () => {
 setupQrButton("open", () => (lastOpenResult && !lastOpenResult.payload_omitted) ? lastOpenResult.payload_base64 : null);
 setupQrButton("open-3d", () => (lastOpen3dResult && !lastOpen3dResult.payload_omitted) ? lastOpen3dResult.payload_base64 : null);
 setupQrButton("open-docs", () => (lastOpenDocsResult && !lastOpenDocsResult.payload_omitted) ? lastOpenDocsResult.payload_base64 : null);
+
+// ------------------------------------- carica un file / scansiona QR (Balzar Live)
+// Two ways to get bytes for handleOpenData: a local file (handleOpenFile,
+// above) or a QR sequence reconstructed client-side via qr-transport-core.js/
+// qr-camera-scanner.js (loaded in <head>, same pattern already proven in
+// trasporto-qr.js) -- /api/render's magic-byte dispatch doesn't care which.
+
+const openLoadModeRadios = document.querySelectorAll('input[name="open-load-mode"]');
+const openScanSection = document.getElementById("open-scan-section");
+const openScanModeRadios = document.querySelectorAll('input[name="open-scan-mode"]');
+const openScanManualSection = document.getElementById("open-scan-manual-section");
+const openScanContinuousSection = document.getElementById("open-scan-continuous-section");
+const openScanDrop = document.getElementById("open-scan-drop");
+const openScanFileInput = document.getElementById("open-scan-file-input");
+const openScanBrowseBtn = document.getElementById("open-scan-browse-btn");
+const openScanFileList = document.getElementById("open-scan-file-list");
+const openScanStatusEl = document.getElementById("open-scan-status");
+const openScanCameraVideo = document.getElementById("open-scan-camera-video");
+const openScanCameraProgress = document.getElementById("open-scan-camera-progress");
+const openScanCameraStartBtn = document.getElementById("open-scan-camera-start-btn");
+const openScanCameraStopBtn = document.getElementById("open-scan-camera-stop-btn");
+
+// Shared across BOTH manual and continuous acquisition, so a chunk the
+// camera can't get can be covered by one manual photo and vice versa,
+// same principle as trasporto-qr.js's decode section.
+let openScanScanner = new LiveScanner();
+let openScanCamScanner = null;
+
+function stopOpenScanCamera() {
+  if (openScanCamScanner) {
+    openScanCamScanner.stop();
+    openScanCamScanner = null;
+  }
+  openScanCameraStartBtn.hidden = false;
+  openScanCameraStopBtn.hidden = true;
+}
+
+function resetOpenScan() {
+  stopOpenScanCamera();
+  openScanScanner = new LiveScanner();
+  openScanFileList.innerHTML = "";
+  openScanStatusEl.classList.remove("error");
+  openScanStatusEl.textContent = "";
+  openScanCameraProgress.classList.remove("active");
+  openScanCameraProgress.textContent = "Fotocamera non avviata.";
+}
+
+function updateOpenLoadModeUI() {
+  const scan = document.querySelector('input[name="open-load-mode"]:checked').value === "scan";
+  openDrop.hidden = scan;
+  openScanSection.hidden = !scan;
+  if (!scan) stopOpenScanCamera();
+}
+openLoadModeRadios.forEach(r => r.addEventListener("change", updateOpenLoadModeUI));
+updateOpenLoadModeUI();
+
+function updateOpenScanModeUI() {
+  const continuous = document.querySelector('input[name="open-scan-mode"]:checked').value === "continuous";
+  openScanManualSection.hidden = continuous;
+  openScanContinuousSection.hidden = !continuous;
+  if (!continuous) stopOpenScanCamera();
+}
+openScanModeRadios.forEach(r => r.addEventListener("change", updateOpenScanModeUI));
+updateOpenScanModeUI();
+
+async function handleOpenScanBytes(bytes, label) {
+  resetOpenScan();
+  await handleOpenData(bytesToB64(bytes), label);
+}
+
+openScanBrowseBtn.addEventListener("click", () => openScanFileInput.click());
+openScanFileInput.addEventListener("change", () => {
+  addOpenScanImages(Array.from(openScanFileInput.files));
+  openScanFileInput.value = "";
+});
+["dragover", "dragleave", "drop"].forEach(evt => {
+  openScanDrop.addEventListener(evt, e => {
+    e.preventDefault();
+    openScanDrop.classList.toggle("dragover", evt === "dragover");
+  });
+});
+openScanDrop.addEventListener("drop", e => addOpenScanImages(Array.from(e.dataTransfer.files)));
+
+async function addOpenScanImages(files) {
+  for (const file of files) {
+    const li = document.createElement("li");
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "file-name";
+    nameSpan.textContent = file.name;
+    li.appendChild(nameSpan);
+    openScanFileList.appendChild(li);
+
+    try {
+      const imgData = await loadImageData(file);
+      const texts = decodeAllInImage(imgData);  // grid_dim auto-rilevato
+      let addedHere = 0;
+      for (const text of texts) {
+        const r = openScanScanner.addDecodedText(text);
+        if (r.added) addedHere++;
+      }
+      nameSpan.textContent = `${file.name} — ${texts.length} QR trovati, ${addedHere} nuovi capitoli`;
+      if (texts.length === 0) {
+        nameSpan.textContent += " (nessun QR riconosciuto in questa immagine)";
+      }
+    } catch (e) {
+      nameSpan.textContent = `${file.name} — errore: ${e.message}`;
+      openScanStatusEl.classList.add("error");
+      openScanStatusEl.textContent = "Errore leggendo " + file.name + ": " + e.message;
+      continue;
+    }
+
+    const st = openScanScanner.status();
+    if (st.total === null) {
+      openScanStatusEl.classList.remove("error");
+      openScanStatusEl.textContent = "Nessun capitolo BZC1 riconosciuto finora.";
+    } else if (st.complete) {
+      openScanStatusEl.classList.remove("error");
+      openScanStatusEl.textContent = `Completo: ${st.total}/${st.total} capitoli, apertura in corso…`;
+      await handleOpenScanBytes(openScanScanner.result(), "sequenza scansionata");
+      return;
+    } else {
+      openScanStatusEl.classList.remove("error");
+      openScanStatusEl.textContent = `${st.have}/${st.total} capitoli letti — mancano ` +
+        `${st.missing.length}. Aggiungi altre foto/pagine.`;
+    }
+  }
+}
+
+openScanCameraStartBtn.addEventListener("click", async () => {
+  openScanCameraStartBtn.hidden = true;
+  openScanCameraProgress.classList.add("active");
+  openScanCameraProgress.textContent = "Richiesta permesso fotocamera...";
+  // onFrameSample fires once per decode attempt, BEFORE onProgress in the
+  // same tick (qr-camera-scanner.js) -- captured here so onProgress can
+  // fold it into the same message, same pattern as trasporto-qr.js.
+  let lastFrameSampleCount = null;
+  openScanCamScanner = new ContinuousQrScanner({
+    video: openScanCameraVideo,
+    gridDim: 1,
+    scanner: openScanScanner,
+    onProgress: (st) => {
+      if (st.complete) {
+        openScanCameraProgress.textContent = `Completo: ${st.total}/${st.total} capitoli letti.`;
+        return;
+      }
+      const missingTxt = st.missing ? `mancano ${st.missing.length}` : "in attesa del primo QR";
+      const hint = lastFrameSampleCount === 0
+        ? " (nessun QR in questa inquadratura, avvicina/allontana la fotocamera)" : "";
+      openScanCameraProgress.textContent =
+        `${st.have}/${st.total || "?"} capitoli letti — ${missingTxt}.${hint}`;
+    },
+    onFrameSample: (n) => { lastFrameSampleCount = n; },
+    onError: (e) => {
+      openScanStatusEl.classList.add("error");
+      openScanStatusEl.textContent = "Errore fotocamera: " + (e && e.message ? e.message : String(e));
+    },
+    onComplete: async (bytes) => {
+      stopOpenScanCamera();
+      await handleOpenScanBytes(bytes, "sequenza acquisita con la fotocamera");
+    },
+  });
+  try {
+    await openScanCamScanner.start();
+    openScanCameraStopBtn.hidden = false;
+  } catch (e) {
+    openScanCameraStartBtn.hidden = false;
+    openScanCameraProgress.classList.remove("active");
+    openScanCameraProgress.textContent = "Fotocamera non avviata: " + (e && e.message ? e.message : String(e));
+  }
+});
+
+openScanCameraStopBtn.addEventListener("click", () => {
+  stopOpenScanCamera();
+  openScanCameraProgress.textContent = "Fotocamera fermata manualmente.";
+});

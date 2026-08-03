@@ -17,8 +17,8 @@ import zipfile
 
 from balzar.gltf import scene3d_to_glb
 from balzar.scene3d import (Scene3DError, _decode_matrix, _encode_matrix,
-                            _quantized_copy, decode_payload, encode_3dxml_file,
-                            encode_payload, parse_3dxml)
+                            _IDENTITY_MATRIX, _quantized_copy, decode_payload,
+                            encode_3dxml_file, encode_payload, parse_3dxml)
 
 _MANIFEST = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Manifest xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -463,16 +463,92 @@ class TestQuantizationAndCompactTransforms(unittest.TestCase):
         for a, b in zip(decoded, arbitrary):
             self.assertAlmostEqual(a, b, places=5)
 
-    def test_shape_over_65535_vertices_rejected_not_truncated(self):
+    def test_shape_over_65535_vertices_round_trips_with_wide_indices(self):
+        # a real assembly (CLAUDE.md SS9.30) had a single tessellated
+        # surface with 290,192 vertices/80,535 strips -- over BOTH the
+        # uint16 index range and the original uint16 strip-count field.
+        # This used to raise; now it round-trips via uint32 strip
+        # indices for just this shape (ordinary shapes stay uint16).
         from balzar.scene3d import Reference, Scene3D, Shape
 
-        shape = Shape(name="TooBig", color=(1, 2, 3),
-                     vertices=[(float(i), 0.0, 0.0) for i in range(65536)],
-                     strips=[])
+        n = 70000  # over 65535, forces the wide-index path
+        vertices = [(float(i % 1000), float(i // 1000), 0.0) for i in range(n)]
+        # a strip that references a vertex index only reachable with a
+        # wide (uint32) index -- the real bug: <H silently can't hold 69999
+        strips = [[0, 1, 2], [n - 3, n - 2, n - 1]]
+        shape = Shape(name="TooBigForUint16", color=(4, 5, 6), vertices=vertices, strips=strips)
         ref = Reference(name="Leaf", shape_index=0, children=[])
         scene = Scene3D(shapes=[shape], references=[ref], root=0)
-        with self.assertRaises(Scene3DError):
-            encode_payload(scene)
+
+        payload = encode_payload(scene)
+        rebuilt = decode_payload(payload)
+        magic, version = struct.unpack_from("<4sH", payload, 0)
+        self.assertEqual(version, 2)
+        self.assertEqual(len(rebuilt.shapes[0].vertices), n)
+        self.assertEqual(rebuilt.shapes[0].strips, strips)
+
+    def test_shape_over_65535_strips_round_trips(self):
+        # the second real bug on the same assembly: n_strips itself (not
+        # just index values) overflowed the old uint16 count field even
+        # for shapes whose own vertex count fits in uint16.
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        n_strips = 70000
+        vertices = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+        strips = [[0, 1, 2] for _ in range(n_strips)]
+        shape = Shape(name="ManyStrips", color=(7, 8, 9), vertices=vertices, strips=strips)
+        ref = Reference(name="Leaf", shape_index=0, children=[])
+        scene = Scene3D(shapes=[shape], references=[ref], root=0)
+
+        payload = encode_payload(scene)
+        rebuilt = decode_payload(payload)
+        self.assertEqual(len(rebuilt.shapes[0].strips), n_strips)
+
+    def test_version_1_payload_without_a_wide_shape_still_decodes(self):
+        # a version-1 payload (pre-SS9.30) is a real thing that could
+        # still be sitting in a user's local library (balzar/library.py)
+        # across a balzar upgrade -- by construction it never held a
+        # shape over the old limits (encode_payload used to raise
+        # instead), so the OLD fixed uint16 n_strips/index layout must
+        # still decode correctly. _serialize itself always writes the
+        # new (version 2) layout now, so the old body is hand-built here
+        # to pin down exactly the bytes a pre-fix encoder used to emit.
+        from balzar.scene3d import _pack_str_table, _quantize_positions
+        import zlib as _zlib
+
+        vertices = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+        strips = [[0, 1, 2]]
+
+        out = bytearray()
+        out += _pack_str_table(["Small", "Leaf"])  # name table: 0=Small, 1=Leaf
+        out += struct.pack("<H", 1)  # n_shapes
+        out += struct.pack("<H", 0)  # shape name index -> "Small"
+        out += struct.pack("<BBB", 1, 2, 3)  # color
+        out += struct.pack("<I", len(vertices))
+        lo, scale, quantized = _quantize_positions(vertices)
+        out += struct.pack("<3f", *lo)
+        out += struct.pack("<3f", *scale)
+        for qx, qy, qz in quantized:
+            out += struct.pack("<3h", qx, qy, qz)
+        out += struct.pack("<H", len(strips))  # old: uint16 n_strips
+        for strip in strips:
+            out += struct.pack("<H", len(strip))
+            for idx in strip:
+                out += struct.pack("<H", idx)  # old: uint16 index, unconditional
+        out += struct.pack("<I", 1)  # n_refs
+        out += struct.pack("<H", 1)  # ref name index -> "Leaf"
+        out += struct.pack("<BH", 1, 0)  # has_shape=1, shape_index=0
+        out += struct.pack("<I", 0)  # n_children
+        out += struct.pack("<I", 0)  # root
+
+        body = bytes(out)
+        header = b"BZM1" + struct.pack("<HII", 1, len(body), _zlib.crc32(body))
+        legacy_payload = header + _zlib.compress(body, 9)
+
+        rebuilt = decode_payload(legacy_payload)
+        self.assertEqual(rebuilt.shapes[0].vertices, vertices)
+        self.assertEqual(rebuilt.shapes[0].strips, strips)
+        self.assertEqual(rebuilt.shapes[0].name, "Small")
 
 
 class TestGltfExport(unittest.TestCase):
@@ -545,6 +621,273 @@ class TestGltfExport(unittest.TestCase):
         # but distinct materials, so a click can select just one
         material_indices = {m["primitives"][0]["material"] for m in partA_meshes}
         self.assertEqual(len(material_indices), 2)
+
+
+class TestMergeNamedGroups(unittest.TestCase):
+    """merge_named_groups: an OPT-IN reserve tool (CLAUDE.md SS9.31),
+    independent from generate_bom's collapse_names -- this one actually
+    concatenates geometry into fewer Shape/Reference entries to shrink
+    the BZM1 payload, not just group the BOM/highlight display."""
+
+    def _two_bolts_under_a_named_group(self):
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        bolt = Shape(name="Bolt", color=(9, 9, 9),
+                    vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+                    strips=[[0, 1, 2]])
+        bolt_ref = Reference(name="BoltDef", shape_index=0, children=[])
+        # two placements of the same bolt shape under a group named
+        # "Fasteners" -- one at the origin, one translated by (10,0,0)
+        group = Reference(
+            name="Fasteners", shape_index=None,
+            children=[
+                (1, "bolt_1", (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)),
+                (1, "bolt_2", (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 10.0, 0.0, 0.0)),
+            ])
+        root = Reference(name="Root", shape_index=None,
+                         children=[(2, "fasteners_inst",
+                                   (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0))])
+        scene = Scene3D(shapes=[bolt], references=[root, bolt_ref, group], root=0)
+        return scene
+
+    def test_no_merge_names_returns_the_same_scene_unchanged(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        self.assertIs(merge_named_groups(scene, None), scene)
+        self.assertIs(merge_named_groups(scene, set()), scene)
+
+    def test_merge_concatenates_geometry_at_correct_world_positions(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        merged = merge_named_groups(scene, {"Fasteners"})
+
+        # only one shape and one reference left: the two separate bolt
+        # placements + their own def/group refs are pruned away
+        self.assertEqual(len(merged.shapes), 1)
+        self.assertEqual(len(merged.references), 2)  # Root + merged Fasteners
+
+        merged_shape = merged.shapes[0]
+        self.assertEqual(merged_shape.name, "Fasteners")
+        self.assertEqual(len(merged_shape.vertices), 6)  # 3 verts x 2 bolts
+        # first bolt at the origin, second translated by (10,0,0) -- both
+        # transforms correctly composed and applied, not just concatenated
+        self.assertEqual(merged_shape.vertices[:3], [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+        self.assertEqual(merged_shape.vertices[3:], [(10.0, 0.0, 0.0), (11.0, 0.0, 0.0), (10.0, 1.0, 0.0)])
+        self.assertEqual(merged_shape.strips, [[0, 1, 2], [3, 4, 5]])
+
+    def test_merged_scene_still_round_trips_through_the_payload(self):
+        # the int16-per-shape quantization the encoder already applies
+        # is itself lossy (CLAUDE.md SS9.5/mean_vertex_error) -- compare
+        # against the already-quantized scene, the same honesty pattern
+        # encode_3dxml_file's own self-check already uses, not raw
+        # pre-quantization equality (which a real float like 1.0 has no
+        # guarantee of surviving unchanged through int16 round-tripping).
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        merged = merge_named_groups(scene, {"Fasteners"})
+        quantized_merged, _ = _quantized_copy(merged)
+        payload = encode_payload(merged)
+        rebuilt = decode_payload(payload)
+        self.assertEqual(rebuilt, quantized_merged)
+
+    def test_merge_reduces_payload_size_for_many_distinct_unrepeated_parts(self):
+        # the case this tool actually helps: many DISTINCT small parts
+        # (each used only once, e.g. small brackets/covers) grouped
+        # under one named sub-assembly the caller doesn't need to see
+        # individually -- merging removes their per-part Reference/
+        # ReferenceRep/InstanceRep/Instance3D overhead (names, structure)
+        # WITHOUT losing any deduplication benefit, because there was
+        # none to lose: each shape was already used exactly once.
+        from balzar.scene3d import Reference, Scene3D, Shape, merge_named_groups
+
+        n = 50
+        shapes = [Shape(name=f"Bracket{i}", color=(i % 255, 10, 20),
+                        vertices=[(float(i), 0.0, 0.0), (float(i) + 1, 0.0, 0.0), (float(i), 1.0, 0.0)],
+                        strips=[[0, 1, 2]]) for i in range(n)]
+        refs = [Reference(name="Root", shape_index=None, children=[])]
+        group_children = []
+        for i in range(n):
+            ref_idx = len(refs)
+            refs.append(Reference(name=f"BracketDef{i}", shape_index=i, children=[]))
+            group_children.append((ref_idx, f"inst_{i}", _IDENTITY_MATRIX))
+        group_idx = len(refs)
+        refs.append(Reference(name="Brackets", shape_index=None, children=group_children))
+        refs[0] = Reference(name="Root", shape_index=None,
+                            children=[(group_idx, "brackets_inst", _IDENTITY_MATRIX)])
+        scene = Scene3D(shapes=shapes, references=refs, root=0)
+
+        unmerged_payload = encode_payload(scene)
+        merged_payload = encode_payload(merge_named_groups(scene, {"Brackets"}))
+        self.assertLess(len(merged_payload), len(unmerged_payload))
+
+    def test_merge_can_be_counterproductive_for_many_repeated_instances(self):
+        # the opposite, equally real finding, measured not assumed: for
+        # many REPEATED instances of the SAME shape (the classic "bolts"
+        # case one might expect this tool to target), merging is a
+        # regression, not a win -- it duplicates the already-deduplicated
+        # vertex data N times (baking each instance's world position
+        # into distinct quantized coordinates) in exchange for removing
+        # cheap per-instance transform records that DEFLATE already
+        # compresses extremely well (near-identical structured bytes).
+        # Documented in CLAUDE.md SS9.31 so this isn't rediscovered as
+        # a surprise later -- merge_names is opt-in specifically so a
+        # caller can choose NOT to use it here.
+        from balzar.scene3d import Reference, Scene3D, Shape, merge_named_groups
+
+        bolt = Shape(name="Bolt", color=(9, 9, 9),
+                    vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+                    strips=[[0, 1, 2]])
+        bolt_ref = Reference(name="BoltDef", shape_index=0, children=[])
+        n = 200
+        group_children = [
+            (1, f"bolt_{i}", (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, float(i), 0.0, 0.0))
+            for i in range(n)
+        ]
+        group = Reference(name="Fasteners", shape_index=None, children=group_children)
+        root = Reference(name="Root", shape_index=None,
+                         children=[(2, "fasteners_inst", _IDENTITY_MATRIX)])
+        scene = Scene3D(shapes=[bolt], references=[root, bolt_ref, group], root=0)
+
+        unmerged_payload = encode_payload(scene)
+        merged_payload = encode_payload(merge_named_groups(scene, {"Fasteners"}))
+        self.assertGreater(len(merged_payload), len(unmerged_payload))
+
+    def test_unmatched_merge_name_is_silently_ignored(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        merged = merge_named_groups(scene, {"DoesNotExist"})
+        self.assertEqual(len(merged.shapes), 1)  # unchanged
+        self.assertEqual(len(merged.references), 3)  # unchanged
+
+    def test_merge_name_matching_a_leaf_with_no_children_is_a_no_op(self):
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._two_bolts_under_a_named_group()
+        # "BoltDef" is a leaf (has a shape, no children) -- nothing to
+        # concatenate, must not crash or corrupt anything
+        merged = merge_named_groups(scene, {"BoltDef"})
+        self.assertEqual(len(merged.shapes), 1)
+        self.assertEqual(len(merged.references), 3)
+
+    def test_encode_3dxml_file_accepts_optional_merge_names(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        path = os.path.join(self.tmpdir.name, "fixture.3dxml")
+        _write_fixture_3dxml(path)
+
+        # default (no merge_names) behaves exactly as before
+        baseline = encode_3dxml_file(path)
+        same = encode_3dxml_file(path, merge_names=None)
+        self.assertEqual(baseline.payload, same.payload)
+
+        # merging "SubGroup" (a real group in the fixture) doesn't crash
+        # and produces a self-consistent result (encode_3dxml_file's own
+        # internal self-check already raises on any inconsistency)
+        merged_result = encode_3dxml_file(path, merge_names={"SubGroup"})
+        self.assertIsInstance(merged_result.payload, bytes)
+
+
+class TestConfidentialMerge(unittest.TestCase):
+    """CLAUDE.md SS5 point 13 ("3D filtered mode"): hiding names/geometry
+    of a sub-assembly in the VIEWER isn't real confidentiality, because
+    the downloadable .glb still contains every hidden sub-part's name
+    and material -- inspectable by anyone with a generic glTF viewer or
+    a text editor. merge_named_groups (SS9.31, built for a different
+    reason -- payload size) turns out to already solve this properly:
+    it doesn't just hide names, it DELETES the separate References and
+    Shapes entirely (via _prune_unreachable) before the payload/GLB are
+    ever generated -- so there is nothing left to leak, in either
+    artifact. Verified directly here, not assumed from the size tests
+    already covering the mechanism itself."""
+
+    def _scene_with_sensitive_sub_parts(self):
+        from balzar.scene3d import Reference, Scene3D, Shape
+
+        # deliberately proprietary-looking names, the exact kind of
+        # thing SS5 point 13 says shouldn't leak in a shared .glb
+        secret_a = Shape(name="PN-88213-INTERNAL", color=(1, 2, 3),
+                         vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+                         strips=[[0, 1, 2]])
+        secret_b = Shape(name="PN-90144-PROPRIETARY", color=(4, 5, 6),
+                         vertices=[(2.0, 0.0, 0.0), (3.0, 0.0, 0.0), (2.0, 1.0, 0.0)],
+                         strips=[[0, 1, 2]])
+        ref_a = Reference(name="PN-88213-INTERNAL", shape_index=0, children=[])
+        ref_b = Reference(name="PN-90144-PROPRIETARY", shape_index=1, children=[])
+        group = Reference(name="AssiemePubblico", shape_index=None, children=[
+            (1, "inst_a", _IDENTITY_MATRIX),
+            (2, "inst_b", _IDENTITY_MATRIX),
+        ])
+        root = Reference(name="Root", shape_index=None,
+                         children=[(3, "public_inst", _IDENTITY_MATRIX)])
+        scene = Scene3D(shapes=[secret_a, secret_b], references=[root, ref_a, ref_b, group], root=0)
+        return scene
+
+    def test_merged_payload_contains_no_trace_of_hidden_sub_part_names(self):
+        import zlib as _zlib
+
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._scene_with_sensitive_sub_parts()
+        merged = merge_named_groups(scene, {"AssiemePubblico"})
+        payload = encode_payload(merged)
+
+        # the body is deflate-compressed, so a plain substring check
+        # against the raw payload bytes would be meaningless (almost
+        # any string is "absent" from compressed data) -- decompress
+        # first, the same body _deserialize itself reads
+        body = _zlib.decompress(payload[14:])
+        self.assertNotIn(b"PN-88213-INTERNAL", body)
+        self.assertNotIn(b"PN-90144-PROPRIETARY", body)
+        # the public group name legitimately stays (that's the point --
+        # only the TOP level keeps its own identity)
+        self.assertIn(b"AssiemePubblico", body)
+
+        rebuilt = decode_payload(payload)
+        all_ref_names = {r.name for r in rebuilt.references}
+        all_shape_names = {s.name for s in rebuilt.shapes}
+        self.assertNotIn("PN-88213-INTERNAL", all_ref_names | all_shape_names)
+        self.assertNotIn("PN-90144-PROPRIETARY", all_ref_names | all_shape_names)
+
+    def test_bom_shows_only_the_public_group_name_not_hidden_parts(self):
+        from balzar.scene3d import generate_bom, merge_named_groups
+
+        scene = self._scene_with_sensitive_sub_parts()
+        merged = merge_named_groups(scene, {"AssiemePubblico"})
+        bom = generate_bom(merged)
+
+        names = {e.name for e in bom}
+        self.assertEqual(names, {"AssiemePubblico"})
+        self.assertNotIn("PN-88213-INTERNAL", names)
+        self.assertNotIn("PN-90144-PROPRIETARY", names)
+
+    def test_exported_glb_bytes_contain_no_trace_of_hidden_sub_part_names(self):
+        # the actual SS5 point 13 concern: a generic glTF viewer or a
+        # text editor run directly against the downloadable .glb -- not
+        # balzar's own decode path, which could theoretically hide
+        # things balzar's own code chooses not to show without them
+        # being truly gone from the file
+        from balzar.scene3d import merge_named_groups
+
+        scene = self._scene_with_sensitive_sub_parts()
+        merged = merge_named_groups(scene, {"AssiemePubblico"})
+        glb = scene3d_to_glb(merged)
+
+        self.assertNotIn(b"PN-88213-INTERNAL", glb)
+        self.assertNotIn(b"PN-90144-PROPRIETARY", glb)
+        self.assertIn(b"AssiemePubblico", glb)
+
+    def test_unmerged_glb_would_have_leaked_the_names_control_case(self):
+        # the control that proves the test above is meaningful: WITHOUT
+        # merging, the same sensitive names ARE present in the GLB --
+        # confirms this is a real property being tested, not a tautology
+        scene = self._scene_with_sensitive_sub_parts()
+        glb = scene3d_to_glb(scene)
+        self.assertIn(b"PN-88213-INTERNAL", glb)
+        self.assertIn(b"PN-90144-PROPRIETARY", glb)
 
 
 if __name__ == "__main__":

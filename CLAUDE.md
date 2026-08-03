@@ -539,6 +539,475 @@ e impostarlo uguale a come è stato generato — un valore sbagliato non
 corrompe nulla, semplicemente non trova QR, dichiarato esplicitamente
 nell'interfaccia).
 
+### 2.4f Allineamento pre-acquisizione-continua: motore JS condiviso + bug reale di geometria trovato portandolo
+
+Richiesta diretta di sessione, prima di iniziare la parte più ambiziosa
+("acquisizione continua" via fotocamera, vedi il piano a valle): questa
+sessione aveva proposto in autonomia `@undecaf/zbar-wasm` per la
+decodifica lato browser, basandosi solo su una ricerca sullo stato di
+manutenzione delle librerie — **senza** testarla contro le griglie QR
+reali di balzar. L'utente ha segnalato che un'altra sessione aveva già
+affrontato esattamente questo problema per il trasporto QR di byte
+grezzi (§2.4c/§2.4d): testato `@paulmillr/qr` (libreria "attivamente
+mantenuta", la stessa categoria di scelta che questa sessione stava per
+rifare), trovato un bug reale e riproducibile (3/24 QR falliti con un
+errore interno su una griglia reale), scartata in favore di **jsQR**
+(non più mantenuta ma provata 24/24 sugli stessi QR). Raccomandazione
+`zbar-wasm` **ritirata esplicitamente**: stesso errore metodologico che
+il principio guida del progetto vuole evitare ("misura, non stimare") —
+corretto riusando jsQR, già vendorizzata e già provata, invece di
+introdurre una seconda dipendenza di decodifica QR non misurata.
+
+**Estrazione, non riscrittura**: `qr-transport-core.js` (nuovo file)
+contiene ora CRC32/BZC1/`LiveScanner`/`tileBoxes`/`decodeAllInImage`,
+estratti **senza modifiche di comportamento** da `trasporto-qr.js`
+(che si accorcia da ~280 a ~100 righe, mantenendo solo il wiring DOM
+specifico della pagina) — così un secondo consumatore (l'acquisizione
+continua via fotocamera, il prossimo passo del piano) può riusare lo
+stesso motore invece di scriverne una terza copia. Verificato con un
+round-trip reale contro un devserver che instrada `/api/qr` al vero
+`handle_qr` (non un mock): upload di un file arbitrario da 52.944 B
+attraverso la UI reale di `trasporto-qr.html` (non uno script isolato),
+grid_dim=2, 7 pagine generate, rilette **in ordine invertito** — SHA256
+bit-identico all'originale, zero regressioni dall'estrazione.
+
+**Bug reale trovato portando `_tile_boxes` in JS**, non nella semplice
+traduzione ma verificandola con Playwright su una vera griglia
+grid_dim=4 (16 QR/frame, il default di balzar — il test precedente in
+§2.4d aveva esercitato solo grid_dim=2): sia `_tile_boxes` (Python) sia
+il suo porting JS assumevano `rows = grid_dim` incondizionatamente,
+ma il `top` di `_compose_grid` è una **costante fissa** (26 con
+un'etichetta "Frame i/N", 0 senza), mai derivata dal numero di righe —
+un frame parziale finale ha quasi sempre meno righe di `grid_dim` anche
+a parità di colonne (es. 12 codici residui a `grid_dim=4` sono 4
+colonne × 3 righe, non 4×4). Misurato prima del fix: `_decode_tiled`
+recuperava **1/16** invece dei 12 reali su un frame di questo tipo — un
+crollo quasi totale, non un errore marginale. **Il bug esisteva già nel
+codice Python originale**, ma era mascherato in silenzio dal fallback
+whole-image di ZBar (mai una perdita di correttezza lato Python, solo
+di velocità — l'euristica del tiling è sempre stata "solo un
+suggerimento, mai un requisito", §2.4b punto 6): la mascheratura non
+regge per jsQR, che non ha un fallback whole-image multi-decode
+altrettanto affidabile (`decodeAllViaMasking` è il tentativo JS più
+vicino, ma misurato meno affidabile — vedi sotto). Fix, in entrambi i
+linguaggi: `rows` non più assunto ma **derivato algebricamente
+dall'altezza nota dell'immagine**, provando ciascuno dei due valori
+possibili di `top` (26, 0) e tenendo quello che ricostruisce
+esattamente l'altezza data.
+
+**Un secondo bug, introdotto e corretto nella stessa sessione mentre si
+sistemava il primo**: spostando il controllo di completamento dentro
+`_decode_tiled` stesso, la prima versione confrontava il conteggio
+totale piatto (`len(results) == len(boxes)`) — che ha rotto un test
+preesistente (`test_decode_tiled_end_to_end_still_recovers_full_frame`)
+perché ZBar può legittimamente produrre **due** risultati per una sola
+cella (una lettura spuria di un'altra simbologia di codice a barre nel
+margine di testo dell'etichetta, comportamento innocuo già documentato
+altrove — filtrato a valle dal prefisso `CHUNK_MAGIC`), facendo
+apparire `len(results) > len(boxes)` e quindi far scartare un decode
+altrimenti perfettamente riuscito. Corretto controllando il
+completamento **per cella** (ogni cella tentata ha prodotto almeno un
+risultato, `cells_with_a_result == len(boxes)`) invece che sul
+conteggio piatto.
+
+**Limite di affidabilità di jsQR per singolo crop, reale e accettato,
+non un bug da inseguire**: anche con la geometria corretta, su un
+frame parziale reale da 12 QR, jsQR ne manca costantemente **1 su 12**
+(lo stesso identico crop, passato a ZBar/Python, decodifica senza
+problemi) — misurato ripetutamente (3 run consecutivi, stesso esito).
+`decodeAllInImage` (JS) gestisce questo diversamente da `_decode_tiled`
+(Python): **non scarta** i risultati parziali del tiling quando non è
+completo al 100% (a differenza del comportamento tutto-o-niente di
+Python), perché il fallback whole-image di jsQR
+(`decodeAllViaMasking`) è esso stesso inaffidabile su un'immagine
+piena — scartare 11 decodifiche buone per guadagnare 0 sarebbe una
+perdita netta. La dichiarazione di identità di ogni chunk è comunque
+autodescrittiva (indice/CRC in BZC1, via `LiveScanner`), quindi
+accumulare un risultato genuinamente parziale da un'immagine e
+completarlo da una foto/frame successivo è già il modello d'uso
+previsto per questo formato — un frame a cui manca un solo codice non
+è un fallimento, è lo stesso flusso "aggiungi un'altra foto" già
+esposto altrove nel progetto, e la ragione diretta per cui
+l'acquisizione continua (molti tentativi nel tempo, non una singola
+foto statica perfetta) è il passo naturale successivo.
+
+Verificato: suite Python invariata (309 test, tutti verdi,
+`tests/test_qr.py` incluso — 24/24), sintassi JS controllata
+(`node --check` su entrambi i file), tre run consecutivi del test
+grid_dim=4 reale (16/16 sul frame pieno in ogni run, confermando il fix
+di geometria; 11/12 costante sul frame parziale, confermando il limite
+di affidabilità jsQR come caratteristica stabile e non rumore).
+
+### 2.4g Componente di cattura fotocamera continua (`qr-camera-scanner.js`) — nessun tocco, e un vincolo di risoluzione reale scoperto misurando
+
+`qr-camera-scanner.js` (nuovo file) — `class ContinuousQrScanner`,
+il pezzo di libreria per l'"acquisizione continua" decisa in sessione:
+punta un vero stream `getUserMedia()` a `decodeAllInImage`/`LiveScanner`
+(§2.4f) con un loop a intervallo minimo (default 350ms, guardia `busy`
+contro decodifiche sovrapposte — `requestAnimationFrame` diretto a
+~60/s accoderebbe chiamate jsQR sincrone che possono costare centinaia
+di ms), accumula i capitoli via `LiveScanner` esattamente come il flusso
+foto-singola già esistente, e chiama `onComplete` da solo appena
+l'ultimo capitolo arriva — **zero tocchi dell'operatore**, il requisito
+esplicito della sessione (rifiutato "avanza al tocco": con frame che
+cambiano ogni ~1,5s su uno schermo che cicla da solo, sincronizzare un
+tocco umano è cattiva UX). Riusa `qr-transport-core.js` **senza
+modifiche**: nessuna logica di parsing chunk o decodifica QR
+reimplementata qui, solo la plumbing della fotocamera.
+
+**Vincolo reale scoperto misurando, non assunto**: la prima verifica
+end-to-end (fotocamera fittizia via Chromium `--use-file-for-fake-video-
+capture`, vedi sotto) con una griglia `grid_dim=4` reale (lo stesso
+default usato per lo scan-foto desktop) non ha mai trovato un solo QR
+— `count: 0` a ogni risoluzione di camera realistica (1920×1080 e
+sotto). Isolato il motivo con un vero sweep di risoluzione (non
+ipotizzato): jsQR ha bisogno di circa **700-1100px di larghezza per
+singolo codice QR** per decodificare in modo affidabile — un requisito
+enormemente più alto del sweet spot ZBar già noto per lo scan-foto
+desktop (1700-2400px per l'**intera griglia** 4×4, §9.10/§2.4b). Una
+griglia `grid_dim=4` da fotocamera live avrebbe bisogno di ~3800-4700px
+di larghezza inquadratura per tenere ognuno dei 16 codici sopra quella
+soglia — irrealistico per una fotocamera puntata a distanza normale;
+`grid_dim=2` (4 codici) resta comunque sopra soglia solo a ~1900px+,
+marginale. **Solo `grid_dim=1` (un codice QR per pagina generata)** si
+è dimostrato affidabile a ogni risoluzione testata, da quella nativa
+fino a 640px — confermato con un vero sweep (`decodeAllInImage`
+chiamato su PNG ridimensionati con Pillow/LANCZOS a 1920/1600/1280/
+1080/960/800/640px, 1/1 trovato a ogni passo). Nota anche una
+sensibilità di jsQR **non monotona** al ridimensionamento: in un test
+isolato su un singolo crop, 1100px e 700px decodificavano correttamente
+ma 900px falliva — un artefatto di resample/antialiasing, non un
+degrado uniforme; qualunque margine di inquadratura scelto per la
+generazione delle pagine deve restare ben lontano da quella fascia
+intermedia, non solo "abbastanza grande".
+
+`/api/qr` (`handle_qr`) clampa `grid_dim` a `[2, 8]` (§2.9) — una
+policy pensata per lo scan-foto desktop, non un limite di libreria:
+`payload_to_qr_frames(payload, grid_dim=1)` resta chiamabile
+direttamente. La generazione della sequenza QR per l'acquisizione
+continua (lato encoding, task successivo) dovrà quindi usare un
+percorso diverso da quello che serve già gli altri tab, o un parametro
+dedicato — non ancora deciso, rimandato all'integrazione UI.
+
+**Verificato end-to-end con una fotocamera reale, non un mock**:
+Chromium lanciato con `--use-fake-device-for-media-stream
+--use-file-for-fake-video-capture=<file>.y4m`, un vero video Y4M
+scritto a mano (nessun encoder ffmpeg disponibile in questo sandbox con
+supporto Y4M/MJPEG — verificato con `ffmpeg -version`, solo encoder
+PNG/VP8 abilitati — quindi scritto direttamente via la conversione
+YCbCr già disponibile in Pillow) che simula uno schermo che cicla 5
+pagine QR reali (payload casuale 10.000 B, `grid_dim=1`) a 1,5s/pagina,
+1920×1080, letterbox con margine ridotto (0,95×, non 0,8× — un primo
+tentativo con margine 0,8× ha spinto il codice della pagina 5 esattamente
+nella fascia 800-900px non affidabile scoperta sopra, causando un
+capitolo mai trovato in 8 cicli di loop consecutivi — bug del test,
+non del componente, isolato confrontando byte per byte il frame Y4M
+sorgente [corretto, letto e verificato "Frame 5/5" visivamente] contro
+lo stesso identico PNG prima/dopo il roundtrip YUV420, che falliva
+identico anche SENZA alcun coinvolgimento della fotocamera o del video).
+Con il margine corretto: **scansione completa in ~6,3s, stabile su 3
+run consecutivi**, tutti e 20 i tentativi di decodifica hanno trovato
+esattamente 1 QR (zero tentativi a vuoto), zero errori, riassemblaggio
+**bit-identico** (SHA256 verificato) — zero tocchi dell'operatore dal
+primo all'ultimo fotogramma, esattamente il modello richiesto.
+
+**Non ancora fatto**: nessuna integrazione UI (`trasporto-qr.html`,
+Balzar Live, desktop) — questo è solo il componente di libreria,
+verificato in isolamento con una pagina di test minimale non
+committata nel repository (`getUserMedia` richiede un contesto sicuro:
+`http://127.0.0.1`/`localhost` sì, `about:blank` di `page.set_content()`
+no — verificato anche questo nel processo). Nessuna gestione UI di
+`onError` (permesso negato, nessuna fotocamera, vincoli non
+soddisfatti) oltre al callback stesso. Nessuna decisione ancora presa
+su come la generazione della sequenza QR lato encoding debba esporre
+`grid_dim=1` per questo caso d'uso specifico (endpoint dedicato?
+parametro esplicito sull'esistente? nuovo default solo per questo
+flusso?).
+
+### 2.4h Frequenza di acquisizione: da 6,3s a ~1,7-2,3s per la stessa sequenza, misurando due leve indipendenti
+
+Domanda diretta di sessione, seguito naturale di §2.4g: dato che
+`grid_dim=1` è obbligatorio per la fotocamera (una sola pagina per QR,
+molte più pagine della griglia desktop), si può almeno alzare la
+frequenza di acquisizione per accorciare il tempo totale? Risposta
+misurata, non stimata: **sì, e il collo di bottiglia non era
+l'intervallo di polling** (`intervalMs`, già a 350ms) ma la
+**risoluzione di cattura richiesta** — due leve distinte, entrambe
+misurate separatamente prima di combinarle.
+
+**Leva 1 — risoluzione di cattura**: `ContinuousQrScanner` chiedeva
+1920×1080 di default. Misurato il costo reale di `decodeAllInImage` su
+un singolo QR a diverse risoluzioni (stesso codice, stesso contenuto):
+
+| Larghezza richiesta | Latenza decodifica (mediana) |
+|---|---|
+| 1920px | ~660ms |
+| 1600px | ~460ms |
+| 1280px | ~260ms |
+| 1080px | ~200ms |
+| 800px | ~135ms |
+
+Il costo di jsQR scala con il numero totale di pixel scansionati, non
+solo con la dimensione del singolo codice — richiedere una risoluzione
+inferiore (ma sempre sopra la soglia di affidabilità, §2.4g) accelera
+la decodifica **prima ancora** di toccare l'intervallo di polling.
+
+**Leva 2 — aspect ratio della richiesta camera**: qui un bug reale,
+non solo un'ottimizzazione. Il primo tentativo ha richiesto 1280×960
+(il classico 4:3) — sembrava ragionevole, ma le pagine `grid_dim=1` di
+balzar sono quasi quadrate (es. 1230×1278): adattarle con margine
+(0,95×) dentro un'altezza di soli 960px comprime il codice a
+~880-920px, **esattamente nella fascia inaffidabile** già documentata
+in §2.4g. Scoperto testando **tutte e 5 le pagine** di un payload reale
+(non solo la pagina 0, che per caso aveva una dimensione che a 960px
+decodificava comunque bene, mascherando il problema in uno smoke test
+a una sola pagina): 4 pagine su 5 fallivano sistematicamente a 1280×960.
+Corretto passando a **1280×1152** (quasi quadrato, come il contenuto):
+le stesse pagine finiscono a ~1050-1170px, **5/5 affidabile**, e persino
+più veloce (meno pixel totali di 1280×1280). Nuovo default:
+`idealWidth=1280, idealHeight=1152` (parametrizzabile via
+`opts.idealWidth`/`opts.idealHeight`).
+
+**Effetto combinato su `intervalMs`**: con la decodifica a ~200-260ms
+invece di ~660ms, il vero limitatore di cadenza diventa la latenza di
+decodifica stessa (la guardia `busy` impedisce comunque sovrapposizioni)
+— l'intervallo minimo non serve più a rallentare deliberatamente, serve
+solo da pavimento di sicurezza. Default abbassato da 350ms a **60ms**.
+
+**Misurato end-to-end con una fotocamera reale** (stessa metodologia di
+§2.4g, Chromium `--use-file-for-fake-video-capture` su un video Y4M che
+cicla pagine QR reali), sullo stesso payload di test a 5 pagine:
+
+| Durata per pagina | Tempo totale di scansione |
+|---|---|
+| 1,5s (originale) | ~6,3s |
+| 1,0s | ~4,45s |
+| 0,75s | ~3,23s |
+| 0,5s | ~2,33s |
+| 0,25s (pavimento del banco di test) | ~1,7-1,8s |
+
+**~3,6× più veloce** passando da 1,5s/pagina (l'originale) a 0,5s/pagina,
+con margine per 2+ tentativi di decodifica reali dentro la finestra di
+ogni pagina — la raccomandazione per chi genera la sequenza a
+ciclo-automatico (GIF/slideshow JS) è **0,5s/pagina**, non 0,25s: quel
+pavimento è un artefatto della granularità a 4fps del banco di prova
+Y4M di questa sessione (Chromium non onora in modo affidabile un F più
+alto nell'header Y4M — misurato direttamente: la stessa struttura a 6
+frame/pagina dichiarata a F20:1 invece di F4:1 si è bloccata a metà
+sequenza per 8+ secondi reali, un artefatto del dispositivo/banco di
+prova, non una velocità raggiungibile davvero), non un limite del
+componente stesso — su un display reale 0,5s ha comunque margine di
+sicurezza contro il jitter di temporizzazione che un test sintetico non
+ha.
+
+**Onestà sul confronto con `grid_dim=4` ("con le matrici era molto più
+veloce")**: vero, e resta vero anche dopo questa ottimizzazione — 16
+codici per foto contro 1 è una differenza strutturale di un ordine di
+grandezza che nessuna ottimizzazione di frequenza cancella. Quello che
+questa sessione ha fatto è **restringere il divario**, non eliminarlo:
+un payload da 109 capitoli (lo stesso benchmark di §9.10) richiederebbe
+109 pagine invece di 7 fotogrammi da 16 — ma a 0,5s/pagina invece di
+1,5s, il tempo di sola visualizzazione scende da ~164s a ~55s, lo stesso
+ordine di grandezza della pipeline `grid_dim=4` completa (foto+lettura,
+~29-44s misurati in §2.4b/§9.10) invece di 3× più lento. Il vantaggio
+reale di `grid_dim=1` non è la velocità (che resta strutturalmente
+inferiore) ma **zero tocchi dell'operatore e nessuna necessità di
+inquadrare l'intera griglia a distanza fissa** — un compromesso
+esplicito, non un pareggio.
+
+**Un miss deterministico trovato ripetendo il test con un payload più
+grande (27 capitoli, seed fisso)**: la scansione si è fermata a 27/28
+capitoli, sempre sullo stesso capitolo, riproducibile su 3 run
+consecutivi. **Non è un bug nuovo**: è lo stesso limite di affidabilità
+per-crop di jsQR già documentato in §2.4f/§2.4g (jsQR manca
+occasionalmente un crop altrimenti valido), reso deterministico solo
+dal fatto che il video di test sintetico ripete fotogrammi
+bit-identici a ogni giro di loop — una fotocamera reale ha invece
+micro-variazioni naturali (autofocus, tremore della mano, luce) che
+danno un "secondo tiro di dadi" a ogni tentativo, esattamente il
+meccanismo per cui l'acquisizione continua (molti tentativi nel tempo)
+è più robusta di una singola foto statica, non riproducibile in un
+banco di prova a fotogrammi identici.
+
+Nessuna modifica a `qr-transport-core.js` in questa sessione — solo
+`qr-camera-scanner.js` (nuovi default `idealWidth`/`idealHeight`/
+`intervalMs`, documentati nel commento di testata del file con gli
+stessi numeri sopra). Nessun test Python coinvolto (comportamento
+client-side puro). Verificato: sintassi JS (`node --check`), nessuna
+regressione sui test già passati con i vecchi default.
+
+### 2.4i Integrazione in `trasporto-qr.html`: scelta esplicita generazione/lettura, e un bug reale di geometria trovato dall'integrazione stessa
+
+Richiesta diretta di sessione: lasciare all'utente la scelta esplicita,
+con pro/con dichiarati in interfaccia, tra le due modalità già esistenti
+(pagine da fotografare a mano, qualunque griglia — contro GIF per
+acquisizione continua, sempre griglia 1×1) sia in **generazione** sia in
+**lettura**, mantenendo le griglie dense interamente disponibili per chi
+non usa l'acquisizione continua.
+
+**Generazione** (`trasporto-qr.html` sezione 1): un nuovo `<fieldset>`
+con due opzioni radio (`enc-mode`), ciascuna con un pro/con di una riga.
+Selezionando "GIF per acquisizione continua" il selettore di griglia
+esistente si nasconde (rimane invariato e disponibile per l'altra
+modalità) e la richiesta a `/api/qr` forza `grid_dim=1` internamente,
+indipendentemente da cosa fosse impostato prima — non un valore
+suggerito, imposto lato client perché è l'unico che l'acquisizione
+continua legge in modo affidabile (§2.4g). Sblocco necessario lato
+server: `handle_qr` clampava `grid_dim` a `[2, 8]` (una policy per lo
+scan-foto desktop, mai un limite di libreria), che rendeva `grid_dim=1`
+irraggiungibile dall'endpoint pubblico — cambiato a `[1, 8]`, con test
+espliciti sia per il nuovo valore ammesso sia per il vecchio
+comportamento di clamp dal basso (ora a 1, non più a 2).
+
+**Lettura** (`trasporto-qr.html` sezione 2): stesso principio, un
+`<fieldset>` (`dec-mode`) tra "Foto multiple (comando dell'operatore)"
+(il flusso già esistente, qualunque griglia) e "Acquisizione continua
+(fotocamera)" (nuovo, `ContinuousQrScanner` da `qr-camera-scanner.js`,
+un `<video>` live + pulsanti avvia/ferma + testo di progresso). Le due
+modalità **condividono la stessa `LiveScanner`** (nuovo parametro
+opzionale `opts.scanner` su `ContinuousQrScanner`, che di default ne
+crea una propria se non passata): un capitolo che la fotocamera non
+riesce a leggere si può coprire con una foto manuale, e viceversa, senza
+perdere ciò che l'altra via ha già trovato — stesso principio di
+accumulo già alla base del formato, ora esteso a due meccanismi di
+acquisizione invece di uno.
+
+**Bug reale trovato dall'integrazione stessa, non dalla libreria in
+isolamento**: il test di regressione della modalità "foto multiple"
+falliva in modo deterministico (stesso payload, stesso seed, sempre lo
+stesso esito) — **sia jsQR sia pyzbar** non trovavano nessun QR in
+un'immagine che, scansionata per intero senza ritaglio, decodificava
+perfettamente. Isolato passo-passo: `_tile_boxes`/`tileBoxes` provano
+`top=26` prima di `top=0`, accettando la prima ipotesi che "ricostruisce
+l'altezza abbastanza bene" — ma la tolleranza usata per "abbastanza
+bene" era `row_h/2` (centinaia di pixel), enormemente più larga del
+necessario. Su una griglia 2×2 reale a frame singolo (`top` vero = 0,
+nessuna etichetta "Frame i/N"), l'ipotesi SBAGLIATA `top=26` ricostruiva
+l'altezza con un errore di soli 26px — comodamente dentro quella
+tolleranza troppo larga — e veniva accettata per prima, spostando ogni
+ritaglio di ~26px rispetto alla posizione reale dei QR. Il risultato non
+era un rallentamento (il fallback whole-image di ZBar avrebbe comunque
+salvato la correttezza in Python) ma un **fallimento totale**: jsQR non
+ha un fallback whole-image affidabile su una griglia multi-codice (limite
+già documentato, non nuovo), quindi sia il tentativo di tiling (mal
+posizionato) sia il fallback (whole-image, jsQR intrinsecamente debole su
+più codici in un canvas) fallivano insieme.
+
+Verificato con `pyzbar` **prima** di incolpare jsQR: gli stessi identici
+ritagli mal posizionati, passati a ZBar invece che a jsQR, fallivano
+anch'essi — la prova diretta che non era un limite di jsQR ma un errore
+di geometria a monte, condiviso da entrambi i linguaggi (`_tile_boxes` in
+Python e `tileBoxes` in JS hanno esattamente lo stesso bug, stessa
+tolleranza `row_h/2` in entrambi). Fix in entrambi: tolleranza stretta
+(2px, non `row_h/2`) — quando l'ipotesi è davvero corretta la formula
+ricostruisce l'altezza **esattamente** (cell/pad/rows sono gli stessi
+interi che `_compose_grid` ha usato), qualunque errore ben oltre un paio
+di pixel di arrotondamento significa che l'ipotesi è sbagliata, non che
+serve più margine.
+
+Verificato: tutti e 4 i ritagli della griglia del test decodificano
+correttamente dopo il fix (prima: 0/4 sia con ZBar sia con jsQR); nuovo
+test di regressione in `tests/test_qr.py`
+(`test_tile_boxes_uses_the_correct_top_on_a_full_single_frame_grid`,
+payload dimensionato per forzare esattamente 4 capitoli — un frame
+singolo, griglia 2×2 piena, senza etichetta "Frame i/N", esattamente lo
+scenario del bug); suite Python 312 test, tutti verdi; verifica end-to-end
+completa con Playwright contro un devserver reale che instrada `/api/qr`
+al vero `handle_qr` — non solo le due modalità nuove, ma un round-trip
+reale con fotocamera fittizia (`--use-file-for-fake-video-capture`,
+stessa metodologia di §2.4g/§2.4h) attraverso l'interfaccia reale di
+`trasporto-qr.html` (non uno script isolato): scelta modalità GIF in
+generazione → GIF reale prodotta e verificata (magic bytes `GIF8`) →
+scelta modalità "Acquisizione continua" in lettura → scansione completa
+tramite un vero pulsante "Avvia fotocamera" → download tramite il vero
+pulsante "Scarica file ricostruito" → bit-identico (SHA256), stabile su
+run ripetuti.
+
+**Bug di CSS trovato durante la verifica, stessa causa già nota di
+§9.9**: sia `#enc-grid-dim-row` (classe `.dim-picker`) sia
+`#enc-gif-result`/`.qr-page-item` sia `#dec-continuous-section`/
+`.camera-view` hanno una regola di classe incondizionata con `display:
+... `, che — per la stessa collisione di specificità già trovata e
+corretta per `.qr-block` — vince sulla regola nativa `[hidden] {
+display: none }`. Corretto con la stessa tecnica (`.dim-picker[hidden]`,
+`.qr-page-item[hidden]`, `.camera-view[hidden]`, tutte `{ display: none;
+}`), trovato scrivendo il test Playwright (`is_visible()` restituiva
+`true` nonostante l'attributo `hidden` fosse impostato), non a occhio.
+
+**Collisione di nome CSS evitata prima che causasse un bug**: il nome
+ovvio per il nuovo contenitore delle due opzioni radio,
+`.mode-picker`, **era già usato** da `index.html` (il toggle "Sequenza
+navigabile / File indipendenti" del tab Sequenza, §2.9) con regole
+incompatibili — riusarlo avrebbe silenziosamente cambiato l'aspetto di
+quel toggle non correlato. Rinominato in `.qr-mode-picker`, verificato
+con `grep` che nessun'altra collisione di nome esiste per le classi
+nuove (`.mode-option`, `.mode-pro-con`).
+
+### 2.4j Acquisizione continua estesa a Balzar Live (tab "Apri programma")
+
+Seguito diretto di §2.4i: `trasporto-qr.html` (trasporto di byte
+grezzi arbitrari) aveva già la scelta esplicita generazione/lettura
+tra griglie dense e GIF per acquisizione continua; Balzar Live (il tab
+"Apri programma" di `index.html`, quello che apre `.bzr`/`.b3d`/`.bzx`
+tramite `/api/render`) no — un file scaricato da lì poteva essere
+riaperto solo caricandolo di nuovo da disco, mai ricostruendolo da una
+sequenza QR fotografata/ripresa dalla fotocamera. Stesso motore
+(`jsQR.min.js`/`qr-transport-core.js`/`qr-camera-scanner.js`, già
+vendorizzati e provati in §2.4d-§2.4h), nessun codice di decodifica
+nuovo — solo wiring DOM e refactoring per riusarlo su una terza
+pagina.
+
+**Generazione**: ogni bottone "genera QR" già esistente su Balzar Live
+(i tre blocchi `open`/`open-3d`/`open-docs` in `index.html`) guadagna
+lo stesso checkbox "ottimizza per acquisizione continua" già visto in
+`trasporto-qr.html` — se spuntato, `setupQrButton` (`app.js`) forza
+`mode="gif"` e `grid_dim=1` indipendentemente da cosa mostri il
+`<select>` esistente (che resta invariato e disponibile per l'altra
+modalità, esattamente come in §2.4i).
+
+**Lettura**: nuova sezione "Carica un file / Scansiona una sequenza
+QR" prima della dropzone esistente, con lo stesso doppio livello di
+scelta di `trasporto-qr.html` (foto multiple vs fotocamera continua).
+Refactoring necessario per riusarla pulitamente: `handleOpenFile`
+(che faceva sia la lettura del File sia la POST a `/api/render`) è
+stato diviso in `handleOpenData(dataB64, label)` — la parte condivisa,
+POST + dispatch su `json.kind` (2d/3d/bundle) — e un `handleOpenFile`
+ridotto a un thin wrapper FileReader-based. Una nuova
+`handleOpenScanBytes(bytes, label)` riusa `handleOpenData` esattamente
+allo stesso modo per i byte ricostruiti da una sequenza QR: `/api/render`
+tratta i byte come byte, indipendentemente da come sono arrivati.
+`LiveScanner` è condivisa tra le due modalità di lettura (foto manuali
+e fotocamera continua, tramite `opts.scanner` su `ContinuousQrScanner`,
+già supportato da §2.4i) — un capitolo mancato dalla fotocamera si può
+coprire con una foto manuale e viceversa.
+
+**Verificato con Playwright contro un devserver locale reale** (stessa
+metodologia già nota, non contro Vercel): toggle mostra/nasconde le
+sezioni giuste; upload normale di file (nessuna regressione); checkbox
+"acquisizione continua" forza davvero `mode=gif`/`grid_dim=1` nella
+richiesta reale a `/api/qr` (intercettata e verificata, non assunta);
+lettura manuale — payload aperto → pagine QR `grid_dim=2` generate →
+le stesse pagine ricaricate **in ordine invertito** tramite il file
+picker reale → file riaperto automaticamente, stessa identica
+`stats` di prima; lettura continua — sequenza `grid_dim=1` reale
+(5 pagine) mostrata a una fotocamera fittizia (`--use-file-for-fake-
+video-capture`, stessa tecnica di §2.4g/§2.4h) → file aperto **con
+zero tocchi dell'operatore**, testo del programma decodificato
+verificato carattere per carattere (non solo la dimensione).
+
+Bug reali trovati e corretti, non nel codice del progetto ma nello
+script di verifica stesso — entrambi bug della sintassi Playwright/DSL
+dello script, non del prodotto: sintassi DSL non valida nel fixture di
+test (`PALETTE 0=0,0,0 ...` invece del vero `PALETTE i=0 rgb=#...`, un
+formato chiave=valore per riga); `Request.post_data` è una proprietà
+in questa versione di Playwright, non un metodo (`req.post_data`, non
+`req.post_data()`). Nessun bug trovato nel codice di produzione durante
+questa verifica.
+
+Suite Python invariata (nessuna riga JS è testata da `unittest`, per
+costruzione — stesso principio già seguito per il resto della UI QR/3D
+di questo progetto): 315 test, tutti verdi.
+
 ### 2.5 Export SVG (vettoriale reale, non raster incapsulato)
 
 `balzar/svg.py` — un secondo target di rendering per lo stesso DSL, non
@@ -805,6 +1274,16 @@ Verificato con screenshot reale sotto Xvfb: apertura GIF, encoding video
 delta, anteprima animata, pannello statistiche, bottoni attivi, ciclo
 completo esporta-QR→scansiona-foto→payload bit-identico.
 
+Un secondo pulsante, "Scansiona con fotocamera (browser)…"
+(`balzar/live_scan_server.py`, sessione successiva — vedi §9.27), copre
+il caso "acquisizione continua" (zero tocchi dell'operatore, fotocamera
+live) che "Scansiona foto QR" non copre (foto singole scattate a
+parte): apre una pagina locale nel browser di sistema che riusa lo
+stesso motore jsQR/`ContinuousQrScanner` già vendorizzato per la demo
+web, e i byte ricostruiti tornano al processo desktop via un endpoint
+`POST /submit` sullo stesso server HTTP effimero — nessuna dipendenza
+nativa di cattura video (OpenCV o simili) aggiunta al progetto.
+
 ### 2.9 Demo web (solo vetrina, non il prodotto)
 
 `index.html` + `app.js` + `style.css` + sei funzioni serverless Vercel
@@ -1052,6 +1531,212 @@ misurati altrove in questo documento (§3, §8), non nuovi né stimati.
 Dichiara onestamente le tre righe a guadagno nullo (foto, audio, dati
 strutturati non ancora implementati) invece di ometterle.
 
+### 2.9b `landing.html` — pagina marketing separata dalla demo funzionante
+
+Richiesta diretta di sessione: `index.html` è la demo funzionante a sei
+schede (§2.9), non pensata per convertire un visitatore che arriva da un
+link esterno e non sa ancora cosa sia balzar — nessuna pagina del
+progetto raccontava in un colpo solo il caso d'uso guida (§6 punto 1,
+manutenzione industriale) con un messaggio, una prova visiva e una CTA.
+Decisione di scope confermata esplicitamente con l'utente prima di
+costruire (via `AskUserQuestion`): pagina **separata** (`landing.html`,
+non diventa la root del sito, `index.html`/`vercel.json` **invariati** —
+zero rischio sul flusso esistente), messaggio guidato dal caso
+manutenzione/CAD, CTA primaria "Prova la demo" verso `index.html`.
+
+**Nuovi file**: `landing.html` + `landing.css` (foglio di stile
+dedicato, **non** `style.css` — deliberato: `style.css` è già stato
+sorgente di bug di specificità CSS ripetuti in questo progetto, es. §9.9/
+§9.20/§9.29, tutti dovuti a regole condivise tra pagine diverse che
+collidevano; una pagina di marketing con un linguaggio visivo diverso
+[hero, badge statistici, grid di card] non condivide componenti con la
+UI applicativa, quindi non ha motivo di condividerne il CSS) +
+`landing-img/` (PNG **reali**, non mockup: renderizzati con
+`balzar render`/`balzar chunks --qr` dagli stessi file in `examples/`
+già usati altrove nel progetto — `schema-tecnico.png` per l'hero,
+`etichetta-bom.png` + `etichetta-bom-qr.png` come prova appaiata
+immagine/QR nella sezione numeri, `viewer-3d-search.png` per la sezione
+Balzar Live, vedi sotto). Nessuna dipendenza nuova: le uniche librerie
+usate per generare gli asset (`qrcode`, Pillow) servivano solo in fase
+di build degli asset statici, non sono richieste a runtime dalla pagina.
+
+**Bug reale di deformazione dell'immagine, trovato e corretto dopo il
+primo feedback dell'utente**: il QR nella sezione "prove" appariva
+allungato in verticale, non quadrato. Causa isolata misurando il DOM,
+non indovinata: la regola globale `img { max-width: 100%; }` non aveva
+`height: auto`, quindi quando il layout a flexbox della riga
+immagine+QR restringeva la larghezza dell'elemento sotto l'attributo
+HTML `width="290"`, l'altezza restava fissa a `height="290"` (letta
+dall'attributo) mentre la larghezza si riduceva — la stessa distorsione
+si sarebbe potuta ripresentare su qualunque immagine futura stretta in
+un contenitore più piccolo dei suoi attributi HTML. Fix in due parti:
+`height: auto` aggiunto alla regola globale `img` (corregge la classe
+di bug, non solo il QR), e `.proof-visual` passato da `flex` a
+`display: grid` con colonne proporzionali esplicite (`1.2fr 1fr`) per
+un dimensionamento più prevedibile del riquadro QR, con l'immagine del
+QR stessa vincolata a `aspect-ratio: 1/1` come ulteriore garanzia
+indipendente dagli attributi HTML. Verificato leggendo
+`getBoundingClientRect()` prima/dopo il fix (123×290px deformato →
+123×123px quadrato) e visivamente su desktop/mobile.
+
+**Sezione "pattern band" rimossa su richiesta esplicita**: il testo
+("ogni piastrella di questo sfondo è calcolata al volo...") accompagnava
+uno sfondo decorativo a bassa opacità di `pattern_tile.bzr`, ma preso
+fuori contesto — senza aver appena visto il resto della pagina — non
+comunicava nulla di comprensibile. Rimossi la sezione HTML, le regole
+CSS `.pattern-band*` e il PNG `landing-img/pattern-tile.png` (diventato
+inutilizzato), invece di lasciare CSS/asset morti nel repository.
+
+**Contenuto**: hero con CTA verso `index.html`; fascia statistiche;
+sezione "problema" (officina senza rete/licenza CAD); "come funziona" a
+3 step con l'analogia spartito già usata in `come-funziona.html`;
+sezione prova con la stessa tabella RGB/PNG/ZIP/payload di §8 (559 B
+contro 998.400 B RGB, unico che entra in un QR) accompagnata dal QR
+reale generato dallo stesso payload; riquadro onestà/Kolmogorov (stesso
+principio "dichiara invece di nascondere" del resto del progetto, con
+l'esempio reale del rumore 0,7× che non comprime); due card Balzar
+Studio/Balzar Live (stesso contenuto di `VISIONE.md` §2); griglia
+applicazioni (5 delle 6 di `VISIONE.md` §3 — la musica/notazione
+simbolica omessa perché lì stessa esplicitamente "zero lavoro
+iniziato", non coerente con il tono "solo capacità reali" scelto per
+questa pagina); CTA finale; footer con link a demo/come-funziona/
+trasporto-qr/repository GitHub (lo stesso URL pubblico già linkato da
+`come-funziona.html`, non un link nuovo).
+
+Verificato con Playwright contro un server locale (`http.server`, non
+Vercel — stessa limitazione di rete già nota, §2.9): desktop/dark-mode/
+mobile (390px) senza overflow orizzontale, tutti i link interni
+risolvono 200, gli anchor `#come-funziona`/`#prove`/`#onesta`/
+`#applicazioni`/`#balzar-live` scrollano al target giusto, nessun errore
+console. Un bug reale trovato e corretto durante la verifica: il badge
+statistico sovrapposto all'immagine hero (posizionato in basso a
+sinistra) copriva la seconda riga della didascalia sottostante —
+spostato in alto a destra, dove non collide con nessun testo.
+
+**Sezione "Balzar Live in azione" (3D + ricerca allarmi), aggiunta dopo
+un secondo giro di feedback**: la prima bozza copriva il viewer 3D solo
+di striscio (un elenco puntato dentro la card "Balzar Live" del
+confronto Studio/Live). L'utente ha chiesto di dargli più peso — è la
+funzionalità con la demo visiva più forte del progetto (click-to-select,
+ricerca libera, BOM collegata, §9.11/§9.15/§9.29) e non aveva ancora
+una prova visiva reale sulla landing. Aggiunta una sezione dedicata
+subito dopo la fascia statistiche (prima di "In officina...", quindi la
+seconda cosa che un visitatore vede dopo l'hero), con uno screenshot
+reale del viewer, non un mockup disegnato a mano.
+
+**Prima versione**: un assieme 3DXML sintetico costruito ad hoc (una
+flangia + 4 bulloni, geometria a scatole scritta a mano) più un CSV
+allarmi a 4 colonne, impacchettati in un vero bundle `.bzx` e aperti con
+la vera `balzar.viewer3d.open_bundle_in_browser`. **Sostituita su
+richiesta esplicita dell'utente** con uno screenshot dello stesso
+assieme 3DXML industriale reale già usato per la verifica end-to-end di
+§9.10/§9.12/§9.21/§9.30 (skid con vasche di accumulo/riscaldo, 88 forme
+uniche, 245 posizionamenti-foglia — fornito di nuovo in sessione,
+**non incluso nel repository** per lo stesso motivo di copyright già
+seguito per gli altri assiemi reali di quelle sezioni): risultato
+nettamente più credibile di una geometria a scatole disegnata a mano —
+lista BOM lunga e realistica visibile nel pannello, silhouette
+riconoscibile di un impianto vero. CSV allarmi con nomi di componenti
+reali estratti dalla BOM (`RESISTENZA_DU_SCATOLA`, `VASCA_RISCALDO`,
+`QUADRO_EL_DU` — nomi di parte generici, non part number proprietari)
+invece di quelli inventati della flangia sintetica. Nessuna delle
+interazioni mostrate nello screenshot è finta: pilotata con Playwright
+(ricerca reale digitata in `#search-input`) contro il server locale che
+`open_bundle_in_browser` avvia per davvero. `landing-img/
+viewer-3d-search.png` cattura lo stato dopo la ricerca del codice
+`E102`: il quadro elettrico evidenziato in arancione nel modello
+(silhouette dell'intero skid attenuata sullo sfondo), riga
+`QUADRO_EL_DU ×1` selezionata nella distinta base — visibile
+contemporaneamente nello stesso screenshot, prova diretta del
+collegamento 3D↔BOM↔ricerca — tabella dei risultati con le 4 colonne
+del CSV sotto. Card presentata come un finto "browser frame" (barra con
+tre pallini + pillola URL, solo CSS — `.browser-frame`/`.browser-chrome`
+in `landing.css`) per segnalare visivamente che è un'interfaccia reale
+in un browser, non un'illustrazione.
+
+**Sezione "intro" aggiunta prima dell'hero, su richiesta esplicita**:
+l'hero originale apriva già con un esempio concreto (schema tecnico +
+QR), ma non c'era nessuna riga che spiegasse **cos'è balzar** a un
+livello più alto, senza tecnicismi, prima di mostrare la prova. Nuova
+`<section class="intro">` in cima a `<main>` — solo testo centrato,
+niente immagine/card/CTA, massima sobrietà — seguita da un divisorio
+(`border-top` su `.hero`) per segnalare visivamente il passaggio da
+"concetto" a "esempio concreto".
+
+**Copy rivista due volte nella stessa sessione, su richiesta esplicita
+dell'utente**: la prima versione ("Non salviamo i tuoi disegni. Li
+rigeneriamo.") è stata sostituita con "Tutto il tuo progetto, in un
+piccolo codice." + una riga che sottolinea l'aspetto **completamente
+offline** ("senza rete, senza server") invece di ripetere il
+"non-salviamo" già implicito nell'hero sotto. Vincolo esplicito
+applicato ovunque nella pagina, non solo qui: **mai la prima persona
+plurale** ("salviamo", "generiamo", "dichiariamo") — un residuo è stato
+trovato e corretto nello stesso giro (`h3` della sezione onestà, da
+"lo dichiariamo — non lo nascondiamo" a "dichiarato apertamente — mai
+nascosto"), verificato con un grep mirato (`\w+iamo\b`) su tutto
+`landing.html` per non lasciarne altri.
+
+**Correzione di gerarchia semantica, non solo estetica**: l'intro
+diventa l'unico `<h1>` della pagina (era l'hero prima); il titolo
+dell'hero scende a `<h2 class="hero-title">` con le stesse identiche
+regole tipografiche di prima (spostate dal selettore `h1` a
+`h1, .hero-title` in `landing.css`, incluso `em` per la parola
+evidenziata in accento) — nessuna regressione visiva, solo un
+documento con una struttura di intestazioni corretta (un solo h1, h2
+per le sezioni principali, h3 per le sotto-sezioni, invariato altrove).
+
+**Riferimenti a `CLAUDE.md` rimossi dal testo visibile del sito**: su
+richiesta esplicita, ogni menzione renderizzata di `CLAUDE.md` (il log
+tecnico di sessione, interno al repository) è stata tolta dal testo
+pubblico — `come-funziona.html` (link/citazione in fondo alla tabella
+di confronto, sostituito con la stessa affermazione senza il nome del
+file), `trasporto-qr.html` (due punti, § tolte dalle frasi che le
+citavano) e `index.html` (una citazione nel tab "Apri programma"). I
+commenti nel codice sorgente JS/CSS che citano `CLAUDE.md §N` come
+puntatore a spiegazioni più dettagliate (`qr-transport-core.js`,
+`qr-camera-scanner.js`, `app.js`, `trasporto-qr.js`, `style.css`, più
+l'intestazione di licenza vendorizzata di `jsQR.min.js`) sono stati
+**lasciati invariati**: non sono testo visibile a un visitatore del
+sito (solo a chi apre i sorgenti), e sono la stessa documentazione
+tecnica di sessione già presente ovunque nel progetto.
+
+**Link "torna alla home" verso `landing.html` aggiunto su tutte e tre
+le pagine del sito** (`index.html`, `come-funziona.html`,
+`trasporto-qr.html`), su richiesta esplicita — prima solo
+`come-funziona.html`/`trasporto-qr.html` avevano un link indietro (verso
+`index.html`, non verso `landing.html`), e `index.html` non aveva alcun
+link di ritorno. Aggiunto senza toccare i link già esistenti: su
+`come-funziona.html`/`trasporto-qr.html` lo stesso `<p class="nav-links">`
+ora porta due link ("torna alla home" verso `landing.html` · il vecchio
+"torna alla demo" verso `index.html`, invariato); su `index.html`
+(che prima non aveva alcuna riga `nav-links` di ritorno) una nuova riga
+subito sotto l'`<h1>`.
+
+**Riallineamento al restyling di `style.css` (§12.6), su richiesta
+esplicita di sessione**: il round stile "professionale chiaro, accento
+blu" fatto altrove nel progetto (accento `#2563eb`/`#4f83f1`, wordmark/
+titoli sans-serif system-ui invece di Georgia, nuovi token di ombra) è
+arrivato a `index.html`/`come-funziona.html`/`trasporto-qr.html`
+(condividono `style.css`) ma non a `landing.html`, che ha il suo
+`landing.css` separato e non era stata toccata da quel lavoro —
+verificato confrontando `9cfa83a` (ultimo commit noto della landing)
+con `origin/main` (33 commit più avanti), non assunto. Risultato prima
+del fix: cliccando dalla landing verso una qualunque delle tre pagine
+si passava visibilmente a un accento/font diversi, come un prodotto
+diverso. Fix: stessi valori di token (colore, peso `650`/`letter-
+spacing` dei titoli, favicon) portati in `landing.css`, `landing.css`
+resta comunque un file separato (stessa ragione originale: evitare le
+collisioni di specificità già viste tra pagine che condividono
+`style.css`). Nessuna modifica a copy/contenuti/struttura della
+landing: verificato che nessuna riga di testo fosse diventata
+fattualmente stale (tab riordinate con "Assemblee 3D" ora di default,
+gate di licenza beta solo sull'app desktop pacchettizzata — la demo web
+che la landing linka resta libera, invariata) prima di decidere di non
+toccare altro. Verificato con Playwright dopo l'allineamento: nessun
+errore console, nessun overflow orizzontale mobile, transizione
+landing→demo visivamente coerente; suite Python invariata (374 test,
+nessuna riga toccata era Python).
+
 ### 2.10 CLI
 
 `balzar render|encode|encode-image|encode-video|decode|info|chunks|scan|assemble|gui`
@@ -1059,7 +1744,7 @@ strutturati non ancora implementati) invece di ometterle.
 
 ### 2.11 Test
 
-309 test, tutti verdi (`python3 -m unittest discover -s tests`):
+346 test, tutti verdi (`python3 -m unittest discover -s tests`):
 `test_determinism.py`, `test_ops.py`, `test_expansion.py`, `test_encoder.py`,
 `test_qr.py` (skippato automaticamente se `qrcode`/`pyzbar` non sono
 installati — dipendenze opzionali, non nel motore core),
@@ -1072,7 +1757,10 @@ ricerca/tabella allarmi del viewer 3D — vedi §9.15), `test_bundle.py`
 attraverso il chunking QR — vedi §9.16), `test_library.py` (libreria
 locale persistente di Balzar Live: logica pura file/JSON, isolata via
 `BALZAR_LIBRARY_DIR` — vedi §9.22/§9.23), `test_raw_qr_logic.py`
-(trasporto QR di byte arbitrari, nessun motore balzar — vedi §2.4d).
+(trasporto QR di byte arbitrari, nessun motore balzar — vedi §2.4d),
+`test_live_scan_server.py` (protocollo HTTP puro del ponte browser→
+desktop per l'acquisizione continua fotocamera, nessun Tkinter/browser
+reale — vedi §9.27).
 Copertura: round-trip
 bit-identico, corruzione rilevata,
 correttezza delle singole operazioni, fattori di espansione sugli esempi,
@@ -1326,24 +2014,13 @@ scansione whole-image su una griglia completa) — vedi §2.4b).
     `_Shape` di `vectorio.py` (già strutturate per kind/geom/layer) nel
     formato a coppie codice/valore DXF — probabilmente il pezzo più
     semplice di questa lista, perché il modello dati esiste già.
-13. **"3D filtered mode"** (nome scelto in sessione): mostrare solo gli
-    assiemi di primo livello nominati dal disegnatore, nascondendo
-    sotto-codici/sotto-assiemi che possono essere informazione
-    riservata (part number proprietari, dettagli costruttivi interni).
-    Proposto e discusso, esplicitamente **rimandato** a valutazione
-    futura, non ancora iniziato. Punto tecnico chiave emerso nella
-    discussione, da tenere presente quando si riprende: **nascondere
-    solo nella UI del viewer non basta** — il `.glb` scaricabile
-    contiene comunque nomi e gerarchia completi di ogni sotto-parte,
-    ispezionabili da chiunque con un viewer glTF generico o un editor
-    di testo (è JSON+binario). Una vera riservatezza richiederebbe
-    unire la geometria sotto il livello scelto già in fase di export
-    (`scene3d.py`/`gltf.py`, non un filtro lato client) — le sotto-parti
-    nascoste diventerebbero una singola mesh anonima, senza nomi né
-    materiali distinti, con il costo esplicito di perdere il
-    click-to-select per quelle sotto-parti specifiche (un compromesso
-    riservatezza-vs-interattività, non un dettaglio implementativo
-    gratuito).
+13. ~~"3D filtered mode"~~ — **fatto**: `merge_named_groups`
+    (`balzar/scene3d.py`, §9.31 — costruito per un motivo diverso,
+    ridurre il payload) risolve esattamente il problema tecnico chiave
+    identificato qui ("nascondere solo nella UI non basta, il `.glb`
+    scaricabile contiene comunque nomi e gerarchia complete") — vedi
+    §9.32 per la verifica esplicita byte-per-byte che i nomi dei
+    sotto-assiemi nascosti non sopravvivono né nel payload né nel GLB.
 
 ## 6. Applicazioni target (valutate, non solo elencate)
 
@@ -2896,11 +3573,54 @@ originali) darebbe un'impressione di pianificazione che non esiste —
 restano idee valutate, non impegni, esattamente come STEP in §7.3.
 
 **Stato**: valutata, non implementata. Nessun modulo `bridge.py` nel
-repository, nessuna dipendenza a protocolli industriali installata,
-nessun formato CSV allarmi esteso. Vedi anche il documento di visione
-separato (vedi §11) per il posizionamento di prodotto (Balzar Studio /
-Balzar Live) — questa sezione resta il riferimento tecnico su cosa
-esiste davvero e cosa mancherebbe.
+repository, nessuna dipendenza a protocolli industriali installata.
+Vedi anche il documento di visione separato (vedi §11) per il
+posizionamento di prodotto (Balzar Studio / Balzar Live) — questa
+sezione resta il riferimento tecnico su cosa esiste davvero e cosa
+mancherebbe.
+
+**Aggiornamento di sessione successiva (nessun codice toccato, solo
+scoping)**: punto 1 della lista sopra ("estendere `parse_alarm_csv` con
+colonne opzionali") è ormai **superato**, non più da fare — la tabella
+componenti è stata generalizzata a contenuto/colonne completamente
+liberi in §9.29 (`ComponentTable`), quindi un eventuale campo
+"documento_procedura" del Bridge non richiede più nessuna estensione:
+è già solo una colonna in più in un CSV a schema libero.
+
+Chiesto esplicitamente all'utente quale sistema reale userebbe da
+integrare (Siemens? quale gamma di PLC? quale protocollo?), la
+risposta è stata di **non decidere ancora**: "principalmente PLC
+Siemens ma non solo", nessun impegno su un modello/protocollo
+specifico, e la richiesta esplicita di **lasciare aperta la strada
+all'automazione** invece di costruire un driver per un sistema preciso
+— la sorgente del segnale potrebbe essere un PLC (via S7comm/OPC UA),
+uno HMI web-based, o altro ancora non identificato. Discussi in sessione
+(nessuna implementazione) i compromessi principali senza impegnarsi:
+OPC UA come protocollo più probabile per coprire "non solo Siemens" in
+un colpo solo (standard aperto IEC 62541, nativo sugli S7-1500,
+supportato da altri vendor) contro S7comm via `python-snap7` (via
+Siemens-specifica, non ufficialmente supportata da Siemens stesso, utile
+solo per PLC più datati senza OPC UA); l'opzione di agganciarsi a uno
+strato SCADA/MES/historian già esistente invece che al PLC direttamente,
+spesso preferibile per motivi di sicurezza di rete OT/IT (segmentazione,
+niente nuovo agente da far approvare sulla rete di fabbrica); il
+vincolo **read-only** (punto 4 sopra) confermato come fermo
+indipendentemente da quale sistema si scelga.
+
+**La conseguenza pratica di "lasciare aperta la strada" è già scritta
+al punto 2 della lista sopra, non un'idea nuova**: un endpoint HTTP
+locale generico (`POST /set_alarm`) sul server già avviato da
+`open_glb_in_browser` è per costruzione **agnostico rispetto al
+protocollo/vendor** — qualunque sistema esterno capace di fare una
+chiamata HTTP (un PLC tramite un piccolo script/gateway, uno HMI
+web-based tramite un webhook, un MES, letteralmente qualunque cosa con
+capacità di scripting minime) può usarlo senza che balzar debba avere
+codice su misura per quel sistema specifico. Quando si riprenderà
+questo lavoro, il punto 2 resta quindi il pezzo giusto da costruire per
+primo — non perché sia "il più facile", ma perché è l'unico dei quattro
+punti che non richiede ancora di sapere con quale sistema reale ci si
+integrerà: i driver di protocollo specifici (punto 3) restano
+esplicitamente rimandati a quando quella decisione sarà presa.
 
 ### 9.20 Demo web riorganizzata in Balzar Studio / Balzar Live; "Apri programma" diventa un apritore generico
 
@@ -3511,10 +4231,726 @@ rotto, `_decode_tiled` end-to-end), 3 in
 `tests/test_webapi.py::TestHandleQr` (nuovi campi nella risposta) —
 301 test totali.
 
+### 9.26 Matrici non complete: due bug reali distinti da una segnalazione utente, più una regressione auto-inflitta corretta nella stessa sessione
+
+Segnalazione diretta e concreta dell'utente, testata di persona sia
+sulla demo web sia sul solo trasporto QR (`trasporto-qr.html`): "le
+matrici non complete (esempio 10 code su 16 slot) provocano la non
+rilevazione dei qr code". Investigato prima di scrivere qualunque fix
+— si sono rivelati **due bug distinti**, entrambi reali, non uno solo,
+più una regressione che il fix del secondo ha introdotto e che è stata
+trovata e corretta nella stessa sessione.
+
+**Bug A — colonne assunte uguali a `grid_dim`, mai risolte.**
+`_tile_boxes`/`tileBoxes` assumevano `cols = grid_dim` incondizio-
+natamente, ma `_compose_grid` dispone davvero `len(images)` immagini a
+`cols = ceil(sqrt(len(images)))` — che scende SOTTO `grid_dim` non
+appena `n <= (grid_dim-1)**2` (es. 8 codici a `grid_dim=4` è un vero
+3×3, non 4×4). Con l'assunzione sbagliata, nessuna delle due ipotesi
+`top` riusciva a ricostruire l'altezza reale dell'immagine (più bassa
+di quella di una griglia 4×4 piena), quindi `_tile_boxes` falliva
+correttamente in modo esplicito (0 box) — ma il fallback whole-image
+di jsQR (`decodeAllViaMasking`, senza il multi-decode nativo di ZBar)
+falliva **anch'esso** su una griglia densa del genere: fallimento
+totale nel browser, non solo perdita dello speedup. Fix: `_tile_boxes`/
+`tileBoxes` ora cercano `cols` da `grid_dim` in giù fino a 1 (`grid_dim`
+tentato per primo, il caso comune), tenendo la prima combinazione
+`(cols, top)` che ricostruisce esattamente sia larghezza sia altezza.
+Verificato con misura diretta: payload forzato a esattamente 8 chunk,
+`_tile_boxes(..., grid_dim=4)` produce ora **9 box** (griglia 3×3
+reale, non 16), tutti e 8 i codici reali decodificati individualmente.
+
+**Bug B — coda vuota scartata per intero, non solo ignorata.**
+`_decode_tiled` richiedeva che **ogni singola cella**, incluse quelle
+genuinamente vuote oltre il numero reale di immagini, producesse un
+risultato. Per una segnalazione esatta come "10 di 16 slot" (10 codici
+reali a `grid_dim=4`: layout vero 4 colonne × 3 righe = 12 celle, le
+ultime 2 bianche senza alcun QR), questo è strutturalmente impossibile
+— la vecchia verifica di completezza scartava quindi SEMPRE un
+risultato tiled altrimenti perfetto, per qualunque frame parziale con
+una coda vuota. Fix: nuova verifica basata su un PREFISSO di hit/miss
+per cella (nello stesso ordine riga-maggiore in cui `_compose_grid`
+piazza le immagini) — una sequenza di successi reali seguita da una
+coda vuota è accettata (la coda vuota è la forma NORMALE di un ultimo
+frame parziale), mentre un successo che compare DOPO un fallimento fa
+scartare tutto il risultato (segno che la geometria è sbagliata, non
+solo che una cella è genuinamente vuota). Verificato: payload forzato
+a esattamente 10 chunk, `_tile_boxes(..., grid_dim=4)` produce **12
+box** (4×3 reale), `_decode_tiled` recupera ora tutti e 10 i chunk
+reali (prima: lista vuota, fallimento totale).
+
+**Regressione, auto-inflitta dal fix del Bug B, trovata ri-eseguendo la
+suite esistente — non ipotizzata.** `test_scan_image_bytes_grid_dim_hint_matches_default`
+ha iniziato a fallire con `PayloadError: not a balzar chunk (bad
+magic)`. Causa isolata con certezza, non solo sospettata: su un payload
+di test da 34 chunk decodificato a `grid_dim=6` (36 celle, 2 vuote in
+coda), la cella di indice 4 — una cella reale, non vuota — produce
+**due** risultati ZBar: uno `QRCODE` vero e uno spurio `DATABAR`
+(`b'0152941528732321'`), un artefatto di misdetection già documentato
+(ZBar può leggere per sbaglio un'altra simbologia di codice a barre nel
+margine di un ritaglio). Prima del fix del Bug B questo era invisibile:
+la vecchia verifica "tutte le celle devono avere un hit" falliva
+comunque sempre per qualunque frame parziale, quindi il chiamante
+ricadeva sempre sulla scansione whole-image (che non esibisce questo
+artefatto specifico del bordo di ritaglio). Una volta che `_decode_tiled`
+ha iniziato a riuscire anche su frame parziali, il suo loop di raccolta
+prendeva alla cieca **entrambi** i risultati di quella cella —
+compreso quello spurio non-QR — che poi falliva la verifica del magic
+byte di `assemble_chunks` a valle. Fix: `_decode_tiled` filtra ora
+`r.type == "QRCODE"` prima di qualunque cosa (sia il controllo
+hit/miss sia la raccolta finale) — un risultato non-QR non conta né
+come hit né come chunk valido. Applicato per coerenza/difesa anche al
+percorso whole-image di `scan_image_bytes` (stesso principio già usato
+da `LiveScanner.add`, che tollera già un chunk con magic byte sbagliato
+scartandolo silenziosamente) — verificato empiricamente che il
+percorso whole-image su questo stesso payload di test **non** riproduce
+lo spurio DATABAR (la scansione dell'immagine intera, senza ritaglio,
+resta a 34/34 `QRCODE` puliti), quindi il filtro lì è difensivo,
+non la correzione di un fallimento osservato.
+
+**Lato JS**: nessun fix equivalente necessario per il filtro di tipo —
+`jsQR` decodifica solo QR code, non può mai restituire un risultato di
+un'altra simbologia come DATABAR (a differenza di ZBar, multi-
+simbologia nativa). `tileBoxes` aveva già la stessa ricerca di `cols`
+del Bug A applicata in questa sessione; `decodeAllInImage` non ha mai
+avuto bisogno del fix del Bug B: il suo design "tieni sempre il
+risultato tiled parziale, non scartarlo" (già esistente per il limite
+di affidabilità per-crop di jsQR, §2.4f/§2.4i) gestiva già la coda
+vuota correttamente per costruzione — confermato con misura diretta
+(10/10 e 8/8 trovati via browser reale con fotocamera fittizia).
+
+Test aggiunti in `tests/test_qr.py::TestParallelTileDecoding`: 3 nuovi
+(`test_tile_boxes_solves_fewer_columns_for_a_sparse_partial_frame`,
+`test_decode_tiled_recovers_a_partial_frame_with_a_blank_tail`,
+`test_decode_tiled_drops_spurious_non_qr_symbology_matches` — quest'ultimo
+riproduce esattamente il payload/`grid_dim` della regressione, non un
+caso generico) — 315 test totali.
+
+### 9.27 Acquisizione continua estesa alla GUI desktop: un ponte browser locale, non una nuova dipendenza nativa
+
+Ultimo tassello del percorso "acquisizione continua" iniziato in §2.4f:
+Balzar Studio/Live sulla demo web (§2.4i/§2.4j) avevano già la
+fotocamera continua, l'app desktop (`balzar/gui.py`) no — "Scansiona
+foto QR" resta un flusso a foto singole scattate a parte (via
+`filedialog`, `pyzbar` nativo, nessuna fotocamera live), perché Tkinter
+non ha un'API fotocamera propria.
+
+**Decisione architetturale, coerente con il resto del progetto**: non
+aggiungere OpenCV (o un'altra libreria di cattura video nativa) come
+nuova dipendenza — mai usata altrove in balzar, e ridondante rispetto a
+un motore (`jsQR`/`qr-transport-core.js`/`qr-camera-scanner.js`) già
+vendorizzato, già provato su tre superfici diverse (trasporto-qr.html,
+Balzar Live, e ora questa). Stesso principio già seguito da
+`viewer3d.py` per il 3D (nessun rasterizzatore scritto in casa, delega
+a `model-viewer` in una pagina locale): qui si delega la cattura
+fotocamera al browser di sistema, in una pagina locale minimale, invece
+di reimplementarla in Python.
+
+**`balzar/live_scan_server.py` (nuovo modulo)** — il pezzo che il tab
+web non aveva bisogno di avere: un modo di far tornare il risultato
+DAL browser AL processo desktop. `start_live_scan_server(work_dir)`
+scrive una paginetta HTML (video + `ContinuousQrScanner`, `gridDim=1`
+fisso — l'unico valore realisticamente affidabile per la cattura live,
+§2.4g) + le tre copie dei JS vendorizzati in `work_dir`, la serve su
+una porta effimera locale (stesso `http.server.HTTPServer` +
+thread daemon di `viewer3d.py`), apre il browser di sistema, e
+restituisce `(server, result_queue)`. L'unica novità rispetto al
+pattern di `viewer3d.py`: l'handler accetta anche un `POST /submit` (i
+byte ricostruiti, base64) e li mette su una `queue.Queue` — nessun
+altro modo di far arrivare il risultato dal thread del server HTTP al
+thread principale di Tkinter senza bloccarlo.
+
+**`balzar/gui.py`**: nuovo bottone "Scansiona con fotocamera
+(browser)…", toggle (un secondo click annulla una scansione in corso
+invece di aprirne una seconda — l'etichetta del bottone stesso è lo
+stato, nessun indicatore separato). `toggle_camera_scan` avvia il
+server in una `tempfile.TemporaryDirectory`; `_poll_camera_scan`
+(stesso pattern non bloccante di `_poll_queue`, `root.after(200, ...)`)
+controlla la coda senza mai bloccare il thread principale; alla
+ricezione, `_camera_scan_worker` riusa **esattamente** lo stesso
+`_dispatch_payload_bytes` già usato da `_scan_worker` per una foto
+scansionata da file (`job.is_live_artifact = True`, quindi salvataggio
+automatico in libreria, §9.22, identico a una scansione da foto).
+Teardown del server (`_stop_camera_scan`) in un thread di background,
+stessa ragione già documentata per `_shutdown_viewer` (§9.23 punto 10):
+`server.shutdown()` blocca finché l'altro thread non se ne accorge al
+prossimo tick di poll (~0,5s), farlo sul thread principale di Tkinter
+congelerebbe la GUI per quel tempo ad ogni annullamento/completamento.
+
+**Verificato end-to-end sotto Xvfb con una fotocamera fittizia reale**
+(stessa metodologia di §2.4g/§2.4h/§2.4i, non un mock): click sul
+bottone (chiamata diretta a `toggle_camera_scan`, `webbrowser.open`
+catturato invece di lanciato — nessun browser di default configurato in
+questo sandbox) → server avviato, URL catturato; un secondo click
+annulla la scansione, il bottone torna all'etichetta originale; un
+terzo avvio, stavolta guidato da un vero Chromium
+(`--use-file-for-fake-video-capture`, stesso video Y4M scritto a mano
+già usato altrove) che naviga all'URL catturato, clicca "Avvia
+fotocamera", lascia che `ContinuousQrScanner` completi la scansione di
+una sequenza `grid_dim=1` reale e la invii a `/submit` — il job arriva
+nella coda di Tkinter (`root.after` pompato con `root.update()`, stesso
+principio già consolidato in questo progetto per i test GUI sotto
+Xvfb) con il testo del programma **verificato carattere per carattere**
+(non solo la dimensione), `is_live_artifact=True`, e il server chiuso
+correttamente al completamento (`_camera_scan_server is None`). Zero
+tocchi dell'operatore dopo l'avvio della fotocamera, esattamente il
+modello già stabilito per l'acquisizione continua sulle altre due
+superfici.
+
+**Nessun numero di prestazioni nuovo da misurare**: il motore di
+decodifica è bit-per-bit lo stesso già calibrato in §2.4g/§2.4h (stessa
+risoluzione di cattura, stesso intervallo minimo, stesso limite
+`gridDim=1`) — il ponte desktop aggiunge solo un `POST /submit` finale
+(un singolo round-trip HTTP locale su `127.0.0.1`, trascurabile rispetto
+al tempo di scansione stesso) e non introduce alcuna caratteristica di
+prestazioni propria da ricalibrare.
+
+Test aggiunti: `tests/test_live_scan_server.py` (6 test, protocollo
+HTTP puro via socket reali — nessun Tkinter, nessun browser, nessuna
+fotocamera vera: apertura del browser catturata, pagina + i tre JS
+vendorizzati serviti correttamente, `/submit` valido mette i byte
+sulla coda, `/submit` con corpo non valido o base64 non valido
+risponde 400 invece di andare in crash, percorso sconosciuto risponde
+404) — 321 test totali. Nessun test Python per l'interazione
+Tkinter/browser/fotocamera stessa (comportamento verificato manualmente
+sotto Xvfb in sessione, stesso principio già seguito per il resto della
+UI browser-based di questo progetto, non nella suite `unittest`
+automatica).
+
+### 9.28 Rilevamento automatico di grid_dim in lettura: l'operatore non deve più saperlo né impostarlo
+
+Richiesta diretta di sessione, seguito del lavoro §9.26: ovunque nel
+progetto la lettura di una sequenza QR richiedeva che l'operatore
+sapesse e impostasse lo stesso `grid_dim` usato in generazione (un
+`<select>` 1/2/4/8 sia in `trasporto-qr.html` sia nella sezione di
+lettura manuale di Balzar Live), nonostante `grid_dim` fosse già
+dichiarato ovunque nel codice "solo un suggerimento di velocità, mai un
+requisito di correttezza" — un requisito manuale che l'utente doveva
+comunque rispettare per ottenere lo speedup, o la lettura ricadeva
+(più lenta ma corretta) sulla scansione whole-image.
+
+**L'intuizione che rende il rilevamento automatico possibile quasi
+gratis**: `_tile_boxes`/`tileBoxes` già cercano `cols` da `grid_dim` in
+giù fino a 1 (§2.4b/§9.26) — il valore di `grid_dim` passato non è mai
+stato "il valore vero", è sempre stato solo il **tetto** da cui iniziare
+la ricerca. Passare sempre il tetto massimo che qualunque generatore di
+questo progetto usa (8) invece di un valore scelto dall'utente fa
+trovare lo stesso `cols` reale a prescindere da come la sequenza è stata
+generata — l'utente non deve più saperlo.
+
+**Verificato che questo è sicuro, non solo assunto — e la verifica ha
+trovato un rischio reale non ovvio.** Uno sweep esaustivo (136 frame
+reali, ogni `grid_dim` di generazione supportato × un ampio ventaglio
+di conteggi di capitoli, incluse code piccole/parziali) confronta
+`_tile_boxes(width, height, grid_dim_vero)` con
+`_tile_boxes(width, height, 8)`: **5 casi su 136 non trovano la stessa
+geometria** — una vera coincidenza aritmetica dove un'ipotesi `(cols,
+top)` SBAGLIATA soddisfa comunque la tolleranza stretta di 2px prima
+che la ricerca raggiunga quella vera (misurato su un frame minuscolo a
+360×408px, un singolo QR piccolo con etichetta: `cols=1,top=26` è
+l'ipotesi vera con errore 0, ma `cols=8,top=0` — provata per prima
+nell'ordine di ricerca dall'alto — ha ANCH'ESSA errore 0). Prima di
+concludere che il tetto=8 fosse sicuro da usare come default, verificato
+il comportamento di `_decode_tiled` su tutti e 136 i casi, non solo la
+geometria: **zero esiti scorretti**. Nei 5 casi di geometria sbagliata,
+i ritagli mal posizionati non contengono mai un QR reale decodificabile,
+quindi `_decode_tiled` torna vuoto (nessun hit) e il chiamante ricade
+correttamente sulla scansione whole-image già esistente — mai dati
+sbagliati, solo lo speedup perso in quei 5 casi su 136. Lato JS,
+`decodeAllInImage` ha una rete di sicurezza equivalente per costruzione
+(non modificata in questa sessione): un risultato tiled incompleto non
+viene mai scartato ma la scansione whole-image viene comunque eseguita
+in aggiunta finché il tiled non è sicuro sia caso: un ritaglio mal
+posizionato quasi certamente non contiene un vero pattern finder QR,
+quindi il pass tiled resta vuoto/incompleto e il fallback whole-image
+scatta comunque.
+
+**Implementazione**: nuova costante `_AUTO_GRID_DIM_CEILING = 8` in
+`balzar/qr.py`. `LiveScanner.add`/`scan_image_bytes`/`scan_image_file`
+ora tentano **sempre** il percorso tiled veloce (prima: solo se
+`grid_dim` era esplicitamente passato) — `grid_dim=None` (il default)
+usa il tetto automatico invece di saltare direttamente alla scansione
+whole-image. `grid_dim` resta un parametro accettato solo per forzare
+un valore diverso dal tetto di default (es. un deployment non standard
+con `grid_dim>8`) — nessun caso d'uso reale nel progetto lo richiede
+oggi. Lato JS, `decodeAllInImage(imgData, gridDim)` — `gridDim` diventa
+opzionale, `gridDim || 8` di default; `gridDim=1` esplicito resta
+intatto per `ContinuousQrScanner` (che già sa che ogni fotogramma è un
+singolo QR non in griglia, nessun beneficio a cercare una risposta già
+nota nel suo loop di cattura ravvicinato).
+
+**Superfici aggiornate**: rimosso il `<select>` "QR per immagine" dalla
+sezione di lettura manuale sia di `trasporto-qr.html` (`#dec-grid-dim`)
+sia di Balzar Live (`#open-scan-grid-dim`, tab "Apri programma") —
+`decodeAllInImage(imgData)` chiamato senza secondo argomento in
+entrambi i punti di chiamata (`trasporto-qr.js`, `app.js`). La CLI
+(`balzar scan --grid-dim`) e la GUI desktop ("Scansiona foto QR",
+`gui.py`'s `_scan_worker` → `scan_image_file(path)`) **non hanno
+richiesto alcuna modifica di codice**: chiamavano già `grid_dim=None`
+di default, quindi ereditano il rilevamento automatico gratis dal
+cambio di semantica in `qr.py` — solo il testo di help di `--grid-dim`
+è stato aggiornato per riflettere che ora è un override opzionale, non
+un suggerimento da passare di norma. Il selettore `grid_dim` in
+**generazione** (`enc-grid-dim` in `trasporto-qr.html`, e ogni altro
+punto che genera una sequenza) resta invariato e obbligatorio — è una
+proprietà del supporto fisico/dello schermo scelto dall'utente, non
+qualcosa che si può auto-rilevare a monte, e questa richiesta riguardava
+solo la lettura.
+
+Verificato con Playwright contro un devserver locale reale (stessa
+metodologia già nota): payload da 76.800 byte grezzi (trasporto QR di
+byte arbitrari) codificato a `grid_dim=4` → 3 pagine reali con più QR
+per pagina ciascuna → lette in `trasporto-qr.html` **senza alcun
+selettore `grid_dim` visibile nella pagina** → byte ricostruiti
+bit-identici; un programma DSL codificato a `grid_dim=2` → aperto in
+Balzar Live allo stesso modo, senza selettore, testo del programma
+verificato carattere per carattere. Nessuna regressione: la suite
+Python esistente già copriva involontariamente questo percorso
+(`tests/test_cli.py::test_chunks_raw_qr_grid_dim_and_scan_raw_roundtrip`
+genera con `--grid-dim 2` e legge con `balzar scan` **senza**
+`--grid-dim`, un roundtrip bit-identico già verde prima di questa
+sessione).
+
+Test aggiunti in `tests/test_qr.py::TestAutoGridDimDetection` (3 test):
+lettura senza `grid_dim` di una sequenza generata a `grid_dim=2` (non
+solo al tetto stesso); i 4 casi reali di coincidenza geometrica trovati
+dallo sweep, verificando che `_decode_tiled` al tetto automatico non
+fabbrichi mai un capitolo sbagliato; il roundtrip end-to-end sullo
+stesso frame di coincidenza, a conferma che il fallback whole-image
+recupera comunque il payload corretto. 324 test totali.
+
+### 9.29 Tabella componenti a contenuto libero: colonna "componente" auto-rilevata, ricerca su tutta la riga
+
+Richiesta diretta di sessione: la tabella allarmi (§9.15/§9.21) aveva
+uno schema fisso a 2-3 colonne (`codice_allarme,nome_componente[,documento_procedura]`).
+Nella realtà il file può avere colonne arbitrarie in ordine arbitrario
+(`nome componente,codice,funzione,allarme,procedure,ricambio,info` — dove
+`info` può essere ore di utilizzo dal contaore o una nota di manutenzione
+programmata), e la ricerca deve funzionare per qualunque colonna, non
+solo allarme/componente, mostrando **sempre la riga intera trovata**, non
+solo un'evidenziazione. Quattro decisioni di design proposte e confermate
+esplicitamente dall'utente prima di scrivere codice (tutte le opzioni
+"Consigliato"):
+
+1. **Colonna componente auto-rilevata per contenuto, non per
+   intestazione**: dopo il caricamento, si conta per ogni colonna quanti
+   valori (trim + lowercase) corrispondono esattamente a un nome reale
+   nella distinta base 3D — la colonna con più corrispondenze vince,
+   nessuna corrispondenza → nessuna colonna component-driving (le righe
+   restano comunque cercabili/visualizzabili, solo senza evidenziazione
+   3D). Zero configurazione, funziona con qualunque intestazione/ordine.
+2. **Ricerca su tutta la riga, mostra tutte le righe corrispondenti**:
+   cercare un valore presente in una qualunque cella di una qualunque
+   colonna mostra tutte le righe che lo contengono, con l'unione dei
+   valori della colonna-componente di quelle righe evidenziata insieme
+   sul modello (stesso principio già in uso per un allarme
+   multi-componente, generalizzato a "qualunque ricerca
+   multi-riga"). Una riga puramente informativa (nessun valore
+   riconosciuto in colonna-componente) non è una ricerca fallita: si
+   mostra comunque, semplicemente senza toccare la vista 3D, invece di
+   attenuare tutto il modello senza motivo.
+3. **Colonna "procedure" resta solo testo mostrato nella riga**: nessuna
+   apertura automatica di un documento collegato — più semplice, non
+   presuppone che il valore corrisponda esattamente al nome di un
+   documento nel bundle (l'idea di apertura automatica, mai
+   implementata, resta così, non riesumata).
+4. **Riga di intestazione obbligatoria**: niente più euristica che
+   indovina se la prima riga è intestazione o dato (il vecchio parser
+   guardava parole chiave tipo "codice"/"allarme" nella prima riga) — con
+   colonne a piacere non c'è modo di sapere cosa significhi una colonna
+   senza un'intestazione dichiarata. Un'intestazione mancante/vuota
+   solleva un errore chiaro invece di indovinare.
+
+**`ComponentTable` (nuova classe, `balzar/viewer3d.py`)**: modello
+tabellare generico — `.headers: list[str]`, `.rows: list[list[str]]`,
+`.all_values() -> set[str]` (ogni cella non vuota, usata come candidati
+per `collapse_names`), `.to_json_dict()`. `parse_component_table_text`/
+`parse_component_table` sostituiscono `parse_alarm_csv_text`/
+`parse_alarm_csv`: riga 0 è **sempre** l'intestazione (mai indovinata),
+un'intestazione vuota solleva `ValueError` con "intestazione" nel
+messaggio; righe corte vengono riempite con celle vuote, righe lunghe
+troncate alla larghezza dell'intestazione; righe vuote saltate.
+
+**Il problema uovo-e-gallina con `collapse_names`**: `generate_bom`/
+`scene3d_to_glb` hanno bisogno di `collapse_names` come **input** prima
+che BOM/GLB esistano, ma l'auto-rilevamento della colonna componente ha
+bisogno della BOM già pronta (per sapere i nomi reali da confrontare).
+Risolto usando `ComponentTable.all_values()` — letteralmente ogni
+valore non vuoto di ogni cella dell'intera tabella, indipendentemente
+dalla colonna — come insieme di candidati per `collapse_names`: un
+candidato che non corrisponde a un vero nome di gruppo `Reference3D`
+viene silenziosamente ignorato a valle (comportamento già esistente e
+documentato in `scene3d.py`/`gltf.py`), quindi passare ogni cella è
+sicuro, non solo comodo — aggira il bisogno di sapere "quale colonna è
+il componente" prima che la BOM esista.
+
+**Solo il primo CSV marcato allarme in un bundle diventa la tabella
+informazioni** (comportamento cambiato deliberatamente rispetto al
+design precedente, che concatenava le righe di TUTTI i CSV marcati
+allarme perché condividevano per costruzione lo stesso schema a 2
+colonne): con schemi arbitrari, concatenare righe tra CSV con colonne
+diverse non generalizza in modo sicuro, quindi vince il primo (stesso
+principio "il primo vince" già usato altrove nella stessa funzione per
+il primo elemento 3D).
+
+**Rinominato**: `window.__BALZAR_ALARM_ROWS__` →
+`window.__BALZAR_INFO_TABLE__` (forma `{headers:[...], rows:[[...]]}`,
+non più `[[codice,nome],...]`); il campo di risposta web `alarm_rows` →
+`info_table` in `handle_encode_3d`/`_handle_render_3d`/
+`_handle_render_bundle` (`balzar/webapi.py`) — il campo di **input**
+`alarm_csv` (il base64 del CSV da marcare come tabella informazioni)
+resta invariato, solo l'output analizzato è stato rinominato, dato che
+il concetto "marca questo CSV come tabella allarmi/informazioni" non è
+cambiato, è cambiato solo il modello del suo contenuto.
+
+**UI**: nuovo pannello `#search-panel`/`.search-results-table`
+(`style.css`, e l'equivalente incorporato in `viewer3d.py`) — una
+tabella di risultati sotto la nota di ricerca esistente, aperta/chiusa
+con la classe `.open` (non l'attributo `[hidden]`, per evitare
+esattamente la collisione di specificità CSS già documentata più volte
+in questo progetto). Stessa logica duplicata (non condivisibile come
+file, una è incorporata in un f-string Python, l'altra è `app.js`
+statico) in `_SELECT_JS`/`app.js`: `detectComponentColumn`,
+`loadInfoTable`/`setInfoTable`, `renderResultsTable`, `runSearch`
+riscritta per cercare ogni cella e mostrare le righe intere, con
+fallback alla vecchia ricerca per nome BOM se non c'è tabella o niente
+corrisponde in essa.
+
+**Bug di parità trovato durante la verifica Playwright del percorso
+desktop, non nel percorso web**: aprendo un bundle con una tabella già
+incorporata (senza upload manuale), il percorso web
+(`renderScenePanel` in `app.js`) mostra subito una nota "Tabella
+disponibile (N righe, M colonne: ...)" al caricamento, ma il percorso
+desktop (`cacheColors()` in `_SELECT_JS`, `balzar/viewer3d.py`) chiamava
+`loadInfoTable(window.__BALZAR_INFO_TABLE__)` senza impostare alcuna
+nota — zero feedback che una tabella fosse pronta finché l'utente non
+eseguiva una ricerca. Corretto specchiando lo stesso testo del percorso
+web in `cacheColors()`.
+
+Verificato con Playwright su entrambi i percorsi, contro server reali
+(non mock): **web** (devserver locale che instrada `/api/encode_3d` al
+vero `handle_encode_3d`) — upload 3DXML sintetico (due istanze di
+"Bullone-M6") + CSV a 7 colonne con "componente" come **seconda**
+colonna e intestazione non convenzionale (non "nome_componente") →
+tabella caricata (nota corretta) → ricerca per codice allarme mostra la
+riga intera (tutte e 7 le colonne) → ricerca per un valore presente solo
+nella colonna libera "info" trova comunque la riga → ricerca diretta per
+nome componente evidenzia la riga BOM (prova diretta dell'auto-
+rilevamento content-based, non per posizione/intestazione) → ricerca
+senza corrispondenza chiude il pannello onestamente. **Desktop**
+(`open_bundle_in_browser` con lo stesso bundle sintetico, servito
+realmente, driver Playwright sotto Xvfb) — stessi 4 scenari, più
+`?q=<codice>` nell'URL che lancia la ricerca da solo al caricamento
+(automazione zero-click, invariata dalla generalizzazione). Nessun bug
+di prodotto trovato oltre alla lacuna di parità sopra, corretta durante
+la stessa verifica.
+
+Test riscritti: `tests/test_viewer3d.py` (12 test, `TestParseComponentTable`
+— colonne arbitrarie in qualunque ordine, intestazione sempre riga 0 senza
+euristica, intestazione mancante solleva errore chiaro, righe corte
+riempite/lunghe troncate, un valore su più righe, virgola nel nome
+preservata dal parser CSV, righe vuote saltate, file vuoto non è un
+errore, `all_values()`/`to_json_dict()`). `tests/test_webapi.py`
+aggiornato (3 test: forma `info_table` invece di `alarm_rows`, CSV di
+test aggiornato con intestazione dato che l'header è ora obbligatorio).
+Suite completa: 328 test, tutti verdi.
+
+### 9.30 Limite reale a 65.535 vertici/strip trovato su un vero assieme pesante — corretto, non solo dichiarato
+
+L'utente ha fornito due assiemi 3DXML reali di scala/densità diverse per
+misurare dove si muove davvero la pipeline QR 3D (seguito diretto di
+§9.24/§9.25, priorità dichiarata di sessione). Il primo (500.756 B) è
+**esattamente** il secondo assieme reale già misurato in §9.10 (stessi
+88 forme/360 riferimenti/245 istanze) — nessuna nuova misura necessaria
+lì. Il secondo (9.219.625 B, "zephyr_h_230v") è territorio nuovo: **316
+forme uniche, 2.166 riferimenti, 3.520 istanze, 1.009.940 vertici totali**
+— quasi il doppio dei vertici totali della prima assieme più i suoi
+344 mesh, un ordine di grandezza sopra qualunque fixture sintetica usata
+finora per i benchmark di §9.24.
+
+**Bug reale trovato, non un limite teorico**: `encode_3dxml_file` sul
+secondo file si rifiutava con `Scene3DError: forma 'None' con 290192
+vertici: supera il limite di 65535 per gli indici a 16 bit` — un limite
+già dichiarato esplicitamente in §9.5 ("non ancora visto nella realtà,
+ma dichiarato esplicitamente") e **ora visto per davvero**. Investigando
+prima di correggere (misura, non stimare): **due** forme del file
+superano 65.535 vertici (290.192 e 153.500), e rappresentano **43,9%**
+di tutti i vertici dell'assieme (443.692 su 1.009.940) — non un caso
+limite trascurabile, quasi metà del contenuto reale. Controllando più a
+fondo è emerso un **secondo** bug distinto, mascherato dal primo (il
+controllo sui vertici falliva per primo): il conteggio delle strisce di
+triangoli per forma (`len(shape.strips)`) era anch'esso impacchettato
+come `<H>` (uint16, limite 65.535) — la stessa forma da 290.192 vertici
+ha **80.535 strisce**, oltre anche questo limite, un problema di
+*conteggio* non solo di *valore indice*, che sarebbe scattato comunque
+anche per una forma con meno di 65.535 vertici ma più di 65.535 strisce.
+
+**Fix in `balzar/scene3d.py`** (`_serialize`/`_deserialize`), niente
+troncamento silenzioso né semplificazione geometrica — solo allargare i
+campi che si sono rivelati troppo stretti:
+- `n_strips` (conteggio strisce per forma) passa da `<H>` a `<I>`
+  **incondizionatamente** — costo trascurabile (2 byte in più per forma,
+  prima della compressione) per ogni forma, anche le 314 forme normali
+  del file che non ne avrebbero bisogno.
+- I **valori** degli indici dentro ogni striscia restano `<H>` (uint16)
+  per il caso comune, e diventano `<I>` (uint32) **solo** per la forma
+  che ne ha davvero bisogno — derivato dal conteggio vertici già
+  memorizzato (`n_verts > 65535`), non un nuovo flag per-forma: zero
+  byte aggiuntivi per le forme che restano sotto il limite.
+- Versione del payload alzata da 1 a 2 (il campo esiste già nell'header
+  proprio per questo). **Mantenuta la lettura della versione 1**: la
+  libreria locale desktop (`balzar/library.py`, §9.22) persiste file
+  `.b3d` sul disco tra un aggiornamento di balzar e l'altro — un
+  payload versione 1 già salvato da un utente reale è una preoccupazione
+  concreta, non ipotetica, quindi `_deserialize` resta in grado di
+  leggerlo con la larghezza fissa originale (un payload versione 1, per
+  costruzione, non ha mai potuto contenere una forma fuori limite, visto
+  che `encode_payload` sollevava un errore invece di scriverla).
+
+**Costo reale misurato sul file già documentato** (§9.10, nessuna forma
+oltre il limite): payload 239.491 B → **239.546 B** (+55 B, +0,02%) —
+esattamente l'ordine di grandezza atteso per 88 forme × 2 byte extra su
+`n_strips`, quasi azzerato dalla compressione deflate. Nessun costo
+percepibile per l'assieme comune.
+
+**Numeri reali sul nuovo assieme, ora che l'encoding non si rifiuta
+più**: payload **5.215.937 B** in 11,7 s, **1,77×** rispetto al 3DXML
+sorgente (9.219.625 B) — un rapporto molto più basso del 2,09× già
+misurato sull'assieme più piccolo, e la ragione è chiara guardando i
+dati, non un mistero: il rapporto di instancing di questo assieme è
+più debole (3.520 istanze / 316 forme uniche ≈ 11×, contro un rapporto
+più alto sull'altro assieme), e il 43,9% dei vertici vive in due
+sole superfici tessellate non ripetute — geometria che il modello di
+deduplicazione di balzar (il cuore del suo guadagno, §9.2) non ha modo
+di comprimere, perché non si ripete da nessuna parte. Errore di
+quantizzazione medio: 0,000507 mm, ben dentro tolleranza CAD — la
+fedeltà non è in discussione, solo la dimensione.
+
+**Conclusione onesta, la parte che conta per la priorità 1 di
+sessione**: a 5,2 MB questo payload richiederebbe **1.774 capitoli QR,
+111 fotogrammi** a `grid_dim=4` (misurato con `chunk_payload` reale, non
+stimato) — ben oltre la sofferenza già nota per code di dozzine di
+fotogrammi (§9.10/§9.24), un ordine di grandezza sopra qualunque caso
+finora reso pratico. Il collo di bottiglia per un assieme di questa
+natura **non è la velocità di generazione/lettura QR** (il fronte già
+ottimizzato in §9.24/§9.25) — è che il payload stesso, anche dopo la
+deduplicazione reale di balzar, resta troppo grande per il trasporto
+fisico via QR quando la geometria non si presta alla deduplicazione
+(poche forme uniche molto dense, invece di molte istanze di forme
+piccole). Nessuna quantità di parallelizzazione nella generazione/
+lettura QR risolve un problema di dimensione del contenuto sorgente.
+La leva utile per *questa* classe di assieme è diversa da quella già
+esplorata: una **semplificazione/decimazione geometrica** delle forme
+uniche di grandi dimensioni con poco riuso (non la stessa cosa del
+punto 6 di sessione, che riguarda il nascondere sotto-assiemi per
+riservatezza, non ridurre la densità della mesh) — non ancora
+implementata, richiede una decisione di prodotto esplicita (è
+un'ulteriore perdita di fedeltà geometrica, oltre alla quantizzazione
+int16 già in uso, e va misurata/dichiarata con lo stesso principio di
+onestà già seguito per `mean_vertex_error`).
+
+Verificato: suite completa 330 test (2 nuovi + 1 riscritto in
+`tests/test_scene3d.py::TestQuantizationAndCompactTransforms` — round-trip
+di una forma sopra 65.535 vertici con indici larghi, round-trip di una
+forma sopra 65.535 strisce, lettura di un payload versione 1 genuino
+costruito a mano byte-per-byte per fissare esattamente il layout
+pre-fix), tutti verdi. Nessun file 3DXML reale committato nel repository
+(stesso motivo di copyright già visto per gli altri assiemi reali,
+§9.2/§9.10) — solo la fixture sintetica nei test.
+
+### 9.31 Scala target realistica misurata (~14 KB sorgente) + `merge_names`, strumento di riserva opzionale
+
+Seguito diretto di sessione a §9.30: l'utente ha chiarito che la
+semplificazione principale di un assieme pesante **avviene fuori da
+balzar**, in una fase preliminare CAD (unendo in singoli oggetti le
+istanze e i sotto-assiemi che non servono mostrare individualmente,
+prima ancora di esportare il 3DXML) — balzar riceve già un file
+tipicamente nell'ordine di **10-100 KB**, non i 9,2 MB dell'assieme
+zephyr_h_230v misurato in §9.30. Due filoni di lavoro distinti, in
+sequenza, come richiesto esplicitamente ("entrambi").
+
+**1) Validazione reale sulla scala target.** Costruito un 3DXML
+sintetico rappresentativo (12 parti uniche piccole — bulloni,
+rondelle, staffe, non superfici dense — con ripetizione realistica:
+viti/rondelle/dadi ripetuti fino a 24 volte, parti strutturali 1-4
+volte, **111 istanze totali**, nessun file CAD reale coinvolto, stesso
+principio di copyright già seguito altrove) e misurata l'intera
+pipeline reale, non stimata:
+
+| Passo | Tempo | Risultato |
+|---|---|---|
+| Sorgente 3DXML | — | 14.011 B |
+| Encode (`encode_3dxml_file`) | 0,009 s | payload 5.339 B (2,62× vs sorgente) |
+| Generazione QR (`payload_to_qr_frames`, grid_dim=4) | 0,541 s | **1 solo fotogramma** (2 capitoli) |
+| Lettura (`LiveScanner`) | 0,257 s | bit-identico |
+| Decodifica + export GLB | 0,003 s | 62.240 B, 12 forme/12 parti BOM |
+
+**Tempo totale pipeline (esclusa l'acquisizione fisica): meno di un
+secondo** — non i 43-92 secondi già misurati per l'assieme da 9,2 MB in
+§9.24/§9.25/§9.30, e ben sotto la stima "ordine dei secondi, non
+minuti" fatta prima di misurare. Conferma diretta, con numeri reali,
+che per la scala che l'utente prevede di usare in produzione (post-
+semplificazione esterna) la pipeline QR è già pienamente pratica senza
+alcuna ulteriore ottimizzazione — il lavoro di parallelizzazione già
+fatto in §9.24/§9.25 resta rilevante solo per il caso limite (assiemi
+grandi non ancora semplificati), non per il flusso di produzione atteso.
+
+**2) `merge_named_groups` — strumento di riserva opzionale, NON il
+percorso principale.** Anche se la semplificazione principale avviene
+altrove, l'utente ha chiesto uno strumento equivalente dentro balzar
+per i casi non coperti da quel processo esterno. Decisioni tecniche
+confermate esplicitamente prima di scrivere codice:
+1. **Parametro indipendente** da `collapse_names` (generate_bom/
+   scene3d_to_glb, §9.21) — quel meccanismo raggruppa solo la vista
+   (BOM/evidenziazione), la geometria nel payload resta quella
+   originale; `merge_names` invece **concatena davvero** vertici e
+   triangoli in un'unica `Shape`, eliminando le voci Reference/
+   Instance3D separate — due liste distinte, tipicamente uguali in
+   pratica ma non vincolate a esserlo.
+2. **Solo concatenazione, zero perdita aggiuntiva** — nessuna
+   decimazione/riduzione poligoni. Le parti mantengono la propria
+   posizione reale (le RelativeMatrix vengono composte dal gruppo verso
+   ogni foglia e applicate ai vertici), zero perdita oltre la
+   quantizzazione int16 già esistente nell'encoder.
+
+**Implementazione** (`balzar/scene3d.py`): `_compose_matrices`/
+`_apply_matrix` (composizione affine standard, stessa convenzione
+riga-maggiore già verificata algebricamente per `gltf.py` in §9.7,
+non una nuova convenzione) + `merge_named_groups(scene, merge_names)`
+— per ogni `Reference` di gruppo (ha figli, non è già una foglia) il
+cui nome è in `merge_names`, cammina l'albero sotto di essa componendo
+i trasformi, concatena la geometria di ogni foglia raggiunta in
+**un'unica** `Shape` nel sistema di coordinate proprio del gruppo (così
+il risultato si muove correttamente ovunque il gruppo stesso sia
+istanziato), e sostituisce il `Reference` del gruppo con una foglia
+pura (`shape_index` impostato, `children=[]`). Un nome che non
+corrisponde a nulla, o che corrisponde a una foglia già atomica (senza
+figli), viene **ignorato silenziosamente** — stessa convenzione già
+usata da `collapse_names`. Nuova `_prune_unreachable(scene)`:
+indispensabile, non opzionale — senza di essa i vecchi Reference/Shape
+resi orfani dalla fusione resterebbero comunque serializzati nel
+payload, vanificando il motivo stesso della fusione (i loro byte non
+spariscono da soli). Mai forzato: `merge_names=None` (il default)
+restituisce la scena **invariata** (stesso oggetto), zero costo/rischio
+per chi non lo usa.
+
+**Scoperta reale, non assunta, e opposta all'intuizione iniziale**:
+misurato l'effetto della fusione su due scenari sintetici distinti,
+non uno solo, perché il primo tentativo di test ha rivelato che
+l'ipotesi di partenza era sbagliata:
+- **Molte parti DISTINTE usate una sola volta ciascuna** (es. 50
+  staffe/coperchi unici sotto un sotto-assieme, mai ripetuti): la
+  fusione **aiuta davvero** — 1.319 B → 650 B, **2,03×** più piccolo,
+  perché rimuove l'overhead per-parte (nome, struttura Reference/
+  ReferenceRep/InstanceRep/Instance3D) senza perdere alcun beneficio di
+  deduplicazione, dato che non ce n'era nessuno da perdere (ogni forma
+  era già usata una sola volta).
+- **Molte istanze RIPETUTE della stessa forma** (es. 200 bulloni
+  identici, il caso "viti" che sembrava il bersaglio naturale): la
+  fusione **peggiora**, non migliora — misurato direttamente (non
+  assunto): payload sale da 1.512 B a 2.346 B. Il motivo è chiaro
+  misurando, non ipotizzando: la rappresentazione non fusa sfrutta già
+  al massimo la deduplicazione di balzar (1 sola forma memorizzata +
+  200 trasformi economici, quasi identici byte-per-byte e quindi
+  compressi benissimo da DEFLATE); fondere **duplica** i dati di
+  vertice già deduplicati in 600 posizioni uniche quantizzate — dati ad
+  alta entropia che DEFLATE comprime molto peggio di 200 record quasi
+  identici. **Il caso in cui questo strumento aiuta davvero è quindi
+  l'opposto di quello intuitivo**: parti uniche non ripetute, non parti
+  ripetute come viti/bulloni (quelle, balzar le comprime già meglio da
+  solo).
+
+**Superfici collegate, tutte opzionali, mai forzate**:
+`encode_3dxml_file(path, merge_names=None)`; CLI
+`balzar encode-3d file.3dxml --merge-names "Nome1,Nome2"`; web API
+`handle_encode_3d` accetta un campo `merge_names` (stringa separata da
+virgole) opzionale; GUI desktop — `open_file()` chiede (solo per un
+`.3dxml`, un `simpledialog.askstring` sul thread principale, **prima**
+di avviare il thread di encoding in background, dato che i dialog
+Tkinter non possono girare dal worker thread) un elenco opzionale di
+nomi da fondere, lasciato vuoto per il comportamento di sempre.
+**Non wired sulla demo web** (`index.html`/`app.js`): nessun campo
+frontend per digitare `merge_names` — scelta deliberata, non
+dimenticanza, dato che è uno strumento di riserva secondario e la demo
+web è dichiaratamente "solo vetrina, non il prodotto" (§1); il campo
+backend esiste ed è testato, raggiungibile da chi chiama l'API
+direttamente.
+
+Verificato: 8 nuovi test in `tests/test_scene3d.py::TestMergeNamedGroups`
+(fusione con posizioni mondo corrette, round-trip attraverso il payload
+— confrontato contro la scena già quantizzata, stesso principio del
+self-check di `encode_3dxml_file`, non contro l'originale a piena
+precisione — riduzione di dimensione per parti distinte, **aumento** di
+dimensione per parti ripetute misurato esplicitamente non solo
+menzionato, nome non corrispondente ignorato, nome su una foglia già
+atomica è un no-op, `encode_3dxml_file` accetta il parametro opzionale),
+2 in `tests/test_cli.py`, 2 in
+`tests/test_webapi.py::TestHandleEncode3D`. Smoke test manuale sotto
+Xvfb per il dialog GUI (dialog monkeypatchato, mainloop reale pompato):
+prompt mostrato solo per `.3dxml`, nomi passati correttamente fino a
+`encode_3dxml_file`, job completato senza errori. 342 test totali.
+
+### 9.32 "3D filtered mode" chiuso: `merge_names` risolve già la riservatezza, non solo la dimensione
+
+Seguito diretto di sessione, priorità 6 dopo aver chiuso la 1 (§9.30/
+§9.31). Rileggendo §5 punto 13 ("3D filtered mode", mai iniziato):
+l'obiettivo lì descritto — mostrare solo gli assiemi di primo livello
+nominati dal disegnatore, nascondendo sotto-codici/sotto-assiemi che
+possono essere informazione riservata (part number proprietari,
+dettagli costruttivi interni) — e il vincolo tecnico chiave già
+identificato allora ("nascondere solo nella UI del viewer non basta:
+il `.glb` scaricabile contiene comunque nomi e gerarchia complete di
+ogni sotto-parte, ispezionabili da chiunque con un viewer glTF generico
+o un editor di testo") sono **esattamente** ciò che `merge_named_groups`
+(§9.31) già fa, costruito per un motivo diverso (ridurre byte, non
+riservatezza). Confermato con l'utente prima di scrivere altro codice:
+riuso diretto, stessa interfaccia (`merge_names`), nessun meccanismo
+nuovo — l'utente elenca esplicitamente i nomi dei sotto-assiemi da
+nascondere, esattamente come già fa per il risparmio di byte.
+
+**Perché funziona per la riservatezza, non solo per la dimensione**:
+`merge_named_groups` non nasconde solo — **elimina** (`_prune_unreachable`)
+i `Reference`/`Shape` dei sotto-assiemi non più raggiunti dopo la
+fusione. Non c'è nulla da "non mostrare": i nomi/materiali dei
+sotto-assiemi nascosti non esistono più nell'oggetto `Scene3D`, quindi
+non possono comparire né nel payload BZM1 né nel GLB esportato
+**quale che sia il codice a valle** — a differenza di `collapse_names`
+(generate_bom/scene3d_to_glb, §9.21), che raggruppa solo la vista
+BOM/evidenziazione ma lascia intatta l'intera geometria+nomi nel GLB
+scaricabile (nessuna vera riservatezza, esattamente il problema che
+questo punto voleva risolvere).
+
+**Verificato byte-per-byte, non assunto** (`tests/test_scene3d.py::
+TestConfidentialMerge`, 4 nuovi test): costruita una scena sintetica
+con due parti dai nomi deliberatamente proprietari
+(`PN-88213-INTERNAL`, `PN-90144-PROPRIETARY`) sotto un sotto-assieme
+pubblico (`AssiemePubblico`), fusa con `merge_names={"AssiemePubblico"}`:
+- **payload**: nessuna delle due stringhe compare nel corpo decompresso
+  del BZM1 (un controllo sui byte compressi sarebbe stato un test
+  debole — quasi ogni stringa "non c'è" in dati deflate — quindi il
+  test decomprime prima di cercare, verificando i byte che
+  `_deserialize` legge davvero); il nome pubblico del gruppo resta,
+  correttamente (è l'unica identità che deve restare visibile);
+- **BOM**: `generate_bom` mostra **solo** `AssiemePubblico`, zero righe
+  per le parti nascoste;
+- **GLB esportato**: nessuna delle due stringhe compare da nessuna
+  parte nei byte del file — il controllo diretto sul file che un utente
+  scaricherebbe e ispezionerebbe con un viewer glTF generico o un
+  editor di testo, non solo sul percorso di decodifica di balzar;
+- **caso di controllo**: la stessa scena **senza** fusione **lascia
+  davvero trapelare** entrambe le stringhe nel GLB — prova diretta che
+  il test sopra misura una proprietà reale, non una tautologia.
+
+**Nessun codice nuovo nel motore** — solo verifica esplicita di una
+proprietà che il meccanismo già costruito per §9.31 possedeva per
+costruzione, non ancora controllata sotto questa lente. Nessuna
+modifica a CLI/GUI/webapi (già wired in §9.31, stessa interfaccia
+serve entrambi gli scopi). Suite completa: 346 test, tutti verdi.
+
 ## 10. Comandi utili per riprendere il lavoro
 
 ```bash
-python3 -m unittest discover -s tests        # 309 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
+python3 -m unittest discover -s tests        # 346 test (alcuni opzionali su qrcode/pyzbar), deve restare verde
 python3 -m balzar chunks any_file.pdf --raw --qr --grid-dim 2 -o qr/  # trasporto QR di byte grezzi (§2.4c)
 python3 -m balzar scan qr/*_qr_frame_*.png --raw -o rebuilt.pdf
 python3 -m balzar encode-3d assembly.3dxml -o out.b3d
@@ -3548,3 +4984,327 @@ sostitutivo: le sezioni corrispondenti restano qui, questo file resta la
 fonte tecnica di verità; `VISIONE.md` è la vista di sintesi condivisibile
 con chi non ha bisogno del log di sessione completo. Tenerli allineati a
 mano quando cambia la sostanza di una delle sezioni duplicate.
+
+## 12. Percorso verso la beta: licenza, packaging, roadmap
+
+Decisione di sessione (con l'utente): passare da "codice funzionante" a
+"beta installabile e testabile dai primi utenti". Le funzionalità sono già
+complete — questo lavoro è **packaging, distribuzione e igiene legale**, non
+capacità del motore. Il riferimento operativo vive in `ROADMAP.md` (radice
+del repo); questa sezione è il log tecnico di cosa è stato deciso e fatto.
+
+**Modello di distribuzione scelto**: **programma installabile su licenza**,
+non pubblicazione su store. Verificato in sessione (non a memoria): per
+Windows, macOS e Android questo è possibile **senza** passare da alcun
+marketplace — Windows `.exe`/installer diretto (avviso SmartScreen aggirabile
+se non firmato), macOS `.dmg` con Developer ID (Gatekeeper aggirabile senza
+notarizzazione a pagamento), Android sideload di un `.apk` (la firma è
+auto-generata, requisito di build, non un cancello di store). **iOS** è
+l'unica eccezione (di fatto serve store o enterprise) — fuori scope, non
+richiesto.
+
+**Ordine di rilascio deciso**: prima desktop (macOS/Windows, test sul
+MacBook Air Apple-Silicon dell'utente), poi Android. Onestà dichiarata:
+Android è l'ordine **più difficile**, non il più facile — l'app desktop
+(`gui.py`) esiste già, mentre il motore è portabile ma la UI Tkinter no
+(non gira su mobile). Approccio Android scelto per la beta: **server Python
+locale + WebView dentro l'APK**, che riusa l'intera UI web (`index.html` +
+`webapi.py`) e la scansione QR già lato browser (`jsQR`), senza riscrivere
+la UI. Correzione onesta messa a verbale: questa beta WebView **è già
+pienamente offline** (il server gira su `127.0.0.1` sul telefono, niente
+esce dal dispositivo; `model-viewer`/`jsQR` sono vendorizzati, non da CDN) —
+quindi "WebView" **non** contraddice il "tutto offline". Una futura app
+nativa resta desiderabile ma per **footprint/UX native/avvio**, non per
+l'offline (che è già garantito) — documentato con la motivazione corretta
+in `ROADMAP.md`, per non costruire una roadmap su un presupposto falso.
+
+### 12.1 Licenza: tutti i diritti riservati + note di terzi trasparenti
+
+Regime deciso per la beta: **tutti i diritti riservati a Michele Aldeni**
+(`LICENSE`, proprietaria closed-beta), con **citazione trasparente e
+completa di ogni licenza di terzi** (`THIRD-PARTY-NOTICES.md`) per non
+esporre il progetto a rischi legali. La riserva di diritti copre solo il
+codice originale di Balzar, non i componenti di terze parti, che restano
+soggetti ai propri termini — dichiarato esplicitamente nel `LICENSE` §5.
+
+Licenze di terzi verificate sui file/pacchetti reali (non a memoria): Pillow
+HPND (MIT-CMU), qrcode BSD, pyzbar MIT, **libzbar LGPL-2.1** (l'unico
+non-permissivo — obbligo di linking dinamico soddisfatto: `pyzbar` la carica
+via `ctypes`, mai statica, `libzbar.so.0` bundlata come file separato dal
+build PyInstaller, §9.13), `model-viewer` 4.3.1 Apache-2.0 (con componenti
+BSD-3-Clause di Google/lit incorporati, attribuzioni preservate negli header
+`@license` del file vendorizzato), `jsQR` 1.4.0 Apache-2.0. Dopo la beta:
+decisione su commercializzazione/apertura — rimandata.
+
+### 12.2 Gate di licenza beta: `balzar/license.py` (soft gate, non DRM)
+
+Requisito deciso: all'avvio l'app chiede una **chiave di attivazione**; per
+la beta la chiave è **unica e condivisa**, decisa dall'utente. È un cancello
+beta, non una protezione anti-copia — dichiarato onestamente nel modulo:
+il codice Python è ispezionabile e l'hash della chiave è comunque incorporato
+nel binario (deve esserlo, la chiave è la stessa per tutti), quindi scoraggia
+la condivisione casuale, non un attaccante. Il meccanismo vero (chiavi
+per-utente, firma asimmetrica) verrà dopo la beta.
+
+Meccanismo: confronta l'**hash SHA-256** della chiave inserita con
+`BETA_KEY_SHA256` incorporato (mai la chiave in chiaro; `hmac.compare_digest`
+a tempo costante), persiste l'attivazione in `~/.balzar/activation.json`
+(scrittura atomica tmp+`os.replace`, stessa disciplina di `library.py`;
+override `BALZAR_LICENSE_DIR` per i test). **Fail-closed**: finché
+`BETA_KEY_SHA256` è vuoto (com'è nel repo), il gate rifiuta qualunque chiave
+— una build senza chiave impostata non è utilizzabile, per scelta esplicita.
+L'attivazione salvata memorizza l'hash con cui è stata fatta: cambiare la
+chiave della build (nuovo `BETA_KEY_SHA256`) invalida le attivazioni vecchie.
+L'hash della chiave si imposta in fase di build senza far transitare la
+chiave in chiaro nei sorgenti/git: `python3 -m balzar.license hash-key`
+(input nascosto via `getpass`, stampa il SHA-256 da incollare).
+
+**Non ancora wired nelle interfacce**: `license.py` è il meccanismo + i test
+(9 test in `tests/test_license.py`, logica pura file/JSON — verifica chiave
+corretta/errata, tolleranza spazi, fail-closed quando non configurato,
+persistenza, invalidazione al cambio chiave, file di stato corrotto); il
+wiring all'avvio della GUI desktop (`gui.py`) e della WebView Android è un
+passo della Fase 1/2 di `ROADMAP.md`, non ancora fatto (il gate va agganciato
+alle interfacce impacchettate, non alla CLI di sviluppo). Versione del
+pacchetto portata a `0.9.0b1` (prima linea beta).
+
+**Da questo ambiente Linux è producibile**: i documenti legali, il gate
+`license.py`, e (prossimi) `balzar.spec` rifinito, `requirements.txt`, script
+di build e istruzioni. **Non producibile da qui**: i binari macOS/Windows e
+l'APK Android reali (servono quelle macchine/SDK — li produce l'utente).
+
+### 12.3 Fase 1 desktop — preparazione al packaging (fatta da qui)
+
+Tutto ciò che non richiede una macchina macOS/Windows reale, con verifica.
+
+**Gate di licenza agganciato alla GUI desktop** (`gui.py` `main()` →
+`_ensure_licensed`): all'avvio la root Tk è nascosta finché la licenza non è
+ok. La **politica** (quando applicare il gate) vive in
+`license.startup_decision(frozen)`, testabile senza Tk — 4 esiti:
+`STARTUP_OPEN` (build di sviluppo da sorgente, non configurata → nessun gate,
+comodità di sviluppo), `STARTUP_UNCONFIGURED` (build **impacchettata** senza
+chiave → **rifiutata**, fail-closed, intercetta il "ho dimenticato di
+impostare la chiave"), `STARTUP_ACTIVATED` (già attivata → parte),
+`STARTUP_NEED_KEY` (chiede la chiave, fino a 3 tentativi, annulla = esce).
+`frozen` = `getattr(sys, "frozen", False)` (vero solo sotto PyInstaller).
+**Verificato davvero sotto Xvfb con python3.12** (Tk reale, non solo la logica
+pura): 5 scenari — dev apre senza chiedere, chiave errata rifiuta, chiave
+giusta attiva e passa, già-attivata passa senza chiedere, annulla rifiuta.
+
+**Bug di packaging reale trovato e corretto (non ipotetico)**: `viewer3d.py`
+e `live_scan_server.py` risolvevano i JS vendorizzati
+(`model-viewer.min.js`; `jsQR.min.js`/`qr-transport-core.js`/
+`qr-camera-scanner.js`) via `dirname(dirname(__file__))` = radice del repo —
+sotto un bundle PyInstaller quel percorso punta dentro `_MEIPASS` **senza i
+file**, quindi nel pacchetto la **vista 3D e la scansione fotocamera si
+sarebbero rotte**. Fix all'altitudine giusta: nuovo modulo `balzar/assets.py`
+(`asset_root()`/`vendored_path()`, un solo punto di verità, frozen-aware via
+`sys._MEIPASS`) usato da entrambi i moduli; e `balzar.spec` che aggiunge i 4
+file a `datas` con dest `.` (la radice del bundle, dove `_MEIPASS` li cerca).
+Test `tests/test_assets.py` (3): la radice in dev è il repo, `vendored_path`
+compone il nome, **tutti e 4 i file esistono davvero** (così un rename senza
+aggiornare il `.spec` rompe un test, non il pacchetto silenziosamente).
+
+**`balzar.spec` rifinito**: `datas` dei JS vendorizzati (sopra), icona
+per-piattaforma (`assets/balzar.ico` Windows / `assets/balzar.icns` macOS /
+`.png` fallback) **guardata da `os.path.exists`** (un'icona mancante non rompe
+la build), e un `BUNDLE` `Balzar.app` con `bundle_identifier`/`info_plist` per
+macOS. Build ora via `pyinstaller balzar.spec`, non più il comando `--onefile`
+crudo (che ignorava asset e icona). Icona generata dogfooding Pillow
+(`assets/balzar.png`+`.ico`, quadrato accent #c77a2e + "b" geometrica, nessun
+font di sistema).
+
+**`requirements.txt`**: aggiunto `pyzbar` (richiesto per "Scansiona foto QR"
+nel pacchetto) e documentata la dipendenza **nativa** `libzbar0`/`brew
+install zbar`/wheel Windows, con la nota che senza di essa l'app parte
+comunque (solo la lettura QR da foto è disattivata; la fotocamera via jsQR
+non la richiede).
+
+**`BUILD.md`**: istruzioni per-OS (impostare la chiave beta con
+`license.py hash-key` senza committarla; build macOS su MacBook Air incl.
+generazione `.icns` con `sips`/`iconutil`; build Windows; bypass Gatekeeper/
+SmartScreen per i tester senza firma a pagamento).
+
+**Resta da fare sulla macchina dell'utente** (non producibile da qui): impostare
+`BETA_KEY_SHA256`, `pyinstaller balzar.spec` su macOS (MacBook Air) e su
+Windows, test dei binari reali. Il wiring del gate nella WebView Android è
+Fase 2.
+
+### 12.4 Gap reale trovato dalla prima build reale su Mac: SVG/DXF nel desktop
+
+Alla prima build/uso reale dell'app sul MacBook dell'utente, caricare un
+`.svg` ha dato `UnidentifiedImageError: cannot identify image file`. Causa
+(verificata nel codice, non ipotizzata): il dispatch di `gui.py` (`_worker`/
+`_dispatch_payload_bytes`) gestiva `.3dxml`/`.bzx`/`.b3d`/`.bzr` e per tutto
+il resto cadeva su `_job_from_image` → Pillow, che su un SVG solleva quel-
+l'errore. L'ingestione vettoriale (`vectorio.py`) esiste ed è completa da
+sessioni, ma era esposta **solo** in CLI (`encode-vector`) e nella demo web
+(tab Vettoriale), **mai agganciata all'app desktop** — proprio il caso d'uso
+guida (§6.1, disegni CAD esportati in SVG/DXF).
+
+Fix: nuovo `_job_from_vector` in `gui.py` (mirror di `_job_from_image`, usa
+`vectorio.ingest_vector_file`), più un ramo `.svg/.dxf` in `_worker` prima
+del dispatch generico e le estensioni aggiunte al dialog `open_file`.
+Trattato come un encode "create" (come immagine/3dxml): `is_live_artifact`
+resta `False`, i pulsanti 2D si abilitano (incluso "Esporta SVG", l'output usa
+il sottoinsieme vettoriale-sicuro), i motivi di scarto vengono mostrati nelle
+stats invece che nascosti (stessa onestà della CLI). Verificato sotto Xvfb
+(python3.12, Tk reale) su `examples/flangia_sorgente.svg` (231 B, 2077×) e
+`.dxf` (245 B): nessun crash, job valido, non marcato live-artifact.
+
+### 12.5 Decisione di architettura UI: guscio WebView unico (desktop + mobile), Tkinter come fallback
+
+Nata dalla prima build desktop reale su Mac: la GUI Tkinter è densa, non
+progettata, senza framing Studio/Live, e **molto diversa dalla demo web appena
+ridisegnata**. Constatazione onesta messa a verbale con l'utente: nei documenti
+il desktop è "il prodotto" e la web è "solo vetrina", ma la vetrina è più
+curata del prodotto. Ragionato con l'utente **prima di scrivere codice** e
+deciso.
+
+**Obiettivo finale dichiarato dall'utente** (verbatim del senso): un'app
+desktop/mobile **installabile e usabile come qualsiasi programma tipo Microsoft
+Word** — installazione banale che chiunque sa fare, doppio clic, lavora come un
+normale programma locale (finestra nativa, offline, nessun terminale/browser
+visibile). Chiarito il confine beta→finale: la finestra nativa offline è la
+beta (guscio WebView, sotto); "come Word" nel senso pieno richiede anche un
+**installer** (`.dmg` drag-to-Applicazioni / `setup.exe`) e la **firma del
+codice** (zero avvisi) — entrambi già in `ROADMAP.md`, rimandati oltre la beta
+funzionale. Divisione dei ruoli esplicita: la complessità (build/firma/
+installer) è tutta lato sviluppatore, una volta sola; l'utente finale riceve
+solo il pacchetto e fa il gesto banale.
+
+**Decisione (Strada B)**: unificare tutte le superfici sulla **stessa UI web**
+dentro un **guscio nativo**, invece di lucidare Tkinter (tetto estetico basso,
+e terrebbe tre UI separate da mantenere). Il desktop diventa una finestra
+**pywebview** (webview nativo del SO — WKWebView/WebView2/WebKitGTK) che mostra
+`index.html`+`app.js`+`style.css` serviti da un server locale in-process che
+instrada `/api/*` ai `handle_*` di `webapi.py` con `LOCAL_LIMITS`. Pienamente
+offline (`127.0.0.1`, nessun browser visibile) — lo stesso schema di app
+installabili come VS Code/Slack/Spotify, **non** "un sito". Scelte confermate
+dall'utente: **B**, **pywebview** (finestra app nativa, non browser di
+sistema), **Tkinter tenuta come fallback** (`--classic`/fallback automatico se
+pywebview manca), non cancellata.
+
+**Conseguenza strategica**: il round **stile** si fa **una volta sola** sulla
+web UI e migliora web + desktop + Android insieme (Fase 2 Android usa già lo
+stesso schema WebView, quindi condivide `localserver.py` e la web UI — nessuna
+terza interfaccia). Per questo lo stile viene **dopo** che il guscio è in piedi,
+non prima (altrimenti si stila alla cieca).
+
+**Confine di verifica onesto**: il server locale + il routing `/api/*` sono
+testabili in questo ambiente Linux con Playwright (riuso dell'harness già usato
+per la demo, cfr. `devserver_ux.py`); la **finestra pywebview** no (nessun
+backend webview/display qui) — si valida sul Mac. Dichiarato invece di fingere
+una verifica impossibile.
+
+**Passi stabiliti** (dettaglio in `ROADMAP.md` Fase 1b): 1) `balzar/
+localserver.py` (server+API, testabile qui); 2) bundling del frontend nel
+`.spec` (costruibile qui); 3) finestra pywebview + gate (costruibile qui,
+validabile sul Mac); 4) dettagli desktop — download via API pywebview,
+**Libreria rimandata** nella versione WebView (resta nel fallback Tkinter per
+la beta, è solo-desktop e non esiste nella web UI). Il motore, `webapi.py` (i
+handler restano identici) e la demo web/Vercel **non vengono toccati**.
+
+**Passo 1 ✅ (fatto, verificato qui)**: `balzar/localserver.py` — server
+in-process che serve la UI statica (da `assets.asset_root()`, frozen-aware) e
+instrada `/api/*` ai `handle_*` di `webapi.py` con `LOCAL_LIMITS`; bind
+**solo** a `127.0.0.1`, traversal rifiutato, `start_local_server(port=0)`
+ritorna `(server, url)` per il futuro entry point pywebview, più un `main()`
+standalone (`python3 -m balzar.localserver`). Verificato in due modi: (a) lo
+stesso harness Playwright della demo puntato al server di produzione (non al
+dev server scratch) — tutti i flussi Studio/Live encode/vector/video/QR/3D/
+open verdi, 0 errori JS; (b) `tests/test_localserver.py` (6 test senza
+Playwright, via `urllib`: index servito, file vendorizzato servito, traversal
+→ 404, `/api` sconosciuto → 404, roundtrip reale `/api/render` di un payload
+`BZR1`, corpo non-JSON → 500 onesto invece di crash). I `handle_*` non sono
+stati toccati: server locale ed endpoint Vercel li riusano identici, cambia
+solo il profilo di limiti.
+
+**Passo 2 ✅ (fatto, costruibile qui)**: `balzar.spec` ora bundla **tutto il
+frontend** in `datas` (glob dalla radice: 4 `*.html`, 2 `*.css`, 6 `*.js`
+inclusi i 4 JS vendorizzati e `app.js`, + 4 immagini `landing-img/`) — 16 file
+totali, con dest `.`/`landing-img` così `asset_root()` (=`_MEIPASS` in un
+bundle) li trova. Sostituisce la vecchia lista esplicita dei soli 4 JS
+vendorizzati. La verifica frozen reale (che il `.app` serva davvero la UI da
+`_MEIPASS`) fa parte del Passo 3 sul Mac.
+
+**Passo 3 ✅ (costruito qui; la finestra si valida sul Mac)**: guscio nativo.
+- `balzar/webview_app.py`: entry point del prodotto desktop. `run()` decide via
+  `license.startup_decision` quale pagina aprire (OPEN/ACTIVATED → `/index.html`,
+  NEED_KEY → `/activate.html`, UNCONFIGURED → finestra d'errore), avvia il
+  server locale con un route iniettato `/api/activate`, apre
+  `webview.create_window(...)`. `import webview` è **deferito** dentro `run()`
+  così il modulo importa anche senza pywebview e la logica è testabile in CI.
+- Gate **interamente web-based** (nessun Tkinter nel percorso WebView):
+  `activate.html` (form → `POST /api/activate` → redirect a `/index.html`),
+  route iniettato in `localserver` via il nuovo parametro `extra_routes`
+  (localserver resta disaccoppiato da `license.py`).
+- `balzar-app.py` (entry PyInstaller) ora chiama `webview_app.main`, che ricade
+  sulla **GUI Tkinter** se pywebview manca o con `--classic`. La CLI
+  `balzar gui` resta Tkinter (strumento di sviluppo). `pywebview` aggiunto a
+  `requirements.txt` (senza, fallback Tkinter).
+- Verificato qui: `tests/test_webview_app.py` (6 test — scelta pagina iniziale
+  per ogni decisione, route `/api/activate` con chiave giusta/sbagliata +
+  persistenza, `activate.html` servita, `run()` solleva `ImportError` senza
+  pywebview → fallback raggiungibile) + un **flusso Playwright end-to-end**
+  sull'`activate.html` reale (chiave sbagliata → errore resta sulla pagina;
+  chiave giusta → attiva e redirige a `/index.html` con la UI balzar presente).
+  **Non verificabile qui**: la finestra pywebview nativa (nessun backend webview
+  in Linux headless) — la valida Michele sul Mac (`pip install pywebview`,
+  rebuild, l'app apre una finestra nativa con la UI ridisegnata).
+
+**Validazione sul Mac (fatta da Michele) + Passo 4 avviato**: la finestra
+pywebview reale si apre con la UI web ridisegnata (da sorgente
+`python3 balzar-app.py`), file picker nativo e "genera QR" funzionanti. Due
+problemi reali trovati dall'uso e corretti:
+- **Download rotti in WKWebView** (il sintomo classico): un download via blob
+  `<a download>` **naviga** verso il blob invece di scaricarlo, riempiendo la
+  finestra senza modo di tornare indietro. Fix in un solo punto di
+  strozzatura (`downloadBlob` in `app.js`, usato da tutti i ~25 download):
+  nel guscio pywebview instrada al **ponte nativo** `window.pywebview.api.
+  save_file(filename, b64)` (nuova classe `_JsApi` in `webview_app.py`, apre
+  la finestra "Salva con nome" del SO via `create_file_dialog(SAVE_DIALOG)` e
+  scrive i byte); nel browser resta il classico `<a download>`. Gestisce sia
+  `Uint8Array` sia `Blob` (la scheda ricambio usa `canvas.toBlob`). Passata
+  `js_api=_JsApi()` a `create_window`.
+- **SVG nell'encoder generico dava errore** invece di usare l'encoder
+  dedicato: `handleFile` (scheda "Comprimi immagine") ora, se il file è
+  `.svg`/`.dxf`, passa alla scheda "Vettoriale" e chiama `handleVectorFile`
+  (niente rasterizzazione, come già fa il desktop Tkinter §12.4). Verificato
+  con Playwright: SVG dato a `#file-input` → auto-switch a `panel-vector` +
+  risultato vettoriale, zero errori JS.
+Il ponte di salvataggio nativo (finestra pywebview) si valida sul Mac; la
+logica browser (SVG-route, fallback `<a download>`) è verificata qui con
+Playwright. Suite Python invariata (nessuna riga JS testata da `unittest`).
+
+**`.app` impacchettato validato sul Mac** (Fase 1b chiusa): `rm -rf build dist
+&& pyinstaller balzar.spec` produce un `Balzar.app` che si apre come finestra
+nativa con la UI web ridisegnata; download nativi (finestra "Salva con nome"),
+encode/QR/3D funzionanti nel pacchetto. PyInstaller ha incluso pywebview/pyobjc
+senza hidden-import extra. Restano, per il prodotto "come Word" (Fase 1c): il
+`.dmg`/installer e la firma — rimandati oltre la beta funzionale.
+
+### 12.6 Round stile: professionale chiaro, accento blu (una UI per tutte le superfici)
+
+Deciso con l'utente ("professionale chiaro, niente arancione, più aria, meno
+parole"): ridisegno di `style.css` in passi isolati con harness a guardia,
+mostrato con mockup e screenshot reali prima/durante. Poiché la UI è ora
+condivisa (guscio WebView), lo stile migliora desktop + web + Android insieme.
+- **Token** (passo 1): palette chiara di default + scura curata
+  (`prefers-color-scheme`), accento **blu** `#2563eb`/`#4f83f1`, neutri puliti,
+  nuovi token `--accent-hover/-soft`, `--surface-2`, `--shadow(-sm)`,
+  `--radius*`, scala `--sp-*`.
+- **Tipografia/aria** (passo 2): wordmark da serif Georgia a `system-ui` 650,
+  spaziature più generose (max-width 920px).
+- **Componenti** (passo 3): `.panel` come card (superficie/bordo/ombra),
+  bottone primario blu pieno per l'azione principale (`[id$="dl-payload"]`) e
+  secondario pulito per il resto, `.purpose` come chip badge tenue, fix
+  contrasto `product-tab` attivo, dropzone/hover coerenti.
+- **Icona** (passo 4): `assets/balzar.{png,ico,icns}` rigenerate in blu,
+  accento di `activate.html` da arancione a blu.
+Verificato con l'harness UX (verde) e screenshot light+dark ad ogni giro.
+Nessun file `.py` toccato (solo CSS/HTML/icone). La landing **non** è stata
+toccata (usa il suo `landing.css`). Da validare live sul Mac + rebuild `.app`
+per l'icona blu. Restano possibili rifiniture minori (accento del viewer 3D
+`viewer3d.py`/`live_scan_server.py` ancora arancioni — non nel flusso app
+principale) e il taglio copy "meno parole" tab per tab.

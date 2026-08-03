@@ -1,5 +1,5 @@
-"""Multi-document bundle: several typed sub-documents (a 3D assembly, an
-alarm-code table, generic consultable documents) carried as ONE opaque
+"""Multi-document bundle: several typed sub-documents (a 3D assembly, a
+component info table, generic consultable documents) carried as ONE opaque
 blob of bytes -- so the existing physical-carrier machinery
 (chunk_payload/payload_to_qr_frames/LiveScanner in payload.py/qr.py,
 which already treats *any* payload as opaque bytes with a CRC) carries a
@@ -19,7 +19,10 @@ dispatch the item (KIND_3D -> the model viewer + BOM; KIND_2D -> a BZR1
 program rendered fresh into the doc index, see viewer3d._render_2d_item;
 KIND_ALARM -> the search bar; KIND_DOC -> the navigable document index,
 just consultable, not linked to the 3D). A .csv is KIND_ALARM only when
-the user explicitly marks it as the alarm table; an unmarked .csv (or
+the user explicitly marks it as the component info table (any columns --
+component name, alarm code, spare part, maintenance notes... in any
+order, with a header row, see viewer3d.parse_component_table); an
+unmarked .csv (or
 any other non-3D/non-2D file) is a KIND_DOC. Content type for a KIND_DOC
 is inferred from its label's extension at view time, not stored here;
 KIND_2D always gets rendered, its content type is never ambiguous.
@@ -57,7 +60,7 @@ _HEADER_LEN = 4 + 2 + 2 + 4 + 4
 # item roles, not file extensions: the kind says what the item IS FOR,
 # so the reader knows how to dispatch it, independent of its content type
 KIND_3D = "3d"        # a BZM1 3D assembly -> the model viewer + BOM
-KIND_ALARM = "alarm"  # a codice_allarme,nome_componente CSV -> wired to the search bar
+KIND_ALARM = "alarm"  # a component info CSV (any columns) -> wired to the search bar
 KIND_2D = "2d"        # a BZR1 2D program (drawing/schematic) -> rendered PNG/GIF/SVG in the index
 KIND_DOC = "doc"      # a generic consultable document -> the navigable index, not linked to the 3D
 

@@ -213,7 +213,8 @@ class TestHandleRender(unittest.TestCase):
         self.assertTrue(resp["has_3d"])
         self.assertEqual(resp["shape_count"], 1)
         self.assertTrue(resp["glb_base64"])
-        self.assertEqual(resp["alarm_rows"], [["E100", "Bullone-M6"]])
+        self.assertEqual(resp["info_table"],
+                         {"headers": ["codice_allarme", "nome_componente"], "rows": [["E100", "Bullone-M6"]]})
         self.assertTrue(any(d["label"] == "alarms.csv" for d in resp["documents"]))
 
     def test_bzx1_documents_only_bundle_has_no_3d(self):
@@ -406,6 +407,22 @@ class TestHandleEncode3D(unittest.TestCase):
         self.assertGreater(len(resp["glb_base64"]), 0)
         self.assertIn("payload_base64", resp)
 
+    def test_merge_names_field_is_optional_and_defaults_to_unchanged(self):
+        status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)
+        status2, resp2 = handle_encode_3d(
+            {"data": _b64(_make_3dxml_bytes()), "merge_names": ""}, LOCAL_LIMITS)
+        self.assertEqual(status2, 200)
+        self.assertEqual(resp2["payload_base64"], resp["payload_base64"])
+
+    def test_merge_names_field_merges_named_group(self):
+        status, resp = handle_encode_3d(
+            {"data": _b64(_make_3dxml_bytes()), "merge_names": "Root"}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        # Root's two Bullone-M6 instances concatenated into one merged
+        # shape -- still valid, self-consistent output, no crash
+        self.assertEqual(resp["shape_count"], 1)
+
     def test_missing_data(self):
         status, resp = handle_encode_3d({}, LOCAL_LIMITS)
         self.assertEqual(status, 400)
@@ -438,19 +455,22 @@ class TestHandleEncode3D(unittest.TestCase):
         status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)
         self.assertEqual(status, 200)
         self.assertFalse(resp["bundled"])
-        self.assertEqual(resp["alarm_rows"], [])
+        self.assertEqual(resp["info_table"], {"headers": [], "rows": []})
 
     def test_alarm_csv_produces_a_bundle_payload(self):
         from balzar.bundle import is_bundle
         from balzar.payload import from_base64
 
-        csv_text = "E100,Bullone-M6\nE200,Bullone-M6\n"
+        csv_text = "codice_allarme,nome_componente\nE100,Bullone-M6\nE200,Bullone-M6\n"
         status, resp = handle_encode_3d(
             {"data": _b64(_make_3dxml_bytes()), "alarm_csv": _b64(csv_text.encode("utf-8"))},
             LOCAL_LIMITS)
         self.assertEqual(status, 200)
         self.assertTrue(resp["bundled"])
-        self.assertEqual(resp["alarm_rows"], [["E100", "Bullone-M6"], ["E200", "Bullone-M6"]])
+        self.assertEqual(resp["info_table"], {
+            "headers": ["codice_allarme", "nome_componente"],
+            "rows": [["E100", "Bullone-M6"], ["E200", "Bullone-M6"]],
+        })
         payload = from_base64(resp["payload_base64"])
         self.assertTrue(is_bundle(payload))
 
@@ -792,6 +812,29 @@ class TestHandleQr(unittest.TestCase):
             {"payload_base64": _b64(b"x" * 200), "mode": "gif", "grid_dim": 100}, LOCAL_LIMITS)
         self.assertEqual(status, 200)
         self.assertEqual(resp["grid_dim"], 8)
+
+    def test_grid_dim_1_is_allowed_not_clamped_up(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        # grid_dim=1 (one QR per frame, no grid) is the only grid_dim a
+        # live camera can reliably decode continuously -- must pass
+        # through unchanged, not get clamped up to the old floor of 2.
+        status, resp = handle_qr(
+            {"payload_base64": _b64(b"x" * 200), "mode": "pages", "grid_dim": 1}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["grid_dim"], 1)
+
+    def test_grid_dim_below_1_is_clamped_up_to_1(self):
+        try:
+            import qrcode  # noqa: F401
+        except ImportError:
+            self.skipTest("qrcode non installato")
+        status, resp = handle_qr(
+            {"payload_base64": _b64(b"x" * 200), "mode": "gif", "grid_dim": 0}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["grid_dim"], 1)
 
     def test_gif_mode_single_frame_for_small_payload(self):
         try:

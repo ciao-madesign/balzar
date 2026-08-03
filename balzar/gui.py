@@ -22,10 +22,13 @@ from __future__ import annotations
 import base64
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 import uuid
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
+
+from . import license as license_gate
 
 from .imageio import load_frames, save_gif
 from .interpreter import render as render_program
@@ -66,11 +69,11 @@ class Job:
         self.bom_lines: list[tuple[str, int, list[str]]] = []
         # a multi-document bundle (balzar/bundle.py) is still a 3D job
         # (is_3d=True) but saves as .bzx instead of .b3d, and carries its
-        # own alarm table -- distinct from BalzarApp.alarm_rows, which is
-        # loaded manually via "Carica tabella allarmi" and applies across
-        # whichever job is open
+        # own info table -- distinct from BalzarApp.info_table, which is
+        # loaded manually via "Carica tabella componenti" and applies
+        # across whichever job is open
         self.is_bundle = False
-        self.alarm_rows: list[tuple[str, str]] = []
+        self.info_table = None  # ComponentTable | None (balzar/viewer3d.py)
         # True only for a job that decoded/scanned an EXISTING artifact
         # (Balzar Live's consumption side) -- opening a .b3d/.bzx/.bzp or
         # scanning a QR photo -- never for a fresh encode (Balzar Studio:
@@ -98,11 +101,12 @@ class BalzarApp:
         self._frame_count = 1
         self._playing = True
         self._photo_refs: list = []  # keep PhotoImage references alive
-        # alarm code -> component name table for the 3D viewer's search bar
-        # (balzar/viewer3d.py); independent of which job is loaded -- a
-        # technician can load this once and reuse it across several 3D
-        # files, so it lives on the app, not on Job.
-        self.alarm_rows: list[tuple[str, str]] = []
+        # component info table for the 3D viewer's search bar
+        # (balzar/viewer3d.py, ComponentTable | None); independent of
+        # which job is loaded -- a technician can load this once and
+        # reuse it across several 3D files, so it lives on the app, not
+        # on Job.
+        self.info_table = None
         # library entry id (or a job's own fallback id) -> (the running
         # http.server.HTTPServer already serving it, its temp work_dir)
         # (balzar/library.py) -- avoids spawning a second
@@ -115,6 +119,13 @@ class BalzarApp:
         self._library_listbox: tk.Listbox | None = None
         self._library_entries: list = []  # parallel to _library_listbox rows
         self._raw_qr_window: tk.Toplevel | None = None
+        # continuous QR camera acquisition (balzar/live_scan_server.py):
+        # None when no scan is in progress; set while the local browser
+        # page + HTTPServer are up, waiting for the browser to POST back
+        # the reconstructed bytes
+        self._camera_scan_server = None
+        self._camera_scan_queue: "queue.Queue[bytes] | None" = None
+        self._camera_scan_workdir = None
 
         self._build_ui()
         root.after(100, self._poll_queue)
@@ -128,6 +139,9 @@ class BalzarApp:
         ttk.Button(top, text="Apri file…", command=self.open_file).pack(side="left")
         ttk.Button(top, text="Scansiona foto QR…",
                   command=self.open_qr_photo).pack(side="left", padx=(6, 0))
+        self.btn_camera_scan = ttk.Button(
+            top, text="Scansiona con fotocamera (browser)…", command=self.toggle_camera_scan)
+        self.btn_camera_scan.pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Libreria…",
                   command=self.open_library).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Trasporto file (QR)…",
@@ -200,11 +214,11 @@ class BalzarApp:
         self.btn_view3d = ttk.Button(btns, text="Visualizza in 3D (browser)",
                                      command=self.view_3d, state="disabled")
         self.btn_view3d.pack(fill="x", pady=2)
-        # not tied to job state: the alarm table is independent of which
+        # not tied to job state: the info table is independent of which
         # 3D file is open, can be loaded before or after opening one, and
         # is reused across files until replaced by loading another CSV
         self.btn_load_alarms = ttk.Button(
-            btns, text="Carica tabella allarmi (CSV)", command=self.load_alarm_csv)
+            btns, text="Carica tabella componenti (CSV)", command=self.load_alarm_csv)
         self.btn_load_alarms.pack(fill="x", pady=2)
         # also independent of the currently open job -- picks its own
         # files rather than combining whatever is already loaded
@@ -216,15 +230,33 @@ class BalzarApp:
 
     def open_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Apri immagine, GIF animata, assieme 3D (.3dxml), bundle o payload balzar",
-            filetypes=[("Immagini, 3D, bundle e payload",
-                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.3dxml *.bzp *.b3d *.bzx *.bzr"),
+            title="Apri immagine, GIF, disegno vettoriale (SVG/DXF), assieme 3D, bundle o payload balzar",
+            filetypes=[("Immagini, vettoriale, 3D, bundle e payload",
+                        "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.svg *.dxf "
+                        "*.3dxml *.bzp *.b3d *.bzx *.bzr"),
                        ("Tutti i file", "*.*")])
         if not path:
             return
+        merge_names = None
+        if path.endswith(".3dxml"):
+            # Optional reserve tool (CLAUDE.md SS9.31), never forced:
+            # the primary simplification/merge happens outside balzar,
+            # in the source CAD tool, before this file even exists --
+            # left blank (the default), encoding is unchanged. Must be
+            # asked here on the main thread (Tkinter dialogs can't run
+            # from the background worker thread _worker runs on).
+            raw = simpledialog.askstring(
+                "Fondi sotto-assiemi (opzionale)",
+                "Nomi di sotto-assiemi da fondere in una sola geometria, separati da virgola.\n"
+                "Lascia vuoto per non fondere nulla (comportamento di sempre).\n"
+                "Utile solo per parti DISTINTE usate una sola volta ciascuna -- per parti "
+                "RIPETUTE (es. viti) puo' aumentare la dimensione, gia' ben deduplicata.",
+                parent=self.root)
+            if raw:
+                merge_names = {n.strip() for n in raw.split(",") if n.strip()}
         self.status.set(f"Elaborazione di {os.path.basename(path)}…")
         self._set_buttons(False)
-        threading.Thread(target=self._worker, args=(path,), daemon=True).start()
+        threading.Thread(target=self._worker, args=(path, merge_names), daemon=True).start()
 
     def open_qr_photo(self) -> None:
         """Scan a photo of one QR code or a printed grid of many: same
@@ -248,6 +280,79 @@ class BalzarApp:
             self._dispatch_payload_bytes(job, payload)
             job.is_live_artifact = True  # a scan is always a Live consumption action
             job.stats.insert(0, ("scansionato da", os.path.basename(path)))
+        except Exception as exc:
+            job.error = f"{type(exc).__name__}: {exc}"
+        self.queue.put(job)
+
+    def toggle_camera_scan(self) -> None:
+        """Continuous QR acquisition via the system browser's camera
+        (balzar/live_scan_server.py) -- Tkinter has no camera API of its
+        own, so this opens a local page reusing the exact same jsQR/
+        ContinuousQrScanner engine already vendored and proven for
+        trasporto-qr.html and Balzar Live's own web tab (CLAUDE.md
+        SS2.4i/SS2.4j), instead of adding a native camera dependency
+        (e.g. OpenCV) never used anywhere else in this project. A second
+        click while a scan is already running cancels it instead of
+        starting a second one -- the button's own label is the toggle
+        state, no separate indicator needed."""
+        if self._camera_scan_server is not None:
+            self._stop_camera_scan("Acquisizione annullata.")
+            return
+        import tempfile
+
+        from . import live_scan_server
+        self._camera_scan_workdir = tempfile.TemporaryDirectory()
+        self._camera_scan_server, self._camera_scan_queue = \
+            live_scan_server.start_live_scan_server(self._camera_scan_workdir.name)
+        self.btn_camera_scan.configure(text="Annulla acquisizione fotocamera")
+        self.status.set("Fotocamera: apri la scheda del browser appena aperta e "
+                        "inquadra la sequenza QR (griglia 1×1)…")
+        self.root.after(200, self._poll_camera_scan)
+
+    def _poll_camera_scan(self) -> None:
+        """Non-blocking poll of the queue live_scan_server's HTTPServer
+        fills when the browser POSTs back its reconstructed bytes --
+        same root.after(...) pattern as _poll_queue, so the Tkinter main
+        thread is never blocked waiting on the browser tab."""
+        if self._camera_scan_queue is None:
+            return  # cancelled or already consumed since this was scheduled
+        try:
+            data = self._camera_scan_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(200, self._poll_camera_scan)
+            return
+        self._stop_camera_scan(None)
+        self.status.set("Scansione completata, apertura in corso…")
+        self._set_buttons(False)
+        threading.Thread(target=self._camera_scan_worker, args=(data,), daemon=True).start()
+
+    def _stop_camera_scan(self, status_message: str | None) -> None:
+        """Tears down the local HTTPServer + temp dir in a background
+        thread (server.shutdown() blocks until the OTHER thread's
+        serve_forever() notices, same reasoning as _shutdown_viewer) and
+        resets the button/queue -- shared by cancel, completion, and
+        (were the app to add one) a window-close handler."""
+        server, work_dir_obj = self._camera_scan_server, self._camera_scan_workdir
+        self._camera_scan_server = None
+        self._camera_scan_queue = None
+        self._camera_scan_workdir = None
+        self.btn_camera_scan.configure(text="Scansiona con fotocamera (browser)…")
+        if status_message is not None:
+            self.status.set(status_message)
+        if server is not None:
+            def _teardown() -> None:
+                server.shutdown()
+                server.server_close()
+                work_dir_obj.cleanup()
+            threading.Thread(target=_teardown, daemon=True).start()
+
+    def _camera_scan_worker(self, data: bytes) -> None:
+        job = Job()
+        job.source_name = "scansione fotocamera"
+        try:
+            self._dispatch_payload_bytes(job, data)
+            job.is_live_artifact = True  # a scan is always a Live consumption action
+            job.stats.insert(0, ("scansionato con", "fotocamera (browser)"))
         except Exception as exc:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)
@@ -295,12 +400,17 @@ class BalzarApp:
         self._job_from_payload(job, job.source_name, data)
         return "2d"
 
-    def _worker(self, path: str) -> None:
+    def _worker(self, path: str, merge_names: set[str] | None = None) -> None:
         job = Job()
         job.source_name = os.path.basename(path)
         try:
             if path.endswith(".3dxml"):
-                self._job_from_3dxml(job, path)
+                self._job_from_3dxml(job, path, merge_names=merge_names)
+            elif path.endswith((".svg", ".dxf")):
+                # ingestione vettoriale diretta (vectorio.py) -- niente Pillow,
+                # niente rasterizzazione. E' un encode "create" come immagine/
+                # 3dxml, quindi is_live_artifact resta False (default).
+                self._job_from_vector(job, path)
             else:
                 with open(path, "rb") as fh:
                     data = fh.read()
@@ -335,13 +445,19 @@ class BalzarApp:
              f"no ({_fmt(len(chunk_payload(job.payload)))} capitoli)"),
         ]
 
-    def _job_from_3dxml(self, job: Job, path: str) -> None:
+    def _job_from_3dxml(self, job: Job, path: str, merge_names: set[str] | None = None) -> None:
         """3DXML -> BZM1 payload (balzar/scene3d.py): the 3D 'zip'. No 2D
         preview exists for this at all (see Job.is_3d) -- stats + BOM are
-        the whole picture until 'Visualizza in 3D' opens a real one."""
+        the whole picture until 'Visualizza in 3D' opens a real one.
+
+        `merge_names` (optional, CLAUDE.md SS9.31): a reserve tool, not
+        the primary simplification path -- that happens outside balzar,
+        in the source CAD tool, before this file exists. Left None (the
+        default), behavior is unchanged from before this parameter
+        existed."""
         from .scene3d import encode_3dxml_file
 
-        result = encode_3dxml_file(path)
+        result = encode_3dxml_file(path, merge_names=merge_names)
         job.payload = result.payload
         self._finish_3d_job(job, result.payload, result.bom, extra_stats=[
             ("forme uniche", _fmt(result.shape_count)),
@@ -400,27 +516,35 @@ class BalzarApp:
         """Re-open (or receive freshly built by create_bundle) a
         multi-document bundle (.bzx, balzar/bundle.py): unpack the 3D
         item (if any) into the usual glb/BOM view, any alarm item into
-        job.alarm_rows, and every alarm/doc item into job.documents for
+        job.info_table, and every alarm/doc item into job.documents for
         the navigable index. A bundle with NO 3D item is valid -- it
         stays is_bundle but not is_3d, and 'Visualizza documenti' opens
         an index-only page."""
         from .bundle import KIND_3D, decode_bundle, is_alarm_kind
         from .scene3d import decode_payload, generate_bom
-        from .viewer3d import parse_alarm_csv_text
+        from .viewer3d import parse_component_table_text
 
         items = decode_bundle(data)
         job.is_bundle = True
         job.payload = data
-        job.alarm_rows = []
+        # a bundle with more than one alarm-marked CSV is valid but they
+        # could have entirely different columns -- only the first one
+        # becomes the info table (see viewer3d.open_bundle_in_browser
+        # for the same "first one wins" reasoning)
+        job.info_table = None
         for it in items:
             if is_alarm_kind(it.kind):
-                job.alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
+                job.info_table = parse_component_table_text(it.data.decode("utf-8"))
+                break
         n_docs = sum(1 for it in items if it.kind != KIND_3D)
         bundle_stat = ("bundle", f"{len(items)} elementi ({', '.join(it.kind for it in items)})")
-        # an alarm component name collapses its own BOM/GLB entry into a
-        # single row/highlight group instead of expanding to every leaf
-        # part underneath -- see scene3d.generate_bom's collapse_names
-        collapse_names = {name for _code, name in job.alarm_rows} or None
+        # any cell value across the whole table is offered as a candidate
+        # to collapse its own BOM/GLB entry into a single row/highlight
+        # group instead of expanding to every leaf part underneath -- see
+        # scene3d.generate_bom's collapse_names; safe even though we
+        # don't yet know which column is "the component" (that's decided
+        # client-side later, once the BOM this call produces exists)
+        collapse_names = job.info_table.all_values() if job.info_table else None
 
         three_d_items = [it for it in items if it.kind == KIND_3D]
         if three_d_items:
@@ -485,6 +609,42 @@ class BalzarApp:
             ("QR", "1 codice" if fits_in_qr(result.payload)
              else f"{_fmt(len(chunk_payload(result.payload)))} capitoli QR"),
         ]
+
+    def _job_from_vector(self, job: Job, path: str) -> None:
+        """Ingest an SVG/DXF drawing directly (vectorio.py): no rasterization,
+        no quantization, no Pillow -- a circle in the source keeps its exact
+        center/radius, mapped 1:1 to CIRCLE. Same engine the CLI 'encode-vector'
+        and the web demo's Vettoriale tab already use; wired into the desktop
+        app so a drag/open of a .svg/.dxf no longer falls through to the raster
+        loader and crashes with UnidentifiedImageError."""
+        from .vectorio import ingest_vector_file
+        max_dim = int(self.max_dim.get())
+        result = ingest_vector_file(path, max_dim=max_dim)
+        job.payload = result.payload
+        job.program_text = result.program_text
+        rendered = render_program(result.program_text)
+        job.width, job.height = rendered.width, rendered.height
+        job.frames_rgb = [rendered.frame_rgb(i) for i in range(len(rendered.frames))]
+        job.original_frames_rgb = []  # source is vector, no raster original to compare
+
+        upload_size = os.path.getsize(path)
+        raw = job.width * job.height * 3
+        ratio = raw / len(result.payload)
+        job.stats = [
+            ("sorgente", f"{job.source_name} ({_fmt(upload_size)} B, {result.source_format})"),
+            ("analisi", f"{job.width}x{job.height}, {result.element_count} elementi vettoriali"),
+            ("istruzioni", _fmt(result.instruction_count)),
+            ("saltati", _fmt(len(result.skipped))),
+            ("RGB grezzo", f"{_fmt(raw)} B"),
+            ("payload", f"{_fmt(len(result.payload))} B"),
+            ("fattore vs RGB", (f"{ratio:,.1f}x" if ratio >= 1
+                                else f"NESSUN GUADAGNO ({ratio:.2f}x)")),
+            ("QR", "1 codice" if fits_in_qr(result.payload)
+             else f"{_fmt(len(chunk_payload(result.payload)))} capitoli QR"),
+        ]
+        # surface skipped reasons instead of hiding them (same honesty as CLI)
+        for reason in result.skipped[:6]:
+            job.stats.append(("saltato", reason))
 
     # -------------------------------------------------------------- saving
 
@@ -555,7 +715,7 @@ class BalzarApp:
         else:
             from .viewer3d import open_glb_in_browser
             server = open_glb_in_browser(job.glb, job.bom_lines, work_dir,
-                                         alarm_rows=self.alarm_rows or None)
+                                         info_table=self.info_table)
         self._open_viewers[key] = (server, work_dir)
         self.status.set("Aperto nel browser predefinito")
 
@@ -769,30 +929,34 @@ class BalzarApp:
         self.queue.put(job)
 
     def load_alarm_csv(self) -> None:
-        """Load a codice_allarme,nome_componente CSV for the 3D viewer's
+        """Load a component info CSV (any columns: component name, alarm
+        code, spare part, maintenance notes...) for the 3D viewer's
         search bar (balzar/viewer3d.py) -- baked into the page the next
         time 'Visualizza in 3D' opens one, so the operator can search by
-        alarm code with no manual upload step in the browser itself."""
+        any value with no manual upload step in the browser itself."""
         path = filedialog.askopenfilename(
-            title="Carica tabella allarmi (codice_allarme,nome_componente)",
+            title="Carica tabella componenti (CSV, con intestazione)",
             filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
         if not path:
             return
-        from .viewer3d import parse_alarm_csv
+        from .viewer3d import parse_component_table
         try:
-            rows = parse_alarm_csv(path)
+            table = parse_component_table(path)
         except OSError as exc:
             messagebox.showerror("balzar", f"Impossibile leggere {os.path.basename(path)}:\n{exc}")
             return
-        if not rows:
+        except ValueError as exc:
+            messagebox.showerror("balzar", f"{os.path.basename(path)}: {exc}")
+            return
+        if not table.rows:
             messagebox.showwarning(
                 "balzar", f"Nessuna riga valida trovata in {os.path.basename(path)}.\n"
-                "Formato atteso: codice_allarme,nome_componente (una riga per coppia).")
+                "Formato atteso: una riga di intestazione (nomi di colonna) seguita "
+                "dai dati, colonne libere.")
             return
-        self.alarm_rows = rows
-        n_codes = len({code for code, _ in rows})
-        self.status.set(f"Tabella allarmi caricata: {n_codes} codici, {len(rows)} righe "
-                        f"({os.path.basename(path)})")
+        self.info_table = table
+        self.status.set(f"Tabella caricata: {len(table.rows)} righe, "
+                        f"{len(table.headers)} colonne ({os.path.basename(path)})")
 
     def save_program(self) -> None:
         if not self.job:
@@ -1058,8 +1222,47 @@ class BalzarApp:
             self._animate()
 
 
+def _ensure_licensed(root: tk.Tk) -> bool:
+    """Gate di licenza beta all'avvio. Ritorna True se l'app puo' partire.
+
+    La politica (quando applicare il gate) vive in `license.startup_decision`,
+    testabile senza Tk; qui c'e' solo il wiring dei dialog. Vedi ROADMAP.md /
+    CLAUDE.md §12.2."""
+    decision = license_gate.startup_decision(getattr(sys, "frozen", False))
+    if decision == license_gate.STARTUP_OPEN:
+        return True          # build di sviluppo: nessun gate
+    if decision == license_gate.STARTUP_ACTIVATED:
+        return True          # gia' attivata su questo dispositivo
+    if decision == license_gate.STARTUP_UNCONFIGURED:
+        messagebox.showerror(
+            "Balzar",
+            "Questa build non ha una chiave di licenza configurata e non puo' "
+            "essere avviata.\n\n(Errore di produzione della build: la chiave "
+            "beta non e' stata impostata prima del packaging.)")
+        return False
+    # STARTUP_NEED_KEY: chiedi la chiave, fino a 3 tentativi
+    for _ in range(3):
+        key = simpledialog.askstring(
+            "Attivazione Balzar (beta)",
+            "Inserisci la chiave di attivazione della beta:",
+            parent=root)
+        if key is None:
+            return False     # annullato dall'utente
+        if license_gate.activate(key):
+            return True
+        messagebox.showerror("Balzar", "Chiave non valida. Riprova.")
+    messagebox.showerror(
+        "Balzar", "Attivazione non riuscita. L'app verra' chiusa.")
+    return False
+
+
 def main() -> None:
     root = tk.Tk()
+    root.withdraw()                     # nascosta finche' la licenza non e' ok
+    if not _ensure_licensed(root):
+        root.destroy()
+        return
+    root.deiconify()
     BalzarApp(root)
     root.mainloop()
 

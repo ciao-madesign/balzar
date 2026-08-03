@@ -273,15 +273,17 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
     balzar/gltf.py and shown client-side by the same model-viewer web
     component the desktop app opens in a browser (balzar/viewer3d.py).
 
-    Optional `alarm_csv` field (base64 of a codice_allarme,nome_componente
-    CSV): when present, the 3D payload and the CSV are packed together
-    into one BZX1 bundle (balzar/bundle.py) instead of a bare BZM1 --
-    `payload_base64`/`fits_qr` then describe the *bundle*, and the same
-    "genera QR" button already wired to this tab keeps working with zero
-    changes, since chunk_payload/payload_to_qr_frames treat any payload
-    as opaque bytes. `alarm_rows` is returned either way so the frontend
-    can wire the 3D viewer's search bar immediately, without a separate
-    client-side CSV upload step."""
+    Optional `alarm_csv` field (base64 of a component info CSV -- any
+    columns, e.g. component name/alarm code/spare part/maintenance
+    notes, in any order, with a header row): when present, the 3D
+    payload and the CSV are packed together into one BZX1 bundle
+    (balzar/bundle.py) instead of a bare BZM1 -- `payload_base64`/
+    `fits_qr` then describe the *bundle*, and the same "genera QR"
+    button already wired to this tab keeps working with zero changes,
+    since chunk_payload/payload_to_qr_frames treat any payload as opaque
+    bytes. `info_table` ({headers, rows}) is returned either way so the
+    frontend can wire the 3D viewer's search bar immediately, without a
+    separate client-side CSV upload step."""
     data_b64 = body.get("data")
     if not data_b64:
         return 400, {"ok": False, "error": "campo 'data' mancante"}
@@ -292,20 +294,27 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
 
     alarm_csv_b64 = body.get("alarm_csv")
     alarm_csv_text = None
-    alarm_rows: list[tuple[str, str]] = []
+    info_table = None
     if alarm_csv_b64:
-        from .viewer3d import parse_alarm_csv_text
+        from .viewer3d import parse_component_table_text
         try:
             alarm_csv_text = _b64decode(alarm_csv_b64).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
-            return 400, {"ok": False, "error": f"tabella allarmi non valida: {exc}"}
-        alarm_rows = parse_alarm_csv_text(alarm_csv_text)
-    # component names from the alarm table collapse their own BOM/GLB
-    # entry into a single row/highlight group instead of expanding to
-    # every individual leaf part underneath -- see scene3d.generate_bom's
-    # collapse_names for why (an alarm often names a whole sub-assembly,
-    # e.g. "HEATER1", not one physical part).
-    collapse_names = {name for _code, name in alarm_rows} or None
+            return 400, {"ok": False, "error": f"tabella componenti non valida: {exc}"}
+        try:
+            info_table = parse_component_table_text(alarm_csv_text)
+        except ValueError as exc:
+            return 400, {"ok": False, "error": str(exc)}
+    # any cell value across the whole table is offered as a candidate to
+    # collapse its own BOM/GLB entry into a single row/highlight group
+    # instead of expanding to every individual leaf part underneath --
+    # see scene3d.generate_bom's collapse_names for why (a table often
+    # names a whole sub-assembly, e.g. "HEATER1", not one physical part).
+    # A candidate that doesn't match a real group name is simply
+    # ignored, so there's no need to know which column is "the
+    # component" here -- that's decided client-side, once this call's
+    # own BOM exists to test candidates against.
+    collapse_names = info_table.all_values() if info_table else None
 
     # extra consultable documents to bundle alongside the model: each
     # {label, data (base64)}. Carried as raw KIND_DOC bytes, no parsing.
@@ -321,6 +330,16 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
 
     from .scene3d import Scene3DError, encode_3dxml_file
 
+    # optional reserve tool (CLAUDE.md SS9.31), independent from
+    # collapse_names above: a comma-separated list of group names whose
+    # geometry gets concatenated into one Shape in the PAYLOAD itself
+    # (fewer Reference/Instance3D entries), not just grouped for BOM/
+    # highlight display. Opt-in, never forced -- omitted, encoding is
+    # unchanged from before this field existed.
+    merge_names_raw = body.get("merge_names")
+    merge_names = ({n.strip() for n in merge_names_raw.split(",") if n.strip()}
+                  if merge_names_raw else None)
+
     import os
     import tempfile
     with tempfile.TemporaryDirectory() as td:
@@ -328,7 +347,7 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         with open(path, "wb") as fh:
             fh.write(raw)
         try:
-            result = encode_3dxml_file(path)
+            result = encode_3dxml_file(path, merge_names=merge_names)
         except Scene3DError as exc:
             return 400, {"ok": False, "error": str(exc)}
 
@@ -409,12 +428,12 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         bundle_bytes = encode_bundle(bundle_items)
         response.update(_payload_response_fields(bundle_bytes, limits))
         response["bundled"] = True
-        response["alarm_rows"] = [[code, name] for code, name in alarm_rows]
+        response["info_table"] = info_table.to_json_dict() if info_table else {"headers": [], "rows": []}
         response["documents"] = response_docs
     else:
         response.update(_payload_response_fields(result.payload, limits))
         response["bundled"] = False
-        response["alarm_rows"] = []
+        response["info_table"] = {"headers": [], "rows": []}
         response["documents"] = []
 
     return 200, response
@@ -700,10 +719,16 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
     - "pages": same frame split, returned as a list of individual PNGs
       (base64 each) -- for printing one page per frame, where
       "auto-play" has no meaning.
-    grid_dim (default 4, clamped to [2, 8]) is a property of the
+    grid_dim (default 4, clamped to [1, 8]) is a property of the
     physical output medium, not the payload -- see CLAUDE.md §2.4b for
     why 4 is the recommended default and 8 is available but not
-    recommended.
+    recommended. grid_dim=1 (one QR code per frame, no grid at all) is
+    a real, deliberate case, not just a permitted edge value: it is the
+    ONLY grid_dim a live camera can reliably decode continuously (a
+    matrix needs ~3800-4700px of live camera frame width to keep every
+    one of its codes individually readable, unrealistic at a normal
+    working distance -- CLAUDE.md §2.4g), so the "GIF per acquisizione
+    continua" delivery mode always requests grid_dim=1 here.
 
     "gif"/"pages" responses also include estimated_scan_seconds_low/high
     -- an honest ballpark for how long reading the sequence back is
@@ -722,7 +747,7 @@ def handle_qr(body: dict, limits: Limits) -> tuple[int, dict]:
         grid_dim = int(body.get("grid_dim", 4))
     except (TypeError, ValueError):
         return 400, {"ok": False, "error": "grid_dim deve essere un intero"}
-    grid_dim = max(2, min(8, grid_dim))
+    grid_dim = max(1, min(8, grid_dim))
 
     try:
         import qrcode  # noqa: F401  (import check only; qr.py does the real import)
@@ -871,7 +896,8 @@ def _handle_render_3d(raw: bytes, limits: Limits) -> tuple[int, dict]:
     glb_b64 = base64.b64encode(glb).decode("ascii")
     glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
 
-    response = {"ok": True, "kind": "3d", "bundled": False, "alarm_rows": [], "documents": []}
+    response = {"ok": True, "kind": "3d", "bundled": False,
+               "info_table": {"headers": [], "rows": []}, "documents": []}
     response.update(_scene3d_stats(scene))
     response["glb_omitted"] = glb_omitted
     response["glb_base64"] = "" if glb_omitted else glb_b64
@@ -894,22 +920,30 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
     except BundleError as exc:
         return 400, {"ok": False, "error": f"bundle non valido: {exc}"}
 
-    from .viewer3d import _documents_from_items, parse_alarm_csv_text
+    from .viewer3d import _documents_from_items, parse_component_table_text
 
     three_d_items = [it for it in items if it.kind == KIND_3D]
     response = {"ok": True, "kind": "bundle", "bundled": True, "has_3d": bool(three_d_items)}
 
-    # parsed before the 3D block below so its component names can collapse
-    # the BOM/GLB the same way handle_encode_3d does -- see generate_bom
+    # parsed before the 3D block below so its cell values can collapse
+    # the BOM/GLB the same way handle_encode_3d does -- see generate_bom.
+    # Only the first alarm-marked item becomes the info table (same
+    # "first one wins" rule as viewer3d.open_bundle_in_browser): several
+    # could have entirely different columns, so concatenating rows
+    # across mismatched schemas doesn't generalize the way it safely
+    # could for the old fixed two-column format.
+    info_table = None
     try:
-        alarm_rows = []
         for it in items:
             if is_alarm_kind(it.kind):
-                alarm_rows.extend(parse_alarm_csv_text(it.data.decode("utf-8")))
+                info_table = parse_component_table_text(it.data.decode("utf-8"))
+                break
     except UnicodeDecodeError as exc:
-        return 400, {"ok": False, "error": f"tabella allarmi nel bundle non e' UTF-8 valida: {exc}"}
-    response["alarm_rows"] = [[code, name] for code, name in alarm_rows]
-    collapse_names = {name for _code, name in alarm_rows} or None
+        return 400, {"ok": False, "error": f"tabella componenti nel bundle non e' UTF-8 valida: {exc}"}
+    except ValueError as exc:
+        return 400, {"ok": False, "error": f"tabella componenti nel bundle non valida: {exc}"}
+    response["info_table"] = info_table.to_json_dict() if info_table else {"headers": [], "rows": []}
+    collapse_names = info_table.all_values() if info_table else None
 
     if three_d_items:
         from .scene3d import Scene3DError, decode_payload

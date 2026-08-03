@@ -385,6 +385,113 @@ class TestParallelTileDecoding(unittest.TestCase):
         expected = [{r.data for r in zbar_decode(c)} for c in crops]
         self.assertEqual([{r.data for r in res} for res in results], expected)
 
+    def test_tile_boxes_uses_the_correct_top_on_a_full_single_frame_grid(self):
+        # Real bug, found via the trasporto-qr.html UI (not hypothetical):
+        # _tile_boxes tries top=26 before top=0, and used to accept
+        # top=26 whenever it reconstructed the image height within
+        # row_h/2 (hundreds of px) -- far too loose. A genuinely full
+        # single-frame grid (no frame_label, so the real top is 0) with a
+        # smaller last chunk (a shorter QR upscaled to `cell`, changing
+        # cell/pad just enough) reconstructed within that old margin
+        # under the WRONG top=26 hypothesis, shifting every crop ~26px
+        # and making both pyzbar and jsQR fail on all of them even though
+        # the whole image decodes fine. Payload sized to force exactly 4
+        # chunks (3 full + 1 short) at grid_dim=2 -- one full 2x2 grid,
+        # single frame, no frame_label.
+        from balzar.qr import CHUNK_RAW_BYTES, _tile_boxes, payload_to_qr_frames
+        from pyzbar.pyzbar import decode as zbar_decode
+
+        payload = b"x" * (CHUNK_RAW_BYTES * 3 + 100)
+        frames = payload_to_qr_frames(payload, grid_dim=2)
+        self.assertEqual(len(frames), 1)
+        img = frames[0]
+        boxes = _tile_boxes(img.size[0], img.size[1], 2)
+        self.assertEqual(len(boxes), 4)
+        found = sum(1 for box in boxes if zbar_decode(img.crop(box)))
+        self.assertEqual(found, 4, "every crop should decode; a top-hypothesis "
+                          "geometry bug shifts all of them out of alignment")
+
+    def test_tile_boxes_solves_fewer_columns_for_a_sparse_partial_frame(self):
+        # Real bug, found from a user report of total non-detection on a
+        # partial matrix, not a hypothetical: _tile_boxes used to
+        # hardcode cols=grid_dim, but _compose_grid actually lays out
+        # len(images) images at cols=ceil(sqrt(len(images))), which
+        # drops BELOW grid_dim once there are few enough images left
+        # (n <= (grid_dim-1)**2). 8 codes at grid_dim=4 is a real 3x3
+        # layout (9 cells), not 4x4 (16) -- assuming 16 made every top
+        # hypothesis fail to reconstruct the real (smaller) image
+        # height, so _tile_boxes returned zero boxes and the caller fell
+        # through to a whole-image scan that, for jsQR in the browser
+        # (no reliable whole-image multi-decode fallback, unlike ZBar),
+        # meant total failure instead of just a lost speedup.
+        from balzar.qr import CHUNK_RAW_BYTES, _tile_boxes, payload_to_qr_frames
+        from pyzbar.pyzbar import decode as zbar_decode
+
+        payload = b"x" * (CHUNK_RAW_BYTES * 7 + 100)  # exactly 8 chunks
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertEqual(len(frames), 1)
+        img = frames[0]
+        boxes = _tile_boxes(img.size[0], img.size[1], 4)
+        self.assertEqual(len(boxes), 9, "8 codes lay out as a real 3x3 grid, "
+                          "not a 4x4 one -- cols must be solved, not assumed")
+        found = sum(1 for box in boxes if zbar_decode(img.crop(box)))
+        self.assertEqual(found, 8)
+
+    def test_decode_tiled_recovers_a_partial_frame_with_a_blank_tail(self):
+        # Real bug, found from the same user report ("10 of 16 slots
+        # filled" produced total non-detection): _decode_tiled's old
+        # completeness check required literally EVERY cell -- including
+        # the genuinely blank ones past the real image count -- to
+        # produce a decode result. This is structurally impossible for
+        # any partial frame with a blank tail (10 real images at
+        # grid_dim=4 lays out as a real 4x3 grid, 12 cells, the last 2
+        # of which are blank white space with no QR at all), so the old
+        # check discarded an otherwise fully-correct tiled decode every
+        # single time. Fixed by accepting a hit/miss pattern that is a
+        # PREFIX of the cells (real hits, then a blank tail), rejecting
+        # only a hit appearing after a miss (a real geometry error).
+        from balzar.payload import CHUNK_MAGIC, from_base64
+        from balzar.qr import (CHUNK_RAW_BYTES, _decode_tiled, _tile_boxes,
+                                payload_to_qr_frames)
+
+        payload = b"x" * (CHUNK_RAW_BYTES * 9 + 100)  # exactly 10 chunks
+        frames = payload_to_qr_frames(payload, grid_dim=4)
+        self.assertEqual(len(frames), 1)
+        img = frames[0]
+        boxes = _tile_boxes(img.size[0], img.size[1], 4)
+        self.assertEqual(len(boxes), 12, "10 codes lay out as a real 4x3 "
+                          "grid (12 cells, 2 genuinely blank), not 4x4")
+        results = _decode_tiled(img, grid_dim=4)
+        real_chunks = [r for r in results
+                      if from_base64(r.data.decode("ascii"))[:4] == CHUNK_MAGIC]
+        self.assertEqual(len(real_chunks), 10)
+
+    def test_decode_tiled_drops_spurious_non_qr_symbology_matches(self):
+        # Real regression, introduced by the blank-tail fix above and
+        # found by re-running the existing test suite, not anticipated:
+        # ZBar can occasionally misdetect an unrelated barcode symbology
+        # (e.g. DATABAR) inside a real cell's cropped region, alongside
+        # the genuine QRCODE match -- previously invisible because the
+        # old all-cells-must-hit check always failed for any partial
+        # frame anyway, forcing a whole-image fallback that doesn't
+        # exhibit this crop-boundary artifact. Once partial frames
+        # started succeeding via the tiled path, the collection loop
+        # picked up the spurious non-QR result alongside the real one,
+        # which then failed assemble_chunks's magic-byte check
+        # downstream. _decode_tiled must filter to r.type == "QRCODE"
+        # before collecting -- this reproduces the exact frame where the
+        # spurious DATABAR match was observed (a 34-chunk payload tiled
+        # at grid_dim=6, cell index 4).
+        from balzar.qr import _decode_tiled, payload_to_qr_frames
+        from balzar.payload import assemble_chunks, from_base64
+
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=6)
+        results = _decode_tiled(frames[0], grid_dim=6)
+        self.assertTrue(all(r.type == "QRCODE" for r in results))
+        chunks = [from_base64(r.data.decode("ascii")) for r in results]
+        self.assertEqual(assemble_chunks(chunks), payload)
+
     def test_decode_tiled_end_to_end_still_recovers_full_frame(self):
         # only count actual BZC1 chunks -- zbar can occasionally
         # misdetect an unrelated barcode symbology in the label-text
@@ -401,6 +508,85 @@ class TestParallelTileDecoding(unittest.TestCase):
         real_chunks = [r for r in results
                       if from_base64(r.data.decode("ascii"))[:4] == CHUNK_MAGIC]
         self.assertEqual(len(real_chunks), 16)
+
+
+@unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")
+class TestAutoGridDimDetection(unittest.TestCase):
+    """grid_dim on the reading side (LiveScanner.add/scan_image_bytes) is
+    now an optional override, not something the operator needs to know
+    or match at scan time: omitting it auto-detects via a fixed ceiling
+    search (_AUTO_GRID_DIM_CEILING) instead of requiring the exact value
+    used at generation. Verified safe (not just assumed) across every
+    grid_dim/chunk-count combination the system's own generator can
+    produce -- 136 real frames swept manually in session, reproduced
+    here as focused regression cases for the 4 that hit a genuine
+    geometry coincidence (a WRONG (cols, top) hypothesis also satisfying
+    the tight reconstruction tolerance before the true one is reached)."""
+
+    def test_scan_image_bytes_without_grid_dim_reads_a_grid_dim_2_sequence(self):
+        # the auto-detect ceiling (8) must still find a sequence
+        # generated with a SMALLER grid_dim -- not just the ceiling
+        # itself -- proving this is real detection, not a fluke that
+        # only works when generation happened to also use 8
+        from balzar.qr import LiveScanner, payload_to_qr_frames
+        payload = _big_payload()
+        frames = payload_to_qr_frames(payload, grid_dim=2)
+        self.assertGreater(len(frames), 2)
+
+        scanner = LiveScanner()
+        for frame in frames:
+            buf = io.BytesIO()
+            frame.save(buf, format="PNG")
+            scanner.add(buf.getvalue())  # no grid_dim: must auto-detect
+        self.assertEqual(scanner.result(), payload)
+
+    def test_auto_ceiling_never_returns_wrong_chunks_on_known_geometry_coincidences(self):
+        # Real cases found by an exhaustive sweep (not hypothetical):
+        # searching cols from the ceiling (8) downward can hit a WRONG
+        # (cols, top) hypothesis that also satisfies the tight
+        # reconstruction tolerance before reaching the true, smaller
+        # cols -- e.g. a tiny single-QR frame (real cols=1) where cols=8
+        # also happens to reconstruct the image's small width/height
+        # exactly. This must NEVER translate into wrong decoded data:
+        # the mis-cropped regions must fail to decode (empty result),
+        # correctly falling through to the safe whole-image scan.
+        from balzar.qr import CHUNK_RAW_BYTES, _AUTO_GRID_DIM_CEILING, _decode_tiled, payload_to_qr_frames
+        from balzar.payload import CHUNK_MAGIC, chunk_payload, from_base64
+
+        cases = [(1, 2, 1), (1, 3, 2), (1, 5, 4), (2, 5, 1)]  # (real_grid_dim, n_chunks, frame_index)
+        for real_grid_dim, n_chunks, frame_index in cases:
+            with self.subTest(real_grid_dim=real_grid_dim, n_chunks=n_chunks):
+                payload = b"x" * (CHUNK_RAW_BYTES * (n_chunks - 1) + 100)
+                expected = {bytes(c) for c in chunk_payload(payload, chunk_size=CHUNK_RAW_BYTES)}
+                frames = payload_to_qr_frames(payload, grid_dim=real_grid_dim)
+                img = frames[frame_index]
+
+                result = _decode_tiled(img, grid_dim=_AUTO_GRID_DIM_CEILING)
+                got = {from_base64(r.data.decode("ascii")) for r in result
+                      if from_base64(r.data.decode("ascii"))[:4] == CHUNK_MAGIC}
+                self.assertTrue(got.issubset(expected),
+                                "auto-ceiling geometry mismatch must never fabricate wrong chunks")
+
+    def test_scan_image_bytes_default_still_recovers_the_known_coincidence_frame(self):
+        # end-to-end version of the case above: even where the tiled
+        # ceiling search hits the geometry coincidence and comes back
+        # empty, scan_image_bytes's whole-image fallback must still
+        # recover the correct payload with zero operator input
+        from balzar.qr import CHUNK_RAW_BYTES, payload_to_qr_frames, scan_image_bytes
+
+        payload = b"x" * (CHUNK_RAW_BYTES * 1 + 100)  # exactly 2 chunks, grid_dim=1
+        frames = payload_to_qr_frames(payload, grid_dim=1)
+        self.assertEqual(len(frames), 2)
+        buf = io.BytesIO()
+        frames[1].save(buf, format="PNG")  # the frame with the known geometry coincidence
+
+        from balzar.qr import LiveScanner
+        scanner = LiveScanner()
+        scanner.add(buf.getvalue())
+        buf0 = io.BytesIO()
+        frames[0].save(buf0, format="PNG")
+        scanner.add(buf0.getvalue())
+        self.assertEqual(scanner.result(), payload)
 
 
 @unittest.skipUnless(HAVE_QR_DEPS, "requires qrcode + pyzbar (+ system libzbar)")

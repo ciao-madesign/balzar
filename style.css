@@ -1,25 +1,46 @@
 :root {
   color-scheme: light dark;
+  /* Palette "professionale chiara", accento blu. Chiaro di default, scuro
+     curato via prefers-color-scheme. Un solo set di token per tutta la UI. */
   --bg: #ffffff;
-  --fg: #1a1a2e;
-  --muted: #5b5b6e;
-  --accent: #2e86ab;
-  --border: #d8d8e2;
-  --panel: #f5f5fa;
-  --good: #1f8a4c;
-  --bad: #c0392b;
+  --fg: #1b1e23;
+  --muted: #626b76;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #e8effc;   /* sfondo tenue per badge/chip accento */
+  --border: #e3e6eb;
+  --panel: #f7f8fa;         /* superficie card/pannello */
+  --surface-2: #eef0f4;     /* superficie leggermente più marcata */
+  --good: #1a7f4b;
+  --bad: #d64545;
+  --shadow-sm: 0 1px 2px rgba(20, 23, 28, .06);
+  --shadow: 0 1px 2px rgba(20, 23, 28, .05), 0 4px 14px rgba(20, 23, 28, .06);
+  /* raggi e ritmo spaziale condivisi ("più aria") */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-pill: 999px;
+  --sp-1: 0.5rem;
+  --sp-2: 0.85rem;
+  --sp-3: 1.25rem;
+  --sp-4: 1.75rem;
+  --sp-5: 2.5rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14141f;
-    --fg: #eceef2;
-    --muted: #9a9ab0;
-    --accent: #5fb3d9;
-    --border: #33334a;
-    --panel: #1d1d2c;
-    --good: #4fce85;
-    --bad: #e67466;
+    --bg: #15171c;
+    --fg: #e9ebef;
+    --muted: #99a2ad;
+    --accent: #4f83f1;
+    --accent-hover: #6a97f5;
+    --accent-soft: #1e2a44;
+    --border: #2d323c;
+    --panel: #1d2027;
+    --surface-2: #262a33;
+    --good: #4cc88a;
+    --bad: #e77466;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 18px rgba(0, 0, 0, .35);
   }
 }
 
@@ -27,40 +48,41 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--fg);
-  line-height: 1.5;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
 header, main, footer {
-  max-width: 880px;
+  max-width: 920px;
   margin: 0 auto;
-  padding: 1.5rem 1.25rem;
+  padding: var(--sp-4) var(--sp-3);
 }
+main { padding-top: var(--sp-2); }
 
 h1 {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 2.2rem;
-  margin: 0 0 0.5rem;
-  letter-spacing: 0.02em;
+  font-size: 1.9rem;
+  font-weight: 650;
+  margin: 0 0 0.35rem;
+  letter-spacing: -0.02em;
 }
 
-.tagline { color: var(--fg); max-width: 68ch; }
-.honesty { color: var(--muted); font-size: 0.92rem; max-width: 68ch; }
+.tagline { color: var(--fg); max-width: 66ch; }
+.honesty { color: var(--muted); font-size: 0.9rem; max-width: 66ch; line-height: 1.6; }
 
 .purpose {
   display: inline-block;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.72rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--accent);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.2rem 0.7rem;
-  margin-bottom: 0.6rem;
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.28rem 0.7rem;
+  margin-bottom: 0.9rem;
 }
 
 .tab-groups {
@@ -102,32 +124,74 @@ h1 {
 }
 .tab:hover { color: var(--fg); }
 
+/* Livello 1 (Crea / Apri) sopra la griglia di modalità. Guardia [hidden]
+   esplicita sul gruppo: .tab-group non ha un display proprio, ma questo
+   progetto è stato morso più volte dalla collisione classe-vs-[hidden],
+   quindi la rendiamo esplicita per costruzione. */
+.product-switch {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+.product-tab {
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  padding: 0.5rem 1.4rem;
+  border-radius: 999px;
+}
+.product-tab.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.product-tab:hover:not(.active) { color: var(--fg); border-color: var(--fg); }
+.tab-group[hidden] { display: none; }
+
 .dropzone {
-  border: 2px dashed var(--border);
-  border-radius: 12px;
-  padding: 2.5rem 1.5rem;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-5) var(--sp-3);
   text-align: center;
+  background: var(--bg);
   transition: border-color 0.15s, background 0.15s;
 }
 .dropzone.dragover {
   border-color: var(--accent);
-  background: var(--panel);
+  background: var(--accent-soft);
 }
 
-#drop-label { margin: 0 0 1rem; font-size: 1.05rem; }
+#drop-label { margin: 0 0 1rem; font-size: 1.02rem; }
 
+/* Bottone secondario (default): pulito, bordato. */
 button {
   font: inherit;
+  font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--bg);
   color: var(--fg);
-  border-radius: 8px;
-  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 1.05rem;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
-button:hover { border-color: var(--accent); }
+button:hover { border-color: var(--accent); color: var(--accent); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
-button:disabled:hover { border-color: var(--border); }
+button:disabled:hover { border-color: var(--border); color: var(--fg); }
+
+/* Bottone primario (blu pieno): l'azione principale di ogni pannello =
+   scaricare il payload. Un solo primario per non competere con le altre. */
+button[id$="dl-payload"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button[id$="dl-payload"]:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
+button[id$="dl-payload"]:disabled { background: var(--accent); }
 
 #browse-btn {
   background: var(--accent);
@@ -143,6 +207,12 @@ button:disabled:hover { border-color: var(--border); }
   font-size: 0.85rem;
   color: var(--muted);
 }
+/* same specificity bug already found for .qr-block (CLAUDE.md §9.9):
+   the native [hidden] rule and an unconditional class rule both have
+   specificity (0,1,0), and this author stylesheet comes after the UA
+   sheet in the cascade -- without this, toggling `hidden` on a
+   .dim-picker element does nothing visually. */
+.dim-picker[hidden] { display: none; }
 .dim-picker select {
   font: inherit;
   border-radius: 6px;
@@ -161,7 +231,23 @@ button:disabled:hover { border-color: var(--border); }
 }
 .status.error { color: var(--bad); }
 
-.result { margin-top: 1.5rem; }
+/* Contenitore uniforme di ogni modalità (encoder o consulta). Hook
+   strutturale condiviso: NON impone una larghezza (il viewer 3D e la
+   griglia immagini restano a piena larghezza), solo una spaziatura
+   verticale coerente tra badge / aiuto / input / risultato. È l'ancora
+   su cui lo step "design system" costruirà il look a card. */
+/* Ogni modalità è una card: superficie, bordo, ombra leggera, respiro.
+   Raggruppa visivamente badge + aiuto + input + risultato. */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-4);
+  box-shadow: var(--shadow-sm);
+}
+.panel > .purpose { margin-top: 0; }
+
+.result { margin-top: var(--sp-4); }
 
 .images {
   display: grid;
@@ -205,15 +291,16 @@ table.stats td:last-child { text-align: right; font-variant-numeric: tabular-num
 .stat-bad { color: var(--bad); font-weight: 600; }
 
 table.stats tr.part { cursor: pointer; }
-table.stats tr.part:hover td { background: var(--panel); }
+table.stats tr.part:hover td { background: var(--surface-2); }
 table.stats tr.part.selected td { background: var(--accent); color: #fff; }
 table.stats tr.part.selected td:first-child { color: #fff; }
 
 .downloads {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.6rem;
+  align-items: center;
   flex-wrap: wrap;
-  margin-top: 1.25rem;
+  margin-top: var(--sp-3);
 }
 
 .qr-block {
@@ -274,6 +361,7 @@ table.stats tr.part.selected td:first-child { color: #fff; }
   align-items: center;
   gap: 0.35rem;
 }
+.qr-page-item[hidden] { display: none; } /* same [hidden] specificity bug as .qr-block, §9.9 */
 .qr-page-item img {
   width: 100%;
   max-width: 160px;
@@ -314,6 +402,38 @@ table.stats tr.part.selected td:first-child { color: #fff; }
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0 0.35rem;
+}
+
+/* full matched row(s) from a component info table search (3D viewer
+   search bar) -- overlays a dark model-viewer panel regardless of the
+   page's own light/dark theme, same reasoning as the other overlays in
+   this same panel (search-note, BOM, doc-index). Empty/no match: no
+   content, no border, invisible. */
+.search-results-table {
+  overflow: auto;
+  background: rgba(20, 20, 20, 0.92);
+  border-radius: 6px;
+  display: none;
+}
+.search-results-table.open {
+  display: block;
+}
+.search-results-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.search-results-table th,
+.search-results-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #333;
+  text-align: left;
+  color: #eee;
+}
+.search-results-table th {
+  background: #2a2a2a;
+  position: sticky;
+  top: 0;
 }
 .doc-preview {
   margin-top: 0.5rem;
@@ -548,6 +668,33 @@ details {
   padding: 0.6rem 0.9rem;
 }
 summary { cursor: pointer; color: var(--muted); }
+
+/* Aiuto inline per-pannello ("A cosa serve"): disclosure leggera, senza
+   il box bordato del <details> avanzato (DSL) -- è testo di aiuto, non
+   una card. Stato iniziale del pannello = badge + input, l'aiuto è
+   opzionale (progressive disclosure). */
+.panel-help {
+  margin-top: 0.4rem;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+.panel-help > summary { font-size: 0.85rem; }
+.panel-help .tagline { margin: 0.5rem 0 0; }
+
+/* Azioni secondarie ("Altre opzioni") dentro la riga .downloads: una
+   disclosure leggera e inline, non il box bordato del <details> avanzato,
+   così le azioni primarie (scarica payload / genera QR) restano in
+   evidenza. Il layout a card/chip è lasciato al round stile. */
+.more-actions {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  align-self: center;
+}
+.more-actions > summary { font-size: 0.85rem; }
+.more-actions > button { margin: 0.4rem 0.4rem 0 0; }
 #program-text {
   margin: 0.75rem 0 0;
   max-height: 320px;
@@ -561,3 +708,70 @@ footer {
   font-size: 0.85rem;
 }
 footer a { color: var(--accent); }
+
+/* trasporto-qr.html: explicit choice between generation/acquisition
+   modes, each shown as a small card with a one-line pro/con instead of
+   a bare dropdown -- the tradeoff (fewer taps vs. fewer codes needed)
+   isn't obvious from the option name alone. Named .qr-mode-picker, NOT
+   .mode-picker: that name is already used (index.html's "Sequenza
+   navigabile / File indipendenti" toggle) with different, incompatible
+   rules -- reusing it here would have silently changed that unrelated
+   toggle's appearance too. */
+.qr-mode-picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 1rem;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.qr-mode-picker legend {
+  padding: 0 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.mode-option:hover { background: var(--panel); }
+.mode-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--panel);
+}
+.mode-option input[type="radio"] { margin-top: 0.3rem; }
+.mode-option strong { display: block; font-size: 0.95rem; }
+.mode-option .mode-pro-con {
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.15rem;
+}
+
+/* continuous camera acquisition (qr-camera-scanner.js): live preview +
+   progress, shown only when that mode is selected. */
+.camera-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+}
+.camera-view[hidden] { display: none; } /* same [hidden] specificity bug as .qr-block, §9.9 */
+.camera-view video {
+  width: 100%;
+  max-width: 480px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+.camera-progress {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.camera-progress.active { color: var(--fg); }
