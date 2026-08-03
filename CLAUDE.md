@@ -5480,3 +5480,79 @@ alternativo dietro la stessa astrazione `chunk_payload`/
 `assemble_chunks`), raggiungibile con un flag esplicito — mai un
 comportamento di default cambiato silenziosamente, stesso principio
 già seguito per ogni altra estensione di questo genere nel progetto.
+
+### 13.8 Portato sulla demo web (`fountain-qr.html`) — ancora sperimentale, ancora nessun file del motore toccato
+
+Richiesta diretta di sessione: rendere il prototipo raggiungibile dalla
+demo web reale (Vercel), non solo da `experiments/fountain-qr-poc/`
+servito a mano — così il test con hardware reale (§13.7, ancora il
+passo mancante) si può fare aprendo un URL pubblico su due dispositivi
+qualunque, senza clonare il repository né gestire un certificato
+autofirmato locale. **Passo intermedio esplicito**, non l'integrazione
+nel motore: resta un secondo canale additivo, mai in sostituzione del
+trasporto QR classico, mai a contatto con `balzar/payload.py`/
+`balzar/qr.py`.
+
+**Perché è stato semplice portarlo senza toccare nessuna funzione
+serverless**: l'intero prototipo (generazione QR via `qrcode` JS,
+lettura via `jsQR`, codifica/decodifica fountain) è **client-side
+puro** — `serve_https.py` del prototipo originale era solo un file
+server statico con un certificato, non chiamava mai codice Python.
+Portarlo sulla demo web significa quindi solo aggiungere pagine/script
+statici, zero endpoint Vercel nuovi.
+
+**File nuovi, tutti alla radice del repository** (stesso livello di
+`trasporto-qr.html`/`index.html`, non sotto `experiments/`):
+`fountain-qr.html` (mittente + ricevitore sulla stessa pagina, stesso
+pattern a due sezioni di `trasporto-qr.html`), `fountain-qr.js`
+(wiring DOM, porting diretto di `sender.js`+`receiver.js` del
+prototipo con un pulsante di stop/reset in più per il ricevitore),
+`fountain-protocol.js` e `qrcode.min.js` copiati/vendorizzati dal
+prototipo (mai modificati nella logica, solo il commento di testata di
+`fountain-protocol.js` aggiornato per riflettere il nuovo consumatore).
+`jsQR.min.js` è riusato **senza copie aggiuntive**: già vendorizzato
+alla radice per `trasporto-qr.html`. Nuove voci in
+`THIRD-PARTY-NOTICES.md` (`qrcode` npm, Ryan Day, MIT; nota separata
+per `fountain-protocol.js` come porting fedele da
+`decimen-optical-transfer`, MIT, attribuzione già nell'header del
+file). Link incrociati aggiunti in `index.html` e `trasporto-qr.html`
+(mai in `landing.html`: quella pagina è deliberatamente "solo capacità
+reali", tono curato per il marketing, non il posto giusto per una
+funzionalità etichettata sperimentale — stesso principio già seguito
+per l'esclusione della musica da quella pagina).
+
+**Onestà esplicita nella UI stessa**, non solo in questo documento:
+l'header della pagina porta un badge "Sperimentale — non ancora
+validato con hardware reale" (stesso pattern `.purpose` già usato per i
+badge "Codifica"/"Consumo" delle altre schede) e un paragrafo che
+dichiara la differenza dal trasporto classico e il fatto che manca
+ancora una verifica con fotocamera/schermo fisici — nessuna promessa di
+affidabilità superiore non ancora dimostrata con hardware vero.
+
+**Verificato con Playwright contro un server statico locale** (stessa
+metodologia già nota nel progetto, non contro il deploy Vercel reale —
+stessa limitazione di rete di sempre), non solo scritto:
+- **Round-trip end-to-end reale sulla pagina wired**, non sul prototipo
+  isolato: catturati 70 fotogrammi dal canvas del mittente
+  (`send-canvas.toDataURL()`, equivalente a una fotocamera che
+  fotografa lo schermo) del payload di prova (50 KB, K=36 capitoli),
+  decodificati con lo stesso `jsQR`/`fountain-protocol.js` caricati
+  dalla pagina — **bit-identico** all'originale, completato dopo 54
+  fotogrammi nuovi (nessun duplicato scartato per errore, nessun QR
+  non riconosciuto sui 70 catturati), zero errori console/pagina.
+- **Gestione errore fotocamera pulita**: click su "Avvia fotocamera"
+  senza un dispositivo disponibile (ambiente headless, nessun
+  `--use-fake-device-for-media-stream` in questo test) produce il
+  messaggio d'errore atteso (`Errore fotocamera: Requested device not
+  found`) e ripristina il pulsante "Avvia fotocamera" — nessuna
+  eccezione non gestita, nessuno stato bloccato a metà.
+- **Nessuna regressione sulle pagine esistenti**: `index.html` e
+  `trasporto-qr.html` caricano senza errori console con il nuovo link
+  aggiunto, il link verso `fountain-qr.html` è presente su entrambe.
+
+**Non ancora fatto**: nessun test con una vera fotocamera/schermo
+fisici (identico al gap già dichiarato in §13.7 — questa sessione ha
+solo reso quel test raggiungibile da un URL pubblico, non lo ha
+sostituito); nessuna integrazione nel motore balzar (CLI/GUI
+desktop/`balzar/fountain.py`), che resta esplicitamente il passo
+successivo, condizionato al risultato di quel test con hardware vero.

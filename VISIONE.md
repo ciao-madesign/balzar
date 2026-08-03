@@ -205,12 +205,16 @@ non è fattibile con l'architettura attuale.
   il trasporto QR classico resta la scelta giusta). Guadagno reale
   misurato (Monte Carlo + browser reale): 2-4× più veloce, fino a 5,7×
   meno esposizioni nel caso peggiore, sullo stesso payload/scala di un
-  assieme 3D reale. **Non integrato**: manca ancora una verifica con
-  fotocamera/schermo fisici reali (solo simulazione/browser finora);
-  nessuna decisione presa su un eventuale modulo `balzar/fountain.py`
-  come modalità di trasporto aggiuntiva ed esplicita, mai in
-  sostituzione del trasporto QR classico. Vedi `CLAUDE.md` §13 per i
-  numeri completi.
+  assieme 3D reale. Ora raggiungibile anche dalla demo web
+  (`fountain-qr.html`, link da `index.html`/`trasporto-qr.html`,
+  etichettata esplicitamente "sperimentale" in pagina) — un passo
+  intermedio per rendere il test con hardware reale provabile da un URL
+  pubblico, non ancora l'integrazione nel motore. **Non integrato nel
+  prodotto**: manca ancora una verifica con fotocamera/schermo fisici
+  reali (solo simulazione/browser finora); nessuna decisione presa su
+  un eventuale modulo `balzar/fountain.py` come modalità di trasporto
+  aggiuntiva ed esplicita, mai in sostituzione del trasporto QR
+  classico. Vedi `CLAUDE.md` §13 per i numeri completi.
 
 ---
 

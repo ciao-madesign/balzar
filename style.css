@@ -775,3 +775,42 @@ footer a { color: var(--accent); }
   color: var(--muted);
 }
 .camera-progress.active { color: var(--fg); }
+
+/* fountain-qr.html (fountain-coding transport, experimental — CLAUDE.md
+   §13): reuses .card/.honesty/.camera-view for everything shared, these
+   are the few pieces with no equivalent elsewhere (QR sender canvas,
+   completion progress bar). */
+.fountain-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+}
+.fountain-canvas-wrap canvas {
+  background: #fff;
+  image-rendering: pixelated;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  max-width: 100%;
+}
+.fountain-specs {
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  color: var(--muted);
+  text-align: center;
+}
+.fountain-bar-bg {
+  background: var(--surface-2);
+  height: 10px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  margin: 0.8rem 0;
+}
+.fountain-bar-bg[hidden] { display: none; }
+.fountain-bar {
+  background: var(--accent);
+  height: 100%;
+  width: 0%;
+  transition: width 0.2s;
+}
+.fountain-result { margin-top: 0.8rem; }
+.fountain-result .done { color: var(--good); font-weight: 600; }

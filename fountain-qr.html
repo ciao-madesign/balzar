@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trasporto a fontana (sperimentale) — balzar</title>
+<link rel="stylesheet" href="style.css">
+<script src="qrcode.min.js"></script>
+<script src="jsQR.min.js"></script>
+<script src="fountain-protocol.js"></script>
+</head>
+<body>
+  <header>
+    <h1>balzar</h1>
+    <span class="purpose">Sperimentale — non ancora validato con hardware reale</span>
+    <p class="tagline">Trasporto QR "a fontana" (fountain coding) — un <strong>secondo canale</strong>,
+      aggiuntivo e indipendente dal <a href="trasporto-qr.html">trasporto QR classico</a>, mai in sua
+      sostituzione. Come quello classico, non passa dal motore generativo di balzar: un file
+      qualunque si spezzetta e si riassembla identico, bit per bit.</p>
+    <p class="honesty">Differenza rispetto al metodo classico: qui il mittente trasmette un flusso
+      <strong>continuo</strong> di QR (uno schermo che cambia più volte al secondo) e il ricevitore
+      accetta <strong>qualunque</strong> sottoinsieme sufficiente di fotogrammi, non deve vedere ogni
+      indice esatto — utile quando il mittente è uno schermo attivo (es. un pannello macchina) più che
+      per un'etichetta statica stampata, dove il metodo classico resta la scelta giusta. Valutato con
+      un prototipo isolato e misure reali (Monte Carlo + browser, non ancora fotocamera/schermo fisici)
+      — vedi <code>CLAUDE.md</code> §13 per i numeri completi. Porting fedele da
+      <a href="https://github.com/bashalarmistalt/decimen-optical-transfer" target="_blank" rel="noopener">decimen-optical-transfer</a>
+      (licenza MIT), algoritmo invariato.</p>
+    <p class="nav-links">← <a href="landing.html">torna alla home</a> ·
+      <a href="index.html">torna alla demo balzar</a> ·
+      <a href="trasporto-qr.html">trasporto QR classico</a></p>
+  </header>
+
+  <main>
+
+    <section class="card">
+      <h2>1. Mittente — schermo che trasmette</h2>
+      <p>Apri questa pagina su uno schermo (PC, tablet, o il monitor di una macchina). Scegli un file,
+        oppure lascia scorrere il payload di prova (50 KB) — il mittente mostra un flusso continuo di
+        QR finché non lo chiudi o cambi file.</p>
+      <p class="honesty">Il file resta sul tuo dispositivo: la codifica a fontana e la generazione dei
+        QR avvengono <strong>interamente nel browser</strong> (libreria <code>qrcode</code>, licenza
+        MIT) — nessun upload, nessuna chiamata al server.</p>
+      <p>
+        <input type="file" id="send-file-input" hidden>
+        <button id="send-browse-btn" type="button">Scegli un file</button>
+        <span id="send-file-label" class="status">nessun file scelto — verrà usato un payload di
+          prova (50 KB)</span>
+      </p>
+      <div class="fountain-canvas-wrap"><canvas id="send-canvas"></canvas></div>
+      <p id="send-specs" class="fountain-specs">in attesa di un file...</p>
+    </section>
+
+    <section class="card">
+      <h2>2. Ricevitore — fotocamera che legge</h2>
+      <p>Su un secondo dispositivo (tipicamente un telefono), apri questa stessa pagina, scorri qui e
+        avvia la fotocamera puntandola verso lo schermo del mittente. La lettura si completa da sola,
+        zero tocchi — non importa quali fotogrammi legge né in che ordine.</p>
+      <section class="camera-view">
+        <video id="recv-video" autoplay muted playsinline hidden></video>
+        <div id="recv-bar-bg" class="fountain-bar-bg" hidden><div id="recv-bar" class="fountain-bar"></div></div>
+        <p id="recv-status" class="camera-progress">pronto.</p>
+        <button id="recv-start-btn" type="button">Avvia fotocamera</button>
+        <button id="recv-stop-btn" type="button" hidden>Ferma fotocamera</button>
+        <button id="recv-reset-btn" type="button" hidden>Ricomincia lettura</button>
+      </section>
+      <div id="recv-result" class="fountain-result"></div>
+    </section>
+
+    <section class="card">
+      <h2>Stato di questa pagina</h2>
+      <p class="honesty">Verificato finora: il mittente genera QR validi (controllato catturando un
+        fotogramma reale e decodificandolo), il ricevitore ricostruisce byte-per-byte identico
+        all'originale a partire da fotogrammi catturati da un mittente reale in esecuzione in un
+        browser — non ancora con una vera fotocamera di telefono puntata su un vero schermo, in
+        condizioni reali di luce/messa a fuoco/distanza. Se lo provi con hardware vero, il numero che
+        conta (KB/s effettivo, affidabilità di lettura) è quello che decide se integrarlo davvero come
+        modalità del progetto — nessun file esistente di balzar viene toccato da questa pagina finché
+        quella decisione non viene presa.</p>
+    </section>
+
+  </main>
+
+  <script src="fountain-qr.js"></script>
+</body>
+</html>

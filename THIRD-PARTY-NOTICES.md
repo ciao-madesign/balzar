@@ -54,6 +54,17 @@ Distribuiti come file statici nel repository (non da CDN, per l'uso offline).
 |---|---|---|---|
 | @google/model-viewer | 4.3.1 | Apache-2.0 | `model-viewer.min.js` |
 | jsQR | 1.4.0 | Apache-2.0 | `jsQR.min.js` |
+| qrcode (npm, Ryan Day) | 1.5.4 | MIT | `qrcode.min.js` (bundle IIFE via esbuild, generazione QR client-side per `fountain-qr.html`) |
+
+### `fountain-protocol.js` — porting da un progetto MIT esterno
+
+`fountain-protocol.js` (usato da `fountain-qr.html`, il trasporto QR "a
+fontana" sperimentale — vedi `CLAUDE.md` §13) è un porting fedele da
+TypeScript a JavaScript puro di `protocol.ts`/`fountain.ts` del progetto
+[decimen-optical-transfer](https://github.com/bashalarmistalt/decimen-optical-transfer)
+(MIT), con solo le annotazioni di tipo TypeScript rimosse — l'algoritmo
+(codifica/decodifica Luby Transform, header di frame, hash FNV-1a) è
+invariato. Attribuzione preservata nell'header del file stesso.
 
 ### Componenti incorporati dentro model-viewer
 
