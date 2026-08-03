@@ -181,6 +181,9 @@ class TestHandleRender(unittest.TestCase):
         self.assertFalse(resp["glb_omitted"])
         self.assertTrue(resp["glb_base64"])
         self.assertIn("payload_base64", resp)
+        # a bare BZM1 has no bundle wrapper to carry an alarm graph in --
+        # always present and null, never a missing key (CLAUDE.md SS14)
+        self.assertIsNone(resp["alarm_graph"])
 
     def test_corrupt_bzm1_gives_clean_400_not_500(self):
         from balzar.scene3d import MAGIC
@@ -216,6 +219,42 @@ class TestHandleRender(unittest.TestCase):
         self.assertEqual(resp["info_table"],
                          {"headers": ["codice_allarme", "nome_componente"], "rows": [["E100", "Bullone-M6"]]})
         self.assertTrue(any(d["label"] == "alarms.csv" for d in resp["documents"]))
+
+    def test_bzx1_bundle_with_alarm_graph_returns_it_and_skips_flat_table(self):
+        # Slice 3b (CLAUDE.md SS14): a bundle carrying KIND_ALARM_GRAPH
+        # instead of the flat KIND_ALARM -- alarm_graph should be
+        # returned, info_table should stay the empty default (the two
+        # mechanisms are mutually exclusive per bundle).
+        from balzar.alarm_graph import AlarmGraph, AlarmNode, CauseNode, ProcedureNode
+        from balzar.bundle import BundleItem, KIND_3D, KIND_ALARM_GRAPH, KIND_DOC, encode_bundle
+        from balzar.scene3d import encode_payload as encode_scene, parse_3dxml
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "assembly.3dxml")
+            with open(path, "wb") as fh:
+                fh.write(_make_3dxml_bytes())
+            scene_payload = encode_scene(parse_3dxml(path))
+
+        graph = AlarmGraph(
+            alarms=[AlarmNode("E100", "Allarme di prova", "Bullone-M6")],
+            causes=[CauseNode("cause:1", "Causa di prova")],
+            procedures=[ProcedureNode("proc:1", "procedura.txt")],
+            alarm_links=[("E100", "cause:1")],
+            cause_links=[("cause:1", "proc:1")],
+        )
+        bundle = encode_bundle([
+            BundleItem(KIND_3D, "assembly.b3d", scene_payload),
+            BundleItem(KIND_ALARM_GRAPH, "graph.json", graph.to_bytes()),
+            BundleItem(KIND_DOC, "procedura.txt", b"contenuto procedura"),
+        ])
+
+        status, resp = handle_render({"data": _b64(bundle)}, LOCAL_LIMITS)
+        self.assertEqual(status, 200)
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["alarm_graph"], graph.to_json_dict())
+        self.assertEqual(resp["info_table"], {"headers": [], "rows": []})
+        self.assertTrue(any(d["label"] == "procedura.txt" for d in resp["documents"]))
 
     def test_bzx1_documents_only_bundle_has_no_3d(self):
         from balzar.bundle import BundleItem, KIND_DOC, encode_bundle
@@ -406,6 +445,11 @@ class TestHandleEncode3D(unittest.TestCase):
         self.assertFalse(resp["glb_omitted"])
         self.assertGreater(len(resp["glb_base64"]), 0)
         self.assertIn("payload_base64", resp)
+        # no request field builds a KIND_ALARM_GRAPH bundle yet (needs
+        # the visual editor, Slice 4) -- always present and null so the
+        # frontend's shared rendering code never special-cases this
+        # endpoint (CLAUDE.md SS14)
+        self.assertIsNone(resp["alarm_graph"])
 
     def test_merge_names_field_is_optional_and_defaults_to_unchanged(self):
         status, resp = handle_encode_3d({"data": _b64(_make_3dxml_bytes())}, LOCAL_LIMITS)

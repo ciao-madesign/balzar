@@ -435,6 +435,60 @@ table.stats tr.part.selected td:first-child { color: #fff; }
   position: sticky;
   top: 0;
 }
+
+/* Read-only alarm/cause/procedure panel (Slice 3b, CLAUDE.md SS14) --
+   shown INSTEAD of the search-note/search-results/search-bar overlays
+   above when a bundle carries a KIND_ALARM_GRAPH item (app.js toggles
+   [hidden] on the *-wrap divs, never both sets visible at once). Same
+   "dark overlay regardless of page theme" reasoning as
+   .search-results-table: this sits on top of the model-viewer canvas,
+   not the page background. Class names (.ag-*) match viewer3d.py's
+   desktop version 1:1 -- same panel, two renderers. */
+.alarm-panel-wrap[hidden],
+.alarm-search-bar-wrap[hidden] { display: none; }
+.alarm-panel {
+  max-height: 50vh;
+  overflow-y: auto;
+  background: rgba(20, 20, 20, 0.92);
+  border-radius: 6px;
+  padding: 4px 0;
+}
+.ag-item { border-bottom: 1px solid #333; }
+.ag-item:last-child { border-bottom: none; }
+.ag-head {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #eee;
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.ag-head:hover { background: #2a2a2a; }
+.ag-code { font-family: ui-monospace, monospace; font-weight: bold; color: #f2a154; white-space: nowrap; }
+.ag-desc { color: #ccc; font-size: 0.8rem; flex: 1; }
+.ag-body { display: none; padding: 0 10px 10px 10px; font-size: 0.8rem; }
+.ag-item.open .ag-body { display: block; }
+.ag-cause { margin-bottom: 8px; }
+.ag-cause-label {
+  margin: 0 0 2px; font-size: 0.68rem; text-transform: uppercase;
+  color: #7fd1c5; letter-spacing: 0.04em;
+}
+.ag-cause-text { margin: 0 0 6px; color: #eee; }
+.ag-proc-btn {
+  background: #2a2340; border: 1px solid #6d28d9; color: #c9a8ff;
+  border-radius: 4px; padding: 4px 8px; font: inherit; font-size: 0.72rem; cursor: pointer;
+}
+.ag-proc-btn:hover { background: #352a52; }
+.alarm-search-bar-wrap input {
+  width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 6px;
+  border: 1px solid #555; background: rgba(20, 20, 20, 0.85); color: #eee; font: inherit;
+}
+
 .doc-preview {
   margin-top: 0.5rem;
   border: 1px solid var(--border);

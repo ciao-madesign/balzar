@@ -423,15 +423,15 @@
                  style="position:absolute;top:10px;left:10px">Mostra tutto</button>
           <button id="threed-export-btn" type="button" disabled
                  style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
-          <div style="position:absolute;bottom:52px;left:10px;right:10px;display:flex;
-               flex-direction:column;gap:6px;max-height:50vh">
+          <div id="threed-search-panel-wrap" style="position:absolute;bottom:52px;left:10px;right:10px;
+               display:flex;flex-direction:column;gap:6px;max-height:50vh">
             <p id="threed-search-note" style="margin:0;color:#eee;font-size:12px;
                background:rgba(20,20,20,0.7);padding:4px 8px;border-radius:4px;
                flex-shrink:0;max-height:60px;overflow-y:auto"></p>
             <div id="threed-search-results" class="search-results-table"></div>
           </div>
-          <div style="position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:8px;
-               align-items:center;flex-wrap:wrap">
+          <div id="threed-search-bar-wrap" style="position:absolute;bottom:10px;left:10px;right:10px;
+               display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input id="threed-search-input" type="text"
                    placeholder="Cerca in qualunque colonna della tabella…"
                    style="flex:1;min-width:200px;padding:6px 10px;border-radius:6px;
@@ -444,6 +444,15 @@
               Carica tabella componenti (CSV)
               <input id="threed-alarm-csv-input" type="file" accept=".csv,text/csv" hidden>
             </label>
+          </div>
+          <!-- Slice 3b (CLAUDE.md SS14): shown INSTEAD of the two wraps
+               above when the bundle carries a KIND_ALARM_GRAPH item
+               (mutually exclusive, toggled in app.js's setAlarmGraph). -->
+          <div id="threed-alarm-panel-wrap" class="alarm-panel-wrap" hidden>
+            <div id="threed-alarm-list" class="alarm-panel"></div>
+          </div>
+          <div id="threed-alarm-search-bar-wrap" class="alarm-search-bar-wrap" hidden>
+            <input id="threed-alarm-search-input" type="text" placeholder="Cerca allarme…">
           </div>
         </div>
         <details class="panel-help">
@@ -642,21 +651,29 @@
                  style="position:absolute;top:10px;left:10px">Mostra tutto</button>
           <button id="open-3d-export-btn" type="button" disabled
                  style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
-          <div style="position:absolute;bottom:52px;left:10px;right:10px;display:flex;
-               flex-direction:column;gap:6px;max-height:50vh">
+          <div id="open-3d-search-panel-wrap" style="position:absolute;bottom:52px;left:10px;right:10px;
+               display:flex;flex-direction:column;gap:6px;max-height:50vh">
             <p id="open-3d-search-note" style="margin:0;color:#eee;font-size:12px;
                background:rgba(20,20,20,0.7);padding:4px 8px;border-radius:4px;
                flex-shrink:0;max-height:60px;overflow-y:auto"></p>
             <div id="open-3d-search-results" class="search-results-table"></div>
           </div>
-          <div style="position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:8px;
-               align-items:center;flex-wrap:wrap">
+          <div id="open-3d-search-bar-wrap" style="position:absolute;bottom:10px;left:10px;right:10px;
+               display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input id="open-3d-search-input" type="text"
                    placeholder="Cerca in qualunque colonna della tabella…"
                    style="flex:1;min-width:200px;padding:6px 10px;border-radius:6px;
                           border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;
                           font:inherit">
             <button id="open-3d-search-btn" type="button">Cerca</button>
+          </div>
+          <!-- Slice 3b (CLAUDE.md SS14): shown INSTEAD of the two wraps
+               above when the bundle carries a KIND_ALARM_GRAPH item. -->
+          <div id="open-3d-alarm-panel-wrap" class="alarm-panel-wrap" hidden>
+            <div id="open-3d-alarm-list" class="alarm-panel"></div>
+          </div>
+          <div id="open-3d-alarm-search-bar-wrap" class="alarm-search-bar-wrap" hidden>
+            <input id="open-3d-alarm-search-input" type="text" placeholder="Cerca allarme…">
           </div>
         </div>
         <table class="stats" id="open-3d-stats-table"></table>

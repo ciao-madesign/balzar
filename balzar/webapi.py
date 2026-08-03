@@ -436,6 +436,14 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         response["info_table"] = {"headers": [], "rows": []}
         response["documents"] = []
 
+    # This endpoint has no request field yet to build a KIND_ALARM_GRAPH
+    # bundle (that needs the visual editor, Slice 4, CLAUDE.md SS14) --
+    # always null here, present for the same reason every other field is
+    # always present: so the frontend's shared rendering code (see
+    # app.js renderScenePanel) never has to special-case a missing key
+    # depending on which endpoint produced the response.
+    response["alarm_graph"] = None
+
     return 200, response
 
 
@@ -897,7 +905,8 @@ def _handle_render_3d(raw: bytes, limits: Limits) -> tuple[int, dict]:
     glb_omitted = len(glb_b64) > limits.max_payload_b64_bytes
 
     response = {"ok": True, "kind": "3d", "bundled": False,
-               "info_table": {"headers": [], "rows": []}, "documents": []}
+               "info_table": {"headers": [], "rows": []}, "documents": [],
+               "alarm_graph": None}  # a bare BZM1 has no bundle wrapper to carry one in
     response.update(_scene3d_stats(scene))
     response["glb_omitted"] = glb_omitted
     response["glb_base64"] = "" if glb_omitted else glb_b64
@@ -909,11 +918,14 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
     """A BZX1 bundle: same dispatch open_bundle_in_browser already does
     for the desktop viewer (balzar/viewer3d.py), reused here to build a
     JSON response instead of an HTML page -- at most one 3D item is
-    shown (the first, same rule as the desktop viewer), every alarm item
-    feeds the search bar, every 2d/alarm/doc item lands in the document
+    shown (the first, same rule as the desktop viewer), an alarm item
+    feeds either the flat search bar (KIND_ALARM, `info_table`) or the
+    block/procedure panel (KIND_ALARM_GRAPH, `alarm_graph` -- Slice 3b,
+    CLAUDE.md SS14), and every 2d/alarm/doc item lands in the document
     index via the same _documents_from_items already used by the
     "Assemblee 3D" tab's own bundle path."""
-    from .bundle import BundleError, KIND_3D, decode_bundle, is_alarm_kind
+    from .alarm_graph import AlarmGraph
+    from .bundle import BundleError, KIND_3D, KIND_ALARM_GRAPH, decode_bundle, is_alarm_kind
 
     try:
         items = decode_bundle(raw)
@@ -925,25 +937,50 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
     three_d_items = [it for it in items if it.kind == KIND_3D]
     response = {"ok": True, "kind": "bundle", "bundled": True, "has_3d": bool(three_d_items)}
 
-    # parsed before the 3D block below so its cell values can collapse
-    # the BOM/GLB the same way handle_encode_3d does -- see generate_bom.
-    # Only the first alarm-marked item becomes the info table (same
-    # "first one wins" rule as viewer3d.open_bundle_in_browser): several
-    # could have entirely different columns, so concatenating rows
-    # across mismatched schemas doesn't generalize the way it safely
-    # could for the old fixed two-column format.
+    # The two alarm mechanisms are mutually exclusive per bundle (see
+    # bundle.py's module docstring) -- KIND_ALARM_GRAPH wins if somehow
+    # both are present, same "richer one wins, not silently merged"
+    # principle already used below for multiple 3D items, and already
+    # applied identically in viewer3d.open_bundle_in_browser for the
+    # desktop viewer.
+    alarm_graph_item = next((it for it in items if it.kind == KIND_ALARM_GRAPH), None)
     info_table = None
-    try:
-        for it in items:
-            if is_alarm_kind(it.kind):
-                info_table = parse_component_table_text(it.data.decode("utf-8"))
-                break
-    except UnicodeDecodeError as exc:
-        return 400, {"ok": False, "error": f"tabella componenti nel bundle non e' UTF-8 valida: {exc}"}
-    except ValueError as exc:
-        return 400, {"ok": False, "error": f"tabella componenti nel bundle non valida: {exc}"}
+    alarm_graph = None
+    if alarm_graph_item is not None:
+        try:
+            alarm_graph = AlarmGraph.from_bytes(alarm_graph_item.data).to_json_dict()
+        except (ValueError, KeyError) as exc:
+            return 400, {"ok": False, "error": f"grafo allarmi nel bundle non valido: {exc}"}
+    else:
+        # parsed before the 3D block below so its cell values can
+        # collapse the BOM/GLB the same way handle_encode_3d does -- see
+        # generate_bom. Only the first alarm-marked item becomes the
+        # info table (same "first one wins" rule as
+        # viewer3d.open_bundle_in_browser): several could have entirely
+        # different columns, so concatenating rows across mismatched
+        # schemas doesn't generalize the way it safely could for the old
+        # fixed two-column format.
+        try:
+            for it in items:
+                if is_alarm_kind(it.kind):
+                    info_table = parse_component_table_text(it.data.decode("utf-8"))
+                    break
+        except UnicodeDecodeError as exc:
+            return 400, {"ok": False, "error": f"tabella componenti nel bundle non e' UTF-8 valida: {exc}"}
+        except ValueError as exc:
+            return 400, {"ok": False, "error": f"tabella componenti nel bundle non valida: {exc}"}
     response["info_table"] = info_table.to_json_dict() if info_table else {"headers": [], "rows": []}
-    collapse_names = info_table.all_values() if info_table else None
+    response["alarm_graph"] = alarm_graph
+
+    # any candidate string (a component-table cell value, or an alarm's
+    # own `component` field) is offered to collapse its own BOM/GLB
+    # entry into a single row/highlight group -- see
+    # scene3d.generate_bom's collapse_names; unmatched candidates are
+    # simply ignored, same reasoning as viewer3d.open_bundle_in_browser.
+    if alarm_graph is not None:
+        collapse_names = {a["component"] for a in alarm_graph["alarms"] if a.get("component")} or None
+    else:
+        collapse_names = info_table.all_values() if info_table else None
 
     if three_d_items:
         from .scene3d import Scene3DError, decode_payload

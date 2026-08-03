@@ -5831,14 +5831,93 @@ per il campo `component` (colonna assente → default vuoto, colonna
 presente → valore letto, sopravvive al round-trip JSON). Suite
 completa: 401 test, tutti verdi.
 
-### 14.4 Prossimi slice (non ancora fatti)
+### 14.4 Slice 3b — stessa lettura sulla demo web (fatto)
 
-- **Slice 3b — stessa lettura sulla demo web** (`app.js`/`webapi.py`,
-  tab "Assemblee 3D"/"Apri programma"): stessa UI a blocchi, dati reali
-  dal bundle decodificato lato server, non ancora fatto.
+Stesso pannello a blocchi di Slice 3, ora anche su `app.js`/`webapi.py`
+— tab "Apri programma" (`_handle_render_bundle`, il caso che conta
+davvero: un `.bzx` con un item `KIND_ALARM_GRAPH` caricato dall'utente)
+e tab "Assemblee 3D" (`handle_encode_3d`, che oggi non può ancora
+*produrne* uno da input utente — manca l'editor, Slice 4 — ma la stessa
+UI condivisa è pronta a mostrarlo appena esisterà).
+
+**Backend**: nuovo campo `alarm_graph` in tutte e tre le risposte che
+portano dati di scena (`handle_encode_3d`, `_handle_render_3d`,
+`_handle_render_bundle`) — **sempre presente**, anche quando `null`,
+così il codice di rendering condiviso lato client non deve mai
+distinguere "chiave assente" da "nessun grafo" a seconda
+dell'endpoint. Solo `_handle_render_bundle` può davvero valorizzarlo
+(decodifica il primo item `KIND_ALARM_GRAPH` via `AlarmGraph.from_bytes`),
+con la stessa regola di esclusione reciproca già decisa per il viewer
+desktop: se presente, `info_table` resta ai valori di default e
+`collapse_names` viene costruito dai `component` degli allarmi invece
+che dalle celle della tabella piatta.
+
+**Frontend**: `createSceneViewerController`/`renderScenePanel` (già
+condivisi tra le due schede, §9.20) guadagnano `renderAlarmGraph` — la
+stessa logica di `_alarm_graph_html`/`_ALARM_GRAPH_JS` del viewer
+desktop, riscritta in JS nativo invece che riusata via porting
+automatico (stesso principio già seguito ovunque nel progetto per il
+codice client-side: una è incorporata in un f-string Python, l'altra è
+uno script statico, nessun modo di condividerla direttamente). Stessi
+nomi di classe (`.ag-item`, `.ag-head`, ecc.) — un solo pannello,
+due renderer.
+
+**Riuso invece di duplicare l'anteprima procedura**: la ricerca "apri
+procedura" non costruisce una seconda UI di anteprima — richiama
+`openDoc()`, la stessa funzione già usata dall'indice documenti
+("documenti nel bundle"), appendendo l'anteprima nello stesso
+contenitore. Refactoring minimo necessario per questo: `openDoc(doc,
+li)` prendeva l'elemento da cui risalire di due livelli
+(`li.parentElement.parentElement`) per trovare dove appendere
+l'anteprima — cambiato in `openDoc(doc, containerEl)`, con
+`renderDocList` che calcola quel contenitore al posto suo (comportamento
+identico per il chiamante esistente) così un secondo chiamante (il
+pulsante procedura, che ha già il contenitore a portata di mano) può
+passarlo direttamente senza bisogno di un `<li>` da cui derivarlo.
+
+**Verificato con Playwright contro un devserver locale reale** (route
+`/api/render`/`/api/encode_3d` verso le vere `handle_render`/
+`handle_encode_3d`, non un mock — stessa metodologia già consolidata
+nel progetto): upload reale del bundle 3D+grafo+procedura (stesso
+usato per la verifica del viewer desktop) tramite il vero file input
+del tab "Apri programma" → pannello allarmi presente, **nessuna**
+tabella di ricerca piatta (esclusione reciproca confermata sul DOM
+reale, non assunta) → click su un allarme evidenzia il componente 3D
+corretto (**materiali veri letti da `model.materials`**, non solo
+stato DOM) → click sul pulsante procedura apre l'anteprima con
+**contenuto reale** del documento (stesso `openDoc` dell'indice
+documenti) → allarme senza causa mostra il messaggio onesto senza
+toccare il 3D → filtro di ricerca funzionante. **Nessuna regressione**
+verificata esplicitamente su entrambi i percorsi esistenti: un bundle
+con la vecchia tabella piatta (`KIND_ALARM`) continua a mostrare la
+ricerca come prima (pannello allarmi correttamente nascosto), e un
+encode 3DXML semplice sul tab "Assemblee 3D" non attiva mai il
+pannello allarmi. Zero errori console in ogni fase.
+
+**Bug di ambiente scoperto e risolto durante la verifica, non nel
+codice di produzione**: il primo tentativo restava bloccato in attesa
+dell'evento `load` di `<model-viewer>` — causa isolata:
+`IntersectionObserver` non considerava l'elemento "intersecting"
+(model-viewer ritarda il caricamento del modello finché non entra
+nel viewport), risolto con uno `scrollIntoViewIfNeeded()` esplicito
+prima di attendere il caricamento — un dettaglio del banco di prova
+Playwright, non un comportamento da correggere nel prodotto.
+
+Test aggiunti in `tests/test_webapi.py`: `alarm_graph` sempre presente
+e `null` per `handle_encode_3d`/un BZM1 nudo; un nuovo test per
+`_handle_render_bundle` con un vero item `KIND_ALARM_GRAPH` (grafo
+restituito correttamente, `info_table` resta ai valori di default).
+Suite completa: 402 test, tutti verdi.
+
+### 14.5 Prossimi slice (non ancora fatti)
+
 - **Slice 4 — editor visivo** in Balzar Studio: drag-to-connect reale,
   il pezzo più grande e nuovo, verificato dal mockup interattivo prima
-  di scrivere codice di produzione.
+  di scrivere codice di produzione. Servirà anche estendere
+  `handle_encode_3d`/la GUI desktop con un modo di *produrre* un bundle
+  `KIND_ALARM_GRAPH` da input utente (oggi solo `_handle_render_bundle`
+  sa leggerne uno, nessun percorso di codifica da CSV+editor esiste
+  ancora su nessuna delle due interfacce).
 
 Ogni slice: implementazione mirata (no overcoding), test automatici
 verdi sull'intera suite, nota di decisione qui prima di passare allo

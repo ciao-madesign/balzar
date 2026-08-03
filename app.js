@@ -933,12 +933,18 @@ function renderDocList(listEl, documents) {
     const li = document.createElement("li");
     li.innerHTML = `<span class="role">${escapeHtml(doc.role)}</span>` +
       `<span>${escapeHtml(doc.label)}</span>`;
-    li.addEventListener("click", () => openDoc(doc, li));
+    // two levels up from the <li> is the <details>/wrapper the whole
+    // doc index lives in -- computed HERE (the doc-index click path)
+    // rather than inside openDoc itself, so a second caller with a
+    // different container on hand (the alarm panel's "Apri procedura"
+    // button, Slice 3b) can just pass it directly instead of needing an
+    // <li> to derive it from.
+    li.addEventListener("click", () => openDoc(doc, li.parentElement.parentElement));
     listEl.appendChild(li);
   });
 }
 
-function openDoc(doc, li) {
+function openDoc(doc, containerEl) {
   const existing = document.querySelector(".doc-preview");
   if (existing) existing.remove();
   const e = docExt(doc.label);
@@ -984,7 +990,7 @@ function openDoc(doc, li) {
     pre.textContent = new TextDecoder("utf-8").decode(bytes);
     box.appendChild(pre);
   }
-  li.parentElement.parentElement.appendChild(box);
+  containerEl.appendChild(box);
 }
 
 // One controller per <model-viewer> instance on the page (the "Assemblee
@@ -1006,11 +1012,24 @@ function createSceneViewerController(ids) {
   const searchResultsEl = document.getElementById(ids.searchResults);
   const docsBlock = document.getElementById(ids.docsBlock);
   const docsIndex = document.getElementById(ids.docsIndex);
+  // Slice 3b (CLAUDE.md SS14): the read-only alarm/cause/procedure
+  // panel, shown INSTEAD of the four elements above when the bundle
+  // carries a KIND_ALARM_GRAPH item -- see renderAlarmGraph.
+  const searchPanelWrap = document.getElementById(ids.searchPanelWrap);
+  const searchBarWrap = document.getElementById(ids.searchBarWrap);
+  const alarmPanelWrap = document.getElementById(ids.alarmPanelWrap);
+  const alarmList = document.getElementById(ids.alarmList);
+  const alarmSearchBarWrap = document.getElementById(ids.alarmSearchBarWrap);
+  const alarmSearchInput = document.getElementById(ids.alarmSearchInput);
 
   const state = {
     originalColors: null, // Map<Material, [r,g,b,a]>, cached on model load
     selectedNames: [],    // names currently highlighted -- 0, 1 or many
     selectedCount: null,  // BOM count, only meaningful for exactly 1 name
+    documents: [],         // last-rendered document list (renderDocsIndex),
+                          // used to resolve a procedure label to its
+                          // actual document for the alarm panel's
+                          // "Apri procedura" button (Slice 3b)
     // The component info table: arbitrary headers/rows (no assumption
     // about column meaning -- real tables have whatever columns the
     // maintenance team already keeps, in whatever order). Which column
@@ -1238,12 +1257,118 @@ function createSceneViewerController(ids) {
   // bundle (no 3D at all) needs the exact same index with no viewer
   // around it (see the "Apri programma" tab's docs-only path).
   function renderDocsIndex(documents) {
+    state.documents = documents || [];
     if (!documents || !documents.length) {
       docsBlock.hidden = true;
       return;
     }
     docsBlock.hidden = false;
     renderDocList(docsIndex, documents);
+  }
+
+  // Read-only alarm/cause/procedure panel (Slice 3b, CLAUDE.md SS14):
+  // shown INSTEAD of the flat search UI when `graph` (an
+  // AlarmGraph.to_json_dict()) is present -- mutually exclusive with
+  // info_table by construction (a bundle carries one alarm mechanism at
+  // a time, see balzar/bundle.py). Mirrors viewer3d.py's
+  // _alarm_graph_html/_ALARM_GRAPH_JS structure and behaviour exactly
+  // (same class names, same click/highlight/procedure logic) -- one
+  // panel, two renderers, since one lives in a Python f-string template
+  // and the other here as a static <script>.
+  function renderAlarmGraph(graph) {
+    const has = !!graph;
+    if (searchPanelWrap) searchPanelWrap.hidden = has;
+    if (searchBarWrap) searchBarWrap.hidden = has;
+    if (alarmPanelWrap) alarmPanelWrap.hidden = !has;
+    if (alarmSearchBarWrap) alarmSearchBarWrap.hidden = !has;
+    if (!has) return;
+
+    const causeById = new Map(graph.causes.map(c => [c.id, c]));
+    const procById = new Map(graph.procedures.map(p => [p.id, p]));
+    const causeIdsByAlarm = new Map();
+    graph.alarm_links.forEach(([code, causeId]) => {
+      if (!causeIdsByAlarm.has(code)) causeIdsByAlarm.set(code, []);
+      causeIdsByAlarm.get(code).push(causeId);
+    });
+    const procIdByCause = new Map(graph.cause_links);
+    // a procedure's label with no matching document (already flaggable
+    // by bundle.unresolved_alarm_graph_procedures, not re-checked here)
+    // simply renders without a button -- same "don't crash on a
+    // dangling reference" principle used throughout this feature.
+    const docByLabel = new Map(state.documents.map(d => [d.label, d]));
+
+    alarmList.innerHTML = "";
+    graph.alarms.forEach(a => {
+      const item = document.createElement("div");
+      item.className = "ag-item";
+      item.dataset.code = a.code.toLowerCase();
+      item.dataset.desc = a.description.toLowerCase();
+
+      const head = document.createElement("button");
+      head.type = "button";
+      head.className = "ag-head";
+      head.innerHTML = `<span class="ag-code">${escapeHtml(a.code)}</span>` +
+        `<span class="ag-desc">${escapeHtml(a.description)}</span>`;
+      head.addEventListener("click", () => {
+        const willOpen = !item.classList.contains("open");
+        alarmList.querySelectorAll(".ag-item.open").forEach(o => {
+          if (o !== item) o.classList.remove("open");
+        });
+        item.classList.toggle("open", willOpen);
+        if (willOpen && a.component) highlightNames([a.component]);
+        else if (!willOpen) resetSelection();
+      });
+      item.appendChild(head);
+
+      const body = document.createElement("div");
+      body.className = "ag-body";
+      const causeIds = causeIdsByAlarm.get(a.code) || [];
+      if (causeIds.length) {
+        causeIds.forEach(cid => {
+          const cause = causeById.get(cid);
+          if (!cause) return;
+          const causeDiv = document.createElement("div");
+          causeDiv.className = "ag-cause";
+          causeDiv.innerHTML = `<p class="ag-cause-label">Causa e soluzione</p>` +
+            `<p class="ag-cause-text">${escapeHtml(cause.text)}</p>`;
+          const proc = procById.get(procIdByCause.get(cid));
+          const doc = proc ? docByLabel.get(proc.label) : null;
+          if (doc) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "ag-proc-btn";
+            btn.textContent = `Apri procedura — ${proc.label}`;
+            // reuses openDoc's exact preview/download logic, appended
+            // into the same docsBlock the "documenti nel bundle"
+            // section already uses -- no second preview UI to maintain.
+            btn.addEventListener("click", (ev) => {
+              ev.stopPropagation(); // don't also toggle the block closed
+              openDoc(doc, docsBlock);
+            });
+            causeDiv.appendChild(btn);
+          }
+          body.appendChild(causeDiv);
+        });
+      } else {
+        const p = document.createElement("p");
+        p.className = "ag-cause-text";
+        p.textContent = "Nessuna causa collegata.";
+        body.appendChild(p);
+      }
+      item.appendChild(body);
+      alarmList.appendChild(item);
+    });
+
+    if (alarmSearchInput) {
+      alarmSearchInput.value = "";
+      alarmSearchInput.oninput = () => {
+        const q = alarmSearchInput.value.trim().toLowerCase();
+        alarmList.querySelectorAll(".ag-item").forEach(item => {
+          const match = !q || item.dataset.code.includes(q) || item.dataset.desc.includes(q);
+          item.style.display = match ? "" : "none";
+        });
+      };
+    }
   }
 
   viewer.addEventListener("load", cacheColors);
@@ -1278,7 +1403,7 @@ function createSceneViewerController(ids) {
   return {
     viewer, statsTable, bomTable, searchNote,
     resetSelection, highlightNames, selectByName, setInfoTable, renderDocsIndex,
-    clearSelectionState, setBomMaterialMap,
+    clearSelectionState, setBomMaterialMap, renderAlarmGraph,
   };
 }
 
@@ -1329,6 +1454,11 @@ function renderScenePanel(ctrl, r) {
   }
 
   ctrl.renderDocsIndex(r.documents || []);
+  // AFTER renderDocsIndex: renderAlarmGraph resolves procedure labels
+  // against the document list it just populated (Slice 3b, CLAUDE.md
+  // SS14). Toggles the alarm panel visible/hidden itself -- a no-op
+  // when r.alarm_graph is null (every endpoint always sends the key).
+  ctrl.renderAlarmGraph(r.alarm_graph);
 }
 
 const threedDrop = document.getElementById("threed-drop");
@@ -1351,6 +1481,9 @@ const threedCtrl = createSceneViewerController({
   searchInput: "threed-search-input", searchBtn: "threed-search-btn", searchNote: "threed-search-note",
   searchResults: "threed-search-results",
   docsBlock: "threed-docs-block", docsIndex: "threed-docs-index",
+  searchPanelWrap: "threed-search-panel-wrap", searchBarWrap: "threed-search-bar-wrap",
+  alarmPanelWrap: "threed-alarm-panel-wrap", alarmList: "threed-alarm-list",
+  alarmSearchBarWrap: "threed-alarm-search-bar-wrap", alarmSearchInput: "threed-alarm-search-input",
 });
 
 let lastThreedResult = null;
@@ -1539,6 +1672,9 @@ const open3dCtrl = createSceneViewerController({
   searchInput: "open-3d-search-input", searchBtn: "open-3d-search-btn", searchNote: "open-3d-search-note",
   searchResults: "open-3d-search-results",
   docsBlock: "open-3d-docs-block", docsIndex: "open-3d-docs-index",
+  searchPanelWrap: "open-3d-search-panel-wrap", searchBarWrap: "open-3d-search-bar-wrap",
+  alarmPanelWrap: "open-3d-alarm-panel-wrap", alarmList: "open-3d-alarm-list",
+  alarmSearchBarWrap: "open-3d-alarm-search-bar-wrap", alarmSearchInput: "open-3d-alarm-search-input",
 });
 let lastOpen3dGlbUrl = null;
 
