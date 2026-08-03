@@ -5659,6 +5659,22 @@ scritti a mano e assunti corretti): zero warning, zero allarmi non
 collegati. Suite completa: 389 test, tutti verdi, nessuna riga
 esistente toccata.
 
+**Template scaricabili dalla demo web** (richiesta diretta di sessione,
+completamento dello stesso slice): due link `download` nel tab
+"Assemblee 3D" di `index.html`, in una sezione separata dalla
+"Gestione manutenzione" esistente apposta — quella è il flusso CSV
+piatto già funzionante oggi (`KIND_ALARM`/`ComponentTable`), questo è
+il formato nuovo del grafo allarmi, non ancora wired a nessun editor
+(Slice 4), e mescolarli avrebbe confuso quale dei due sistemi si sta
+usando. Nessun endpoint nuovo: `examples/*.csv` è già servito
+staticamente da Vercel come ogni altro asset del repository (stesso
+meccanismo già sfruttato da `landing-img/*.png`, nessun `.vercelignore`
+lo esclude) — verificato non assunto, con un server statico locale che
+riproduce lo stesso comportamento zero-config: entrambi i link
+risolvono a 200 con il contenuto reale dei template, testato anche con
+un `fetch()` dalla pagina vera (non solo `curl` diretto), zero errori
+console.
+
 ### 14.2 Prossimi slice (non ancora fatti)
 
 - **Slice 2 — integrazione bundle**: nuovo `KIND_ALARM_GRAPH` in
