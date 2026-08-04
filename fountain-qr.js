@@ -27,7 +27,6 @@ function downloadBlob(bytes, filename) {
 
 const MARGIN = 4;
 const LOOKAHEAD = 3;
-const TX_FPS = 20;
 const FRAME_BYTES = 1465; // ~QR v27, margine di sicurezza per schermi comuni
 
 const sendCanvas = document.getElementById("send-canvas");
@@ -35,8 +34,15 @@ const sendSpecs = document.getElementById("send-specs");
 const sendFileInput = document.getElementById("send-file-input");
 const sendBrowseBtn = document.getElementById("send-browse-btn");
 const sendFileLabel = document.getElementById("send-file-label");
+const sendFpsSelect = document.getElementById("send-fps");
 
 let sendGeneration = 0;
+// Ultimo payload/etichetta trasmessi: permette di riavviare lo stream alla
+// nuova velocità quando l'utente cambia #send-fps senza dover ri-scegliere
+// il file (comodo per chi sta regolando la velocità per la propria
+// fotocamera, vedi la nota di troubleshooting in fountain-qr.html).
+let lastPayload = null;
+let lastLabel = null;
 
 function demoPayload() {
   // payload di prova deterministico, 50 KB, se l'utente non sceglie un file
@@ -52,8 +58,14 @@ sendFileInput.addEventListener("change", () => {
   sendFileLabel.textContent = `${f.name} (${f.size.toLocaleString("it-IT")} byte)`;
   f.arrayBuffer().then((buf) => startStream(new Uint8Array(buf), f.name));
 });
+sendFpsSelect.addEventListener("change", () => {
+  if (lastPayload) startStream(lastPayload, lastLabel);
+});
 
 function startStream(payload, label) {
+  lastPayload = payload;
+  lastLabel = label;
+  const txFps = parseInt(sendFpsSelect.value, 10) || 2;
   const gen = ++sendGeneration;
   const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
   const blockLen = FRAME_BYTES - HEADER_LEN;
@@ -100,7 +112,7 @@ function startStream(payload, label) {
       modules = qr.modules.size;
       sizeCanvas();
       sendSpecs.textContent = `sorgente: ${label || "payload di prova"} · ${payload.length.toLocaleString("it-IT")} B · ` +
-        `${TX_FPS} fps · ${FRAME_BYTES} B/fotogramma · QR v${version} · K=${encoder.k} capitoli`;
+        `${txFps} fps · ${FRAME_BYTES} B/fotogramma · QR v${version} · K=${encoder.k} capitoli`;
     }
     const size = qr.modules.size;
     const data = qr.modules.data;
@@ -125,7 +137,7 @@ function startStream(payload, label) {
   };
   pump();
 
-  const interval = 1000 / TX_FPS;
+  const interval = 1000 / txFps;
   let nextAt = performance.now();
   const tick = (now) => {
     if (gen !== sendGeneration) return;

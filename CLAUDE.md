@@ -5557,6 +5557,91 @@ sostituito); nessuna integrazione nel motore balzar (CLI/GUI
 desktop/`balzar/fountain.py`), che resta esplicitamente il passo
 successivo, condizionato al risultato di quel test con hardware vero.
 
+### 13.9 Primo test reale con hardware (iPhone): velocità di trasmissione regolabile, copia riscritta da "sperimentale" a feature
+
+Il gap dichiarato in §13.7/§13.8 ("nessun test con una vera
+fotocamera/schermo fisici") è stato finalmente colmato, almeno in
+parte, da un test reale dell'utente: un iPhone puntato su
+`fountain-qr.html` aperta su un secondo schermo. **Sintomo riportato,
+non riprodotto da questa sessione** (nessun iPhone reale disponibile
+in questo ambiente sandboxed): la fotocamera rileva il contorno/i
+pattern finder del QR ma non riesce a leggerne il contenuto, come se
+non riuscisse a mettere a fuoco — coerente con un autofocus che
+insegue continuamente un bersaglio che cambia troppo in fretta per
+stabilizzarsi, piuttosto che con un problema di rilevamento del
+formato.
+
+**Diagnosi, dichiarata come ragionata e non verificata
+indipendentemente su hardware reale da questa sessione**: la velocità
+di trasmissione era **fissa e non regolabile**, `TX_FPS = 20` in
+`fountain-qr.js` (un nuovo fotogramma ogni 50ms) — un ritmo pensato
+per lo scenario "schermo che trasmette a un altro processo software"
+già misurato in §13.4/§13.8 (screenshot catturati via Playwright, mai
+una fotocamera fisica di mezzo), mai calibrato contro il ciclo reale
+di autofocus/esposizione di una fotocamera di telefono. È lo stesso
+tipo di vincolo già misurato per un meccanismo diverso ma imparentato
+in questo progetto (§2.4g: jsQR su griglie dense richiede risoluzioni
+di cattura enormemente più alte del sweet spot desktop, scoperto solo
+misurando con una fotocamera fittizia reale) — qui il vincolo non è la
+risoluzione ma il *tempo di stabilizzazione*, e nessuna misura
+equivalente esiste ancora per questo meccanismo specifico.
+
+**Fix**: velocità di trasmissione ora **regolabile dall'utente**, non
+più una costante nel codice — nuovo `<select id="send-fps">` nella
+sezione mittente di `fountain-qr.html` (1/2/4/10/20 fotogrammi/s,
+**default abbassato a 2 fps**, non più 20) e `fountain-qr.js` aggiornato
+per leggere il valore scelto al posto della vecchia costante `TX_FPS`
+(rimossa). Cambiare il selettore **riavvia lo stream immediatamente**
+all'ultimo payload/etichetta usati (`lastPayload`/`lastLabel` salvati da
+`startStream`), così chi sta calibrando la propria fotocamera può
+provare velocità diverse senza dover ri-scegliere il file ogni volta —
+comodità pensata esplicitamente per il caso d'uso di troubleshooting
+appena riportato. Aggiunta una nota pratica nella sezione ricevitore
+("se il telefono inquadra il contorno ma non legge il contenuto...
+abbassa la velocità di trasmissione") e una sezione finale di consigli
+pratici (distanza/stabilità della fotocamera, luce uniforme) al posto
+del vecchio testo di stato.
+
+**Onestà esplicita su cosa resta non verificato**: questa sessione ha
+verificato con Playwright (a) che il selettore cambia davvero
+l'intervallo reale tra un cambio di fotogramma e l'altro (misurato
+campionando i pixel del canvas nel tempo: ~500ms a 2 fps, ~50ms a 20
+fps, coerente con i valori attesi), (b) che il round-trip
+mittente→decodifica resta bit-identico dopo la modifica (hash FNV-1a
+verificato), (c) zero errori console. **Non verificato**: se abbassare
+a 2 fps risolve davvero il problema dell'autofocus sull'iPhone
+specifico dell'utente — solo un nuovo test reale da parte
+dell'utente può confermarlo, dichiarato esplicitamente invece di
+promettere una correzione garantita.
+
+**Cambio di copy, richiesta separata ma nella stessa sessione**:
+rimosso ogni linguaggio "sperimentale"/"non ancora validato" dal testo
+visibile di `fountain-qr.html` (badge in testata, paragrafo di
+apertura, sezione finale) su richiesta esplicita dell'utente
+("descriviamolo come feature, non mettiamo in evidenza che è da
+testare o in prova") — e dai link di navigazione verso la pagina in
+`index.html`/`trasporto-qr.html` ("(sperimentale)" rimosso
+dall'etichetta). Scelta di bilanciamento esplicita, non un cedimento
+acritico alla richiesta: **non eliminata l'onestà tecnica**, solo la
+sua cornice — le informazioni utili (differenza dal metodo classico,
+quando usare l'uno o l'altro, cosa fare se la lettura non parte) restano
+tutte presenti, riformulate come consigli pratici per chi sta usando la
+feature invece che come avvertenze difensive su una feature non
+finita. Coerente con il principio "misura, non assumere" già seguito in
+tutto il progetto (§8, §9.10, ecc.): la pagina non dichiara una
+percentuale di affidabilità non misurata, si limita a smettere di
+sventolare un cartello "attenzione, prototipo" per un meccanismo che
+di fatto è già codice di produzione completo (client-side puro,
+zero file del motore toccati, stessa build della demo).
+
+Verificato: `node --check fountain-qr.js`; suite Python completa
+invariata (407 test, nessun file `.py` toccato da questa modifica —
+puro HTML/JS). Nessun aggiornamento a `balzar/fountain.py` (non
+esiste ancora, l'integrazione nel motore resta condizionata a un test
+di affidabilità reale, non solo "l'autofocus adesso si stabilizza" —
+serve ancora sapere se il meccanismo tiene sotto perdita di
+fotogrammi vera, non solo se parte).
+
 ## 14. Grafo allarmi (collega allarmi ai 3D con un editor a blocchi/frecce)
 
 Richiesta diretta di sessione: standardizzare il file "Allarmi" caricato

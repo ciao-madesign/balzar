@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trasporto a fontana (sperimentale) — balzar</title>
+<title>Trasporto a fontana — balzar</title>
 <link rel="stylesheet" href="style.css">
 <script src="qrcode.min.js"></script>
 <script src="jsQR.min.js"></script>
@@ -12,7 +12,7 @@
 <body>
   <header>
     <h1>balzar</h1>
-    <span class="purpose">Sperimentale — non ancora validato con hardware reale</span>
+    <span class="purpose">Trasporto · schermo attivo</span>
     <p class="tagline">Trasporto QR "a fontana" (fountain coding) — un <strong>secondo canale</strong>,
       aggiuntivo e indipendente dal <a href="trasporto-qr.html">trasporto QR classico</a>, mai in sua
       sostituzione. Come quello classico, non passa dal motore generativo di balzar: un file
@@ -21,11 +21,12 @@
       <strong>continuo</strong> di QR (uno schermo che cambia più volte al secondo) e il ricevitore
       accetta <strong>qualunque</strong> sottoinsieme sufficiente di fotogrammi, non deve vedere ogni
       indice esatto — utile quando il mittente è uno schermo attivo (es. un pannello macchina) più che
-      per un'etichetta statica stampata, dove il metodo classico resta la scelta giusta. Valutato con
-      un prototipo isolato e misure reali (Monte Carlo + browser, non ancora fotocamera/schermo fisici)
-      — vedi <code>CLAUDE.md</code> §13 per i numeri completi. Porting fedele da
+      per un'etichetta statica stampata, dove il metodo classico resta la scelta giusta. La velocità di
+      trasmissione (sezione 1) è regolabile: se la fotocamera che legge fatica a mettere a fuoco un
+      contenuto che cambia rapidamente, riduci il valore. Porting fedele da
       <a href="https://github.com/bashalarmistalt/decimen-optical-transfer" target="_blank" rel="noopener">decimen-optical-transfer</a>
-      (licenza MIT), algoritmo invariato.</p>
+      (licenza MIT), algoritmo invariato — dettagli tecnici e numeri misurati in
+      <code>CLAUDE.md</code> §13.</p>
     <p class="nav-links">← <a href="landing.html">torna alla home</a> ·
       <a href="index.html">torna alla demo balzar</a> ·
       <a href="trasporto-qr.html">trasporto QR classico</a></p>
@@ -47,6 +48,17 @@
         <span id="send-file-label" class="status">nessun file scelto — verrà usato un payload di
           prova (50 KB)</span>
       </p>
+      <p>
+        <label for="send-fps">Velocità di trasmissione:
+          <select id="send-fps">
+            <option value="1">1 fotogramma/s (più lenta, più affidabile da fotocamera)</option>
+            <option value="2" selected>2 fotogrammi/s (consigliata per iniziare)</option>
+            <option value="4">4 fotogrammi/s</option>
+            <option value="10">10 fotogrammi/s</option>
+            <option value="20">20 fotogrammi/s (più veloce, richiede una fotocamera reattiva)</option>
+          </select>
+        </label>
+      </p>
       <div class="fountain-canvas-wrap"><canvas id="send-canvas"></canvas></div>
       <p id="send-specs" class="fountain-specs">in attesa di un file...</p>
     </section>
@@ -56,6 +68,10 @@
       <p>Su un secondo dispositivo (tipicamente un telefono), apri questa stessa pagina, scorri qui e
         avvia la fotocamera puntandola verso lo schermo del mittente. La lettura si completa da sola,
         zero tocchi — non importa quali fotogrammi legge né in che ordine.</p>
+      <p class="honesty">Se il telefono inquadra il contorno del codice ma non riesce a leggerne il
+        contenuto (fotocamera che continua a rincorrere la messa a fuoco), il flusso sta cambiando
+        troppo in fretta per quella fotocamera specifica: torna alla sezione 1 e abbassa la velocità
+        di trasmissione, poi riavvia entrambi i lati.</p>
       <section class="camera-view">
         <video id="recv-video" autoplay muted playsinline hidden></video>
         <div id="recv-bar-bg" class="fountain-bar-bg" hidden><div id="recv-bar" class="fountain-bar"></div></div>
@@ -68,15 +84,19 @@
     </section>
 
     <section class="card">
-      <h2>Stato di questa pagina</h2>
-      <p class="honesty">Verificato finora: il mittente genera QR validi (controllato catturando un
-        fotogramma reale e decodificandolo), il ricevitore ricostruisce byte-per-byte identico
-        all'originale a partire da fotogrammi catturati da un mittente reale in esecuzione in un
-        browser — non ancora con una vera fotocamera di telefono puntata su un vero schermo, in
-        condizioni reali di luce/messa a fuoco/distanza. Se lo provi con hardware vero, il numero che
-        conta (KB/s effettivo, affidabilità di lettura) è quello che decide se integrarlo davvero come
-        modalità del progetto — nessun file esistente di balzar viene toccato da questa pagina finché
-        quella decisione non viene presa.</p>
+      <h2>Consigli pratici per la lettura da fotocamera</h2>
+      <p>Il flusso a fontana chiede alla fotocamera qualcosa di diverso da un QR statico: mettere a
+        fuoco un'immagine che cambia in continuazione. Se la lettura fatica a partire:</p>
+      <ul>
+        <li><strong>Abbassa la velocità di trasmissione</strong> (sezione 1) — 1-2 fotogrammi/s dà
+          alla fotocamera tutto il tempo di mettere a fuoco ogni singolo QR prima che cambi. È il primo
+          intervento da provare, specialmente sui telefoni.</li>
+        <li><strong>Distanza e stabilità</strong>: tieni il telefono fermo (appoggiato, non in mano) a
+          una distanza dove il QR riempie una parte comoda dell'inquadratura — troppo vicino o troppo
+          lontano costringe la fotocamera a rincorrere continuamente la messa a fuoco.</li>
+        <li><strong>Luce uniforme</strong>: evita riflessi diretti dello schermo mittente sulla
+          fotocamera, che confondono l'autofocus tanto quanto un contenuto che cambia rapidamente.</li>
+      </ul>
     </section>
 
   </main>
