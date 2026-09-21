@@ -2269,6 +2269,58 @@ questa valutazione: nuovo modulo, nuovo algoritmo di estrazione
 pattern, nuova superficie di test — scope paragonabile a un encoder
 esistente da zero, non una piccola estensione.
 
+### 7.7 Assistente AI alla diagnosi (parte illuminata + allarme → cause/soluzioni) — valutata, direzione retrieval-first scelta
+
+Domanda diretta di sessione: dato che Balzar Live mostra già la parte
+illuminata + il codice allarme identificato (§9.11/§9.15/§9.29), avrebbe
+senso far **interrogare un agente AI** per individuare cause e soluzioni?
+Ragionato con l'utente prima di scrivere codice; conclusione: **sì, ma
+come satellite opzionale, non nel motore, e partendo dal retrieval, non
+dall'LLM**.
+
+**Tre tensioni reali nominate** (non "attacchiamo un LLM e vediamo"):
+1. **Cozza con l'identità offline** (§1/§6.1): un LLM cloud richiede rete
+   *e* manda dati potenzialmente riservati (BOM/procedure/disegni) a un
+   terzo — la stessa cosa già scartata per privacy in §7.5. Utile in un
+   ufficio manutenzione/HMI connesso, **non** nello scenario guida
+   (officina senza rete). Quindi **satellite fuori dalla garanzia
+   offline**, come il Bridge (§9.19), mai nel core.
+2. **Grounding vs allucinazione**: un LLM che risponde dalla conoscenza
+   generale su un allarme industriale può inventare una causa plausibile
+   ma sbagliata — pericoloso, ed è la "compressione bugiarda" (§1) in
+   forma nuova. Il valore coerente col progetto è **ancorare la risposta
+   ai documenti che balzar già trasporta** (tabella componenti a colonne
+   libere §9.29, documenti `KIND_DOC` §9.17, BOM), **citando la fonte**,
+   mai a ruota libera.
+3. **Quanto è davvero "AI"**: metà del valore ("dimmi di questo allarme")
+   è **recupero strutturato**, che balzar **già fa offline** (ricerca su
+   tutta la riga della tabella componenti, §9.29). Il salto LLM aggiunge
+   linguaggio naturale + sintesi tra fonti — utile, ma da misurare
+   *oltre* la ricerca esistente, non da vendere come magia.
+
+**Tre strade, trade-off dichiarati**: LLM cloud (qualità alta, ma
+offline ❌ / privacy ❌ / costo per-query); LLM locale (Ollama/llama.cpp
+3-8B quantizzato: offline ✅ / privacy ✅, ma GB su disco e hardware
+decente — no vecchio smartphone §5.3); **solo retrieval** (offline ✅ /
+privacy ✅, no linguaggio naturale, quasi zero costo).
+
+**Direzione scelta dall'utente: retrieval-first.** Partire leggero — un
+Q&A ancorato ai soli documenti già nel bundle, con fonte citata,
+costruito sull'infrastruttura di ricerca che **esiste già** (§9.29) —
+e rimandare la scelta del "cervello" (cloud vs LLM locale) come
+decisione separata: l'infrastruttura (prendi allarme + docs correlati →
+costruisci contesto → mostra risposta con fonte) è la stessa qualunque
+sia il motore di risposta a valle. Regole di coerenza col progetto:
+ancorata ai documenti (mai causa inventata), **online/LLM esplicitamente
+opzionale** (senza, Balzar Live funziona esattamente come oggi), non
+tocca il determinismo del motore (UI-layer, come il Bridge). Complementare
+al Bridge (§9.19): allarme live → parte illuminata → "perché?" →
+risposta ancorata alle procedure del bundle = le due metà della stessa
+storia "Balzar Live assistito".
+
+**Stato**: valutata, direzione decisa (retrieval-first), **non
+implementata** — satellite post-beta, nessun modulo nel repository.
+
 ## 8. Confronto quantitativo con lo stato dell'arte (regola del progetto)
 
 Ogni volta che si decide una direzione, va misurato il guadagno concreto

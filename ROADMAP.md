@@ -158,3 +158,8 @@ la motivazione corretta.
 - Balzar Bridge (integrazione PLC/HMI per Balzar Live automatico): solo
   scoping, nessuna decisione su protocollo/vendor (`CLAUDE.md` §9.19). Non
   serve per un v1 manuale.
+- Assistente alla diagnosi (parte illuminata + allarme → cause/soluzioni):
+  satellite post-beta, direzione **retrieval-first** decisa (`CLAUDE.md`
+  §7.7) — Q&A ancorato ai documenti già nel bundle, con fonte citata;
+  LLM (cloud o locale) rimandato, esplicitamente opzionale, mai nel core
+  offline né nel motore. Complementare al Bridge.
