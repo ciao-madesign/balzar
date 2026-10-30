@@ -1843,6 +1843,7 @@ const threedStatusEl = document.getElementById("threed-status");
 const threedResultEl = document.getElementById("threed-result");
 const threedDlPayload = document.getElementById("threed-dl-payload");
 const threedDlGlb = document.getElementById("threed-dl-glb");
+const threedDlComponents = document.getElementById("threed-dl-components");
 const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
 const threedAlarmCsvInput = document.getElementById("threed-alarm-csv-input");
 const threedBundleDocsInput = document.getElementById("threed-bundle-docs-input");
@@ -2134,6 +2135,7 @@ function renderThreedResult(r) {
     : "";
   threedDlPayload.textContent = r.bundled ? "scarica bundle (.bzx)" : "scarica payload (.b3d)";
   threedDlGlb.disabled = !!r.glb_omitted;
+  threedDlComponents.disabled = !r.components_csv;
 
   // a bundled response (r.bundled) already carries its parsed alarm
   // table -- wired in by renderScenePanel directly, no separate CSV
@@ -2156,6 +2158,10 @@ threedDlPayload.addEventListener("click", () => {
 threedDlGlb.addEventListener("click", () => {
   if (!lastThreedResult || lastThreedResult.glb_omitted) return;
   downloadBlob(base64ToBytes(lastThreedResult.glb_base64), "output.glb", "model/gltf-binary");
+});
+threedDlComponents.addEventListener("click", () => {
+  if (!lastThreedResult || !lastThreedResult.components_csv) return;
+  downloadBlob(new TextEncoder().encode(lastThreedResult.components_csv), "componenti.csv", "text/csv");
 });
 
 setupQrButton("threed", () => (lastThreedResult && !lastThreedResult.payload_omitted) ? lastThreedResult.payload_base64 : null);
@@ -2188,6 +2194,7 @@ const openSvgReason = document.getElementById("open-svg-reason");
 const open3dResultEl = document.getElementById("open-3d-result");
 const open3dDlPayload = document.getElementById("open-3d-dl-payload");
 const open3dDlGlb = document.getElementById("open-3d-dl-glb");
+const open3dDlComponents = document.getElementById("open-3d-dl-components");
 const open3dCtrl = createSceneViewerController({
   viewer: "open-3d-viewer", statsTable: "open-3d-stats-table", bomTable: "open-3d-bom-table",
   resetBtn: "open-3d-reset-btn", exportBtn: "open-3d-export-btn",
@@ -2327,12 +2334,17 @@ function renderOpen3dResult(r) {
   open3dCtrl.viewer.src = lastOpen3dGlbUrl;
 
   lastOpen3dResult = r;
+  open3dDlComponents.disabled = !r.components_csv;
   renderScenePanel(open3dCtrl, r);
 }
 
 open3dDlGlb.addEventListener("click", () => {
   if (!lastOpen3dResult) return;
   downloadBlob(base64ToBytes(lastOpen3dResult.glb_base64), "output.glb", "model/gltf-binary");
+});
+open3dDlComponents.addEventListener("click", () => {
+  if (!lastOpen3dResult || !lastOpen3dResult.components_csv) return;
+  downloadBlob(new TextEncoder().encode(lastOpen3dResult.components_csv), "componenti.csv", "text/csv");
 });
 open3dDlPayload.addEventListener("click", () => {
   if (!lastOpen3dResult || !lastOpen3dResult.payload_base64) return;

@@ -525,6 +525,10 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         scene, response["alarm_graph"], module_index_obj,
         bom_names=[e.name for e in bom_for_response])
 
+    # componenti.csv for DoqTool's component registry (components_export.py)
+    from .components_export import components_csv
+    response["components_csv"] = components_csv(scene)
+
     return 200, response
 
 
@@ -992,6 +996,8 @@ def _handle_render_3d(raw: bytes, limits: Limits) -> tuple[int, dict]:
     response.update(_scene3d_stats(scene))
     response["glb_omitted"] = glb_omitted
     response["glb_base64"] = "" if glb_omitted else glb_b64
+    from .components_export import components_csv
+    response["components_csv"] = components_csv(scene)
     response.update(_payload_response_fields(raw, limits))
     return 200, response
 
@@ -1018,7 +1024,7 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
 
     three_d_items = [it for it in items if it.kind == KIND_3D]
     response = {"ok": True, "kind": "bundle", "bundled": True, "has_3d": bool(three_d_items),
-                "warnings": []}
+                "warnings": [], "components_csv": ""}
 
     # The two alarm mechanisms are mutually exclusive per bundle (see
     # bundle.py's module docstring) -- KIND_ALARM_GRAPH wins if somehow
@@ -1091,6 +1097,8 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
         response["warnings"] = component_warnings(
             scene, alarm_graph, module_index,
             bom_names=[e.name for e in generate_bom(scene, collapse_names)])
+        from .components_export import components_csv
+        response["components_csv"] = components_csv(scene)
 
     try:
         response["documents"] = _documents_from_items(items)

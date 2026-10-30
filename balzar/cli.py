@@ -250,6 +250,41 @@ def cmd_render_3d(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_components(args: argparse.Namespace) -> int:
+    """Assieme 3D (.3dxml, .b3d o un bundle .bzx con un 3D) -> `componenti.csv`:
+    l'elenco dei componenti con la gerarchia dell'assieme, da importare nel
+    registro componenti di DoqTool (balzar/components_export.py)."""
+    from .bundle import KIND_3D, BundleError, decode_bundle, is_bundle
+    from .components_export import component_rows, components_csv
+    from .scene3d import Scene3DError, decode_payload, parse_3dxml
+
+    ext = os.path.splitext(args.input)[1].lower()
+    try:
+        if ext == ".3dxml":
+            scene = parse_3dxml(args.input)
+        else:
+            with open(args.input, "rb") as fh:
+                data = fh.read()
+            if is_bundle(data):
+                item = next((it for it in decode_bundle(data) if it.kind == KIND_3D), None)
+                if item is None:
+                    print("errore: il bundle non contiene nessun assieme 3D", file=sys.stderr)
+                    return 1
+                data = item.data
+            scene = decode_payload(data)
+    except (Scene3DError, BundleError) as exc:
+        print(f"errore: {exc}", file=sys.stderr)
+        return 1
+
+    out = args.output or (os.path.splitext(args.input)[0] + "_componenti.csv")
+    with open(out, "w", encoding="utf-8", newline="") as fh:
+        fh.write(components_csv(scene))
+    rows = component_rows(scene)
+    groups = sum(1 for r in rows if any(o["parent"] == r["label"] for o in rows))
+    print(f"componenti:   {out} ({len(rows)} righe, {groups} sotto-assiemi)")
+    return 0
+
+
 def cmd_encode_bundle(args: argparse.Namespace) -> int:
     """3D assembly (.3dxml/.b3d) + optional alarm CSV (--alarm) + any
     number of consultable documents -> one .bzx bundle (balzar/bundle.py):
@@ -692,6 +727,12 @@ def main(argv: list[str] | None = None) -> int:
                         "selezionando un componente, elenca i moduli che lo riguardano")
     p.add_argument("-o", "--output", default=None)
     p.set_defaults(func=cmd_encode_bundle)
+
+    p = sub.add_parser("export-components",
+                       help="assieme 3D (.3dxml/.b3d/.bzx) -> componenti.csv per il registro di DoqTool")
+    p.add_argument("input", help="file .3dxml, .b3d (payload BZM1) o .bzx (bundle con un 3D)")
+    p.add_argument("-o", "--output", default=None)
+    p.set_defaults(func=cmd_export_components)
 
     p = sub.add_parser("encode-video",
                        help="GIF animata/sequenza -> payload (delta tra frame)")

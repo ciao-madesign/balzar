@@ -6186,7 +6186,7 @@ server (§14.5) ed editor visivo (§14.6).
 
 ## 15. Indice dei moduli di documentazione per componente (integrazione con DoqTool)
 
-> **STATO (2026-10-30) — IMPLEMENTATO.** Verificato con la suite `unittest` (455 test: i 407 di partenza + 26 in `tests/test_module_index.py` + 22 in `tests/test_component_check.py`, nessuna regressione) e con Chromium headless su UI web e pagina desktop.
+> **STATO (2026-10-30) — IMPLEMENTATO.** Verificato con la suite `unittest` (472 test: i 407 di partenza + 26 in `tests/test_module_index.py` + 22 in `tests/test_component_check.py` + 17 in `tests/test_components_export.py`, nessuna regressione) e con Chromium headless su UI web e pagina desktop.
 
 **Scopo.** Selezionando un componente nel visualizzatore, un comando elenca i **moduli di documentazione** che lo riguardano (codice, titolo, revisione, capitolo). L'elenco **non contiene il testo dei moduli**: dice dove cercarli nella documentazione fuori dalla macchina (manuale stampato, PDF, tablet). Resta completamente offline, coerente con il resto del prodotto: l'indice viaggia nel bundle, nessuna chiamata di rete. Lo produce DoqTool (il sistema che scrive la documentazione, `GET /api/alarms/export/balzar?file=moduli`, o dentro lo ZIP come `moduli.json`).
 
@@ -6220,6 +6220,8 @@ server (§14.5) ed editor visivo (§14.6).
   - Web: `warnings` (lista, sempre presente) in `handle_encode_3d` e in lettura di un bundle (`[]` per un BZM1 nudo o un bundle senza 3D); riquadro `#threed-warnings` / `#open-3d-warnings` sotto le statistiche, solo `textContent`.
   - CLI: righe `avviso:` su stderr (exit code 0). GUI: righe "avviso" nelle statistiche del lavoro.
   - Non coperti: avvisi nella pagina del visualizzatore desktop (si mostrano in CLI/GUI/web, dove si codifica).
+
+**Export `componenti.csv`** (`balzar/components_export.py`) per il registro componenti di DoqTool. La distinta è piatta e senza codici articolo, ma la scena è un grafo: si esportano **anche i sotto-assiemi con nome**, con il loro padre, così DoqTool riceve gli stessi nomi del visualizzatore e l'albero dell'assieme (le chiavi dell'indice moduli ereditano dai figli). Colonne (DoqTool le legge **per nome**): `codice` (vuoto: non esiste nel 3D), `etichetta` (nome esatto della distinta, quello che usano allarmi e indice), `nome` (vuoto), `materiali` (nomi glTF da evidenziare, `;`), `conteggio`, `livello`, `padre`. La radice dell'assieme non è una riga; una parte riusata in più sotto-assiemi ha un solo padre (il primo in cui compare); due righe con la stessa etichetta si riducono alla prima. Superfici: `components_csv` in ogni risposta 3D (`handle_encode_3d`, lettura di BZM1/BZX1; `""` se manca il 3D) + pulsante "scarica componenti (.csv)" nelle due schede web; CLI `export-components <.3dxml|.b3d|.bzx>` (`-o`, default `<nome>_componenti.csv`); GUI "Esporta componenti (.csv)" (attivo solo con un assieme 3D aperto, anche dentro un bundle). Il contratto con le intestazioni di DoqTool è un test (`tests/test_components_export.py`).
 
 **Punto nel modulo (`s`)**: DoqTool lo compila col titolo della prima sezione che cita il componente (non un numero: la numerazione dipende da dove il modulo è stampato). Balzar lo mostra così com'è accanto alla revisione.
 

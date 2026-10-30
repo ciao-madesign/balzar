@@ -214,6 +214,9 @@ class BalzarApp:
         self.btn_view3d = ttk.Button(btns, text="Visualizza in 3D (browser)",
                                      command=self.view_3d, state="disabled")
         self.btn_view3d.pack(fill="x", pady=2)
+        self.btn_components = ttk.Button(btns, text="Esporta componenti (.csv)",
+                                         command=self.export_components, state="disabled")
+        self.btn_components.pack(fill="x", pady=2)
         # not tied to job state: the info table is independent of which
         # 3D file is open, can be loaded before or after opening one, and
         # is reused across files until replaced by loading another CSV
@@ -671,6 +674,32 @@ class BalzarApp:
             self.status.set(f"Salvato {os.path.basename(path)} "
                             f"({_fmt(len(self.job.payload))} B)")
 
+    def export_components(self) -> None:
+        """componenti.csv of the open 3D assembly (balzar/components_export.py):
+        the component list with the assembly hierarchy, for DoqTool's
+        component registry."""
+        job = self.job
+        if not job or not job.is_3d:
+            return
+        from .bundle import KIND_3D, decode_bundle
+        from .components_export import components_csv
+        from .scene3d import decode_payload
+
+        payload = job.payload
+        if job.is_bundle:
+            item = next((it for it in decode_bundle(payload) if it.kind == KIND_3D), None)
+            if item is None:
+                return
+            payload = item.data
+        path = filedialog.asksaveasfilename(
+            title="Salva componenti.csv", defaultextension=".csv",
+            initialfile="componenti.csv", filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(components_csv(decode_payload(payload)))
+        self.status.set(f"Componenti salvati in {path}")
+
     def view_3d(self) -> None:
         """Open the regenerated assembly and/or document index in the
         system's default browser via balzar/viewer3d.py -- Tkinter cannot
@@ -1115,10 +1144,13 @@ class BalzarApp:
                          if job.is_bundle and not job.is_3d
                          else "Visualizza in 3D (browser)")
             self.btn_view3d.configure(state="normal", text=view_text)
+            # componenti.csv needs an assembly: not for a documents-only bundle
+            self.btn_components.configure(state="normal" if job.is_3d else "disabled")
         else:
             self._set_buttons(True)
             self.btn_payload.configure(text="Salva payload (.bzp)")
             self.btn_view3d.configure(state="disabled", text="Visualizza in 3D (browser)")
+            self.btn_components.configure(state="disabled")
 
     def _photo_from_rgb(self, w: int, h: int, rgb: bytes) -> tk.PhotoImage:
         """RGB bytes -> Tk PhotoImage via in-memory PNG (Tk 8.6 reads PNG)."""
