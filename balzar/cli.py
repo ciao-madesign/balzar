@@ -259,7 +259,9 @@ def cmd_encode_bundle(args: argparse.Namespace) -> int:
     a technical drawing) is rendered fresh into PNG/SVG at view time, not
     stored as pixels; every other non-3D file is a generic consultable
     document. No 3D is required -- a documents-only bundle is valid. See
-    CLAUDE.md for the multi-document flow this exists for."""
+    CLAUDE.md for the multi-document flow this exists for. `--module-index`
+    adds the offline component -> documentation modules index (CLAUDE.md
+    SS15); names that match nothing in the model are reported as warnings."""
     from .bundle import BundleError, decode_bundle, encode_bundle_files
 
     alarm_paths = args.alarm or []
@@ -269,7 +271,8 @@ def cmd_encode_bundle(args: argparse.Namespace) -> int:
                   file=sys.stderr)
             return 1
     try:
-        data = encode_bundle_files(args.inputs, alarm_paths=alarm_paths)
+        data = encode_bundle_files(args.inputs, alarm_paths=alarm_paths,
+                                   module_index_path=args.module_index)
     except BundleError as exc:
         print(f"errore: {exc}", file=sys.stderr)
         return 1
@@ -284,6 +287,10 @@ def cmd_encode_bundle(args: argparse.Namespace) -> int:
         print(f"  {item.kind:<4} {item.label} ({_fmt(len(item.data))} byte)")
     print(f"payload:      {out}: {_fmt(len(data))} byte "
           f"(QR singolo: {'si' if fits_in_qr(data) else 'no'})")
+    # nomi che non corrispondono al modello: avvisi, mai errori (il bundle e' prodotto)
+    from .component_check import bundle_warnings
+    for warning in bundle_warnings(items):
+        print(f"avviso:       {warning}", file=sys.stderr)
     return 0
 
 
@@ -679,6 +686,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--alarm", action="append", metavar="FILE",
                    help="marca un file (anche tra gli input) come tabella allarmi CSV, "
                         "cablata alla ricerca; ripetibile")
+    p.add_argument("--module-index", metavar="FILE", default=None,
+                   help="indice dei moduli di documentazione per componente (moduli.json "
+                        "esportato da DoqTool), NON tra gli input: nel visualizzatore, "
+                        "selezionando un componente, elenca i moduli che lo riguardano")
     p.add_argument("-o", "--output", default=None)
     p.set_defaults(func=cmd_encode_bundle)
 

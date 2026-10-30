@@ -906,6 +906,9 @@ class BalzarApp:
         doc_paths = filedialog.askopenfilenames(
             title="Documenti aggiuntivi da consultare (opzionale, selezione multipla)",
             filetypes=[("Tutti i file", "*.*")])
+        module_index_path = filedialog.askopenfilename(
+            title="Indice dei moduli di documentazione, moduli.json di DoqTool (opzionale -- Annulla per saltare)",
+            filetypes=[("Indice moduli (JSON)", "*.json"), ("Tutti i file", "*.*")])
         paths = ([threed_path] if threed_path else []) \
             + ([alarm_path] if alarm_path else []) + list(doc_paths)
         if not paths:
@@ -914,16 +917,23 @@ class BalzarApp:
         self.status.set("Creazione bundle in corso…")
         self._set_buttons(False)
         threading.Thread(target=self._bundle_worker,
-                         args=(paths, alarm_path or None), daemon=True).start()
+                         args=(paths, alarm_path or None, module_index_path or None),
+                         daemon=True).start()
 
-    def _bundle_worker(self, paths: list[str], alarm_path: str | None) -> None:
+    def _bundle_worker(self, paths: list[str], alarm_path: str | None,
+                       module_index_path: str | None = None) -> None:
         job = Job()
         job.source_name = os.path.splitext(os.path.basename(paths[0]))[0] + ".bzx"
         try:
             from .bundle import encode_bundle_files
-            data = encode_bundle_files(paths, alarm_paths=[alarm_path] if alarm_path else None)
+            data = encode_bundle_files(paths, alarm_paths=[alarm_path] if alarm_path else None,
+                                       module_index_path=module_index_path)
             self._job_from_bundle(job, data)
             job.stats.insert(0, ("creato da", ", ".join(os.path.basename(p) for p in paths)))
+            from .bundle import decode_bundle
+            from .component_check import bundle_warnings
+            for warning in bundle_warnings(decode_bundle(data)):
+                job.stats.append(("avviso", warning))
         except Exception as exc:
             job.error = f"{type(exc).__name__}: {exc}"
         self.queue.put(job)

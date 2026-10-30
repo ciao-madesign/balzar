@@ -1027,6 +1027,7 @@ function createSceneViewerController(ids) {
   const modulesBlock = document.getElementById(ids.modulesBlock);
   const modulesNote = document.getElementById(ids.modulesNote);
   const modulesList = document.getElementById(ids.modulesList);
+  const warningsBox = document.getElementById(ids.warningsBox);
 
   const state = {
     modulePrepared: null, // BalzarModules.prepare(index), null without an index
@@ -1312,6 +1313,22 @@ function createSceneViewerController(ids) {
       modulesList.append(li);
     });
   }
+  // Avvisi sui nomi che non corrispondono al modello (balzar/component_check.py):
+  // mai bloccanti, solo visibili. Testi = dati dell'utente: solo textContent.
+  function renderWarnings(warnings) {
+    if (!warningsBox) return;
+    warningsBox.replaceChildren();
+    const list = Array.isArray(warnings) ? warnings : [];
+    warningsBox.hidden = !list.length;
+    if (!list.length) return;
+    const head = document.createElement("strong");
+    head.textContent = `Attenzione: ${list.length} avviso/i sui nomi dei componenti`;
+    const ul = document.createElement("ul");
+    ul.style.margin = "4px 0 0 18px";
+    list.forEach(w => { const li = document.createElement("li"); li.textContent = w; ul.append(li); });
+    warningsBox.append(head, ul);
+  }
+
   if (modulesBtn && modulesBlock) {
     modulesBtn.addEventListener("click", () => {
       modulesBlock.open = true;
@@ -1456,7 +1473,7 @@ function createSceneViewerController(ids) {
   return {
     viewer, statsTable, bomTable, searchNote,
     resetSelection, highlightNames, selectByName, setInfoTable, renderDocsIndex,
-    clearSelectionState, setBomMaterialMap, renderAlarmGraph, renderModuleIndex,
+    clearSelectionState, setBomMaterialMap, renderAlarmGraph, renderModuleIndex, renderWarnings,
   };
 }
 
@@ -1514,6 +1531,7 @@ function renderScenePanel(ctrl, r) {
   ctrl.renderAlarmGraph(r.alarm_graph);
   // undefined/null (no index in the bundle, or an older server) hides the command
   ctrl.renderModuleIndex(r.module_index);
+  ctrl.renderWarnings(r.warnings);
 }
 
 // ------------------------------------------------- alarm graph editor (Slice 4b)
@@ -1856,6 +1874,7 @@ const threedCtrl = createSceneViewerController({
   alarmSearchBarWrap: "threed-alarm-search-bar-wrap", alarmSearchInput: "threed-alarm-search-input",
   modulesBtn: "threed-modules-btn", modulesBlock: "threed-modules-block",
   modulesNote: "threed-modules-note", modulesList: "threed-modules-list",
+  warningsBox: "threed-warnings",
 });
 
 let lastThreedResult = null;
@@ -2180,6 +2199,7 @@ const open3dCtrl = createSceneViewerController({
   alarmSearchBarWrap: "open-3d-alarm-search-bar-wrap", alarmSearchInput: "open-3d-alarm-search-input",
   modulesBtn: "open-3d-modules-btn", modulesBlock: "open-3d-modules-block",
   modulesNote: "open-3d-modules-note", modulesList: "open-3d-modules-list",
+  warningsBox: "open-3d-warnings",
 });
 let lastOpen3dGlbUrl = null;
 

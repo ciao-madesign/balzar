@@ -518,6 +518,13 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
     response["alarm_graph"] = alarm_graph_obj.to_json_dict() if alarm_graph_obj is not None else None
     response["module_index"] = module_index_obj
 
+    # Names that match nothing in the model: warnings only (the bundle is
+    # produced anyway), always present so the UI needs no special case.
+    from .component_check import component_warnings
+    response["warnings"] = component_warnings(
+        scene, response["alarm_graph"], module_index_obj,
+        bom_names=[e.name for e in bom_for_response])
+
     return 200, response
 
 
@@ -981,7 +988,7 @@ def _handle_render_3d(raw: bytes, limits: Limits) -> tuple[int, dict]:
     response = {"ok": True, "kind": "3d", "bundled": False,
                "info_table": {"headers": [], "rows": []}, "documents": [],
                "alarm_graph": None,  # a bare BZM1 has no bundle wrapper to carry one in
-               "module_index": None}
+               "module_index": None, "warnings": []}
     response.update(_scene3d_stats(scene))
     response["glb_omitted"] = glb_omitted
     response["glb_base64"] = "" if glb_omitted else glb_b64
@@ -1010,7 +1017,8 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
     from .viewer3d import _documents_from_items, parse_component_table_text
 
     three_d_items = [it for it in items if it.kind == KIND_3D]
-    response = {"ok": True, "kind": "bundle", "bundled": True, "has_3d": bool(three_d_items)}
+    response = {"ok": True, "kind": "bundle", "bundled": True, "has_3d": bool(three_d_items),
+                "warnings": []}
 
     # The two alarm mechanisms are mutually exclusive per bundle (see
     # bundle.py's module docstring) -- KIND_ALARM_GRAPH wins if somehow
@@ -1077,6 +1085,12 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
         response.update(_scene3d_stats(scene, collapse_names))
         response["glb_omitted"] = glb_omitted
         response["glb_base64"] = "" if glb_omitted else glb_b64
+        # same name check as at encoding time, for a bundle opened later
+        from .component_check import component_warnings
+        from .scene3d import generate_bom
+        response["warnings"] = component_warnings(
+            scene, alarm_graph, module_index,
+            bom_names=[e.name for e in generate_bom(scene, collapse_names)])
 
     try:
         response["documents"] = _documents_from_items(items)

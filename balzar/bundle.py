@@ -184,7 +184,7 @@ def unresolved_alarm_graph_procedures(items: list[BundleItem]) -> list[str]:
 
 # ------------------------------------------------------ file-based helper
 
-def encode_bundle_files(paths: list[str], alarm_paths=None) -> bytes:
+def encode_bundle_files(paths: list[str], alarm_paths=None, module_index_path: str | None = None) -> bytes:
     """Dispatch each path to a bundle item and pack them together.
 
     Roles are assigned explicitly, never guessed from content:
@@ -201,6 +201,12 @@ def encode_bundle_files(paths: list[str], alarm_paths=None) -> bytes:
     So a `.csv` is an alarm table ONLY when the caller marks it in
     `alarm_paths`; an unmarked `.csv` is just a document. No 3D file is
     required -- a bundle of documents alone is valid.
+
+    `module_index_path` (optional, separate from `paths` like the other
+    explicit roles): a JSON file in the balzar/module_index.py format
+    (the "moduli.json" DoqTool exports) -> KIND_MODULE_INDEX. Validated and
+    re-serialized in its normalized form, so a malformed one refuses with a
+    clear reason like any other broken explicit input.
 
     Strict on purpose (unlike encode_independent's per-file isolation in
     sequence.py): a bundle is a deliberate small set the user assembled
@@ -260,4 +266,14 @@ def encode_bundle_files(paths: list[str], alarm_paths=None) -> bytes:
         else:
             with open(path, "rb") as fh:
                 items.append(BundleItem(KIND_DOC, label, fh.read()))
+    if module_index_path:
+        from .module_index import ModuleIndexError, module_index_from_bytes, module_index_to_bytes
+        label = os.path.basename(module_index_path)
+        with open(module_index_path, "rb") as fh:
+            raw = fh.read()
+        try:
+            data = module_index_to_bytes(module_index_from_bytes(raw))
+        except ModuleIndexError as exc:
+            raise BundleError(f"{label}: indice moduli non valido: {exc}") from None
+        items.append(BundleItem(KIND_MODULE_INDEX, "moduli.json", data))
     return encode_bundle(items)

@@ -6186,7 +6186,7 @@ server (§14.5) ed editor visivo (§14.6).
 
 ## 15. Indice dei moduli di documentazione per componente (integrazione con DoqTool)
 
-> **STATO (2026-10-30) — IMPLEMENTATO.** Verificato con la suite `unittest` (433 test: i 407 di partenza + 26 nuovi in `tests/test_module_index.py`, nessuna regressione) e con Chromium headless su UI web e pagina desktop.
+> **STATO (2026-10-30) — IMPLEMENTATO.** Verificato con la suite `unittest` (455 test: i 407 di partenza + 26 in `tests/test_module_index.py` + 22 in `tests/test_component_check.py`, nessuna regressione) e con Chromium headless su UI web e pagina desktop.
 
 **Scopo.** Selezionando un componente nel visualizzatore, un comando elenca i **moduli di documentazione** che lo riguardano (codice, titolo, revisione, capitolo). L'elenco **non contiene il testo dei moduli**: dice dove cercarli nella documentazione fuori dalla macchina (manuale stampato, PDF, tablet). Resta completamente offline, coerente con il resto del prodotto: l'indice viaggia nel bundle, nessuna chiamata di rete. Lo produce DoqTool (il sistema che scrive la documentazione, `GET /api/alarms/export/balzar?file=moduli`, o dentro lo ZIP come `moduli.json`).
 
@@ -6214,4 +6214,13 @@ server (§14.5) ed editor visivo (§14.6).
 
 **Peso nel bundle** (misurato su indici sintetici, titoli casuali → stima prudente): 50 componenti/20 moduli ≈ 0,9 KB; 200/60 ≈ 2,7 KB; 500/120 ≈ 7 KB; 1000/200 ≈ 15 KB. Con 3 moduli reali di prova: +138 byte sul pacchetto. DoqTool limita a 15 moduli per componente.
 
-**Non fatto per scelta di scope**: CLI (`encode_bundle_files`) e GUI Tkinter non hanno ancora il parametro per l'indice (solo web e `webapi`); nessun collegamento in rete verso DoqTool (voluto: strumento offline); nessun legame col modello a stati/orchestratore di §9.19.
+**CLI e GUI.** `encode_bundle_files(paths, alarm_paths=None, module_index_path=None)`: l'indice è un parametro **esplicito** e separato da `paths` (come gli altri ruoli, mai indovinato dal contenuto), validato e riserializzato normalizzato; un file non valido rifiuta con un messaggio chiaro (`BundleError`). CLI: `balzar encode-bundle … --module-index moduli.json`. GUI Tkinter: quarto dialogo opzionale in "Crea bundle". Entrambe stampano/mostrano gli avvisi sotto.
+
+**Avvisi sui nomi che non corrispondono al modello** (`balzar/component_check.py`). Il motore ignora in silenzio un componente sconosciuto (test `test_no_alarm_match_leaves_bom_uncollapsed`, voluto: un bundle non deve fallire per un refuso), quindi l'autore lo scopriva solo in campo. Ora `component_warnings()` restituisce **avvisi, mai errori** (il bundle si produce comunque): per ogni allarme del **grafo** il cui componente non è una riga di distinta (grafia diversa → mostra il nome reale; refuso → «Forse intendevi …» con `difflib`, soglia 0,8; inesistente), massimo 20 più un riepilogo; per l'**indice** un solo avviso aggregato per i componenti senza corrispondenza nel modello e uno per i sotto-assiemi senza riga selezionabile (nessun allarme li comprime). Una parte reale nascosta dentro un gruppo compresso **non** si segnala (DoqTool ne riunisce già i moduli sotto il gruppo: non si perde nulla). Una tabella allarmi CSV non è controllata: ha colonne libere e solo la UI sa quale confronta con la distinta.
+  - Web: `warnings` (lista, sempre presente) in `handle_encode_3d` e in lettura di un bundle (`[]` per un BZM1 nudo o un bundle senza 3D); riquadro `#threed-warnings` / `#open-3d-warnings` sotto le statistiche, solo `textContent`.
+  - CLI: righe `avviso:` su stderr (exit code 0). GUI: righe "avviso" nelle statistiche del lavoro.
+  - Non coperti: avvisi nella pagina del visualizzatore desktop (si mostrano in CLI/GUI/web, dove si codifica).
+
+**Punto nel modulo (`s`)**: DoqTool lo compila col titolo della prima sezione che cita il componente (non un numero: la numerazione dipende da dove il modulo è stampato). Balzar lo mostra così com'è accanto alla revisione.
+
+**Non fatto per scelta di scope**: nessun collegamento in rete verso DoqTool (voluto: strumento offline); nessun legame col modello a stati/orchestratore di §9.19; nessun numero di pagina (l'impaginazione la decide DoqTool al render del PDF).
