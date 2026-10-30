@@ -333,6 +333,18 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         except (KeyError, TypeError, IndexError, AttributeError) as exc:
             return 400, {"ok": False, "error": f"grafo allarmi non valido: {exc}"}
 
+    # Optional offline index component -> documentation modules (see
+    # balzar/module_index.py): additive, carried as its own bundle item,
+    # independent of which alarm mechanism (if any) the bundle uses.
+    module_index_obj = None
+    module_index_raw = body.get("module_index")
+    if module_index_raw:
+        from .module_index import ModuleIndexError, normalize_module_index
+        try:
+            module_index_obj = normalize_module_index(module_index_raw)
+        except ModuleIndexError as exc:
+            return 400, {"ok": False, "error": f"indice moduli non valido: {exc}"}
+
     # any candidate string (a component-table cell value, or an alarm's
     # own `component` field) is offered to collapse its own BOM/GLB
     # entry into a single row/highlight group instead of expanding to
@@ -351,6 +363,10 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         info_table = None
     else:
         collapse_names = info_table.all_values() if info_table else None
+    # NB: the module index deliberately does NOT feed collapse_names. A
+    # registry may list the root assembly and every sub-assembly; collapsing
+    # them all would turn the whole model into one BOM row. The index is
+    # purely additive: the BOM is exactly what it would be without it.
 
     # extra consultable documents to bundle alongside the model: each
     # {label, data (base64)}. Carried as raw KIND_DOC bytes, no parsing.
@@ -412,11 +428,13 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
         "glb_base64": "" if glb_omitted else glb_b64,
     }
 
-    if alarm_csv_text is not None or doc_items or alarm_graph_obj is not None:
+    if (alarm_csv_text is not None or doc_items or alarm_graph_obj is not None
+            or module_index_obj is not None):
         import os as _os
 
         from .bundle import (KIND_3D, KIND_2D, KIND_ALARM, KIND_ALARM_GRAPH, KIND_DOC,
-                             BundleItem, encode_bundle, unresolved_alarm_graph_procedures)
+                             KIND_MODULE_INDEX, BundleItem, encode_bundle,
+                             unresolved_alarm_graph_procedures)
         from .payload import MAGIC as BZR1_MAGIC
         from .payload import encode_payload as encode_2d
         from .viewer3d import _render_2d_item
@@ -431,6 +449,10 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
                                           alarm_csv_text.encode("utf-8")))
             response_docs.append({"role": "allarmi", "label": "alarms.csv",
                                  "b64": base64.b64encode(alarm_csv_text.encode("utf-8")).decode("ascii")})
+        if module_index_obj is not None:
+            from .module_index import module_index_to_bytes
+            bundle_items.append(BundleItem(KIND_MODULE_INDEX, "moduli.json",
+                                          module_index_to_bytes(module_index_obj)))
         for label, doc_bytes in doc_items:
             ext = _os.path.splitext(label)[1].lower()
             # .bzr/.bzp are rendered fresh into PNG/GIF/SVG entries (same
@@ -494,6 +516,7 @@ def handle_encode_3d(body: dict, limits: Limits) -> tuple[int, dict]:
     # never has to special-case a missing key depending on what was
     # submitted (CLAUDE.md SS14).
     response["alarm_graph"] = alarm_graph_obj.to_json_dict() if alarm_graph_obj is not None else None
+    response["module_index"] = module_index_obj
 
     return 200, response
 
@@ -957,7 +980,8 @@ def _handle_render_3d(raw: bytes, limits: Limits) -> tuple[int, dict]:
 
     response = {"ok": True, "kind": "3d", "bundled": False,
                "info_table": {"headers": [], "rows": []}, "documents": [],
-               "alarm_graph": None}  # a bare BZM1 has no bundle wrapper to carry one in
+               "alarm_graph": None,  # a bare BZM1 has no bundle wrapper to carry one in
+               "module_index": None}
     response.update(_scene3d_stats(scene))
     response["glb_omitted"] = glb_omitted
     response["glb_base64"] = "" if glb_omitted else glb_b64
@@ -1022,6 +1046,13 @@ def _handle_render_bundle(raw: bytes, limits: Limits) -> tuple[int, dict]:
             return 400, {"ok": False, "error": f"tabella componenti nel bundle non valida: {exc}"}
     response["info_table"] = info_table.to_json_dict() if info_table else {"headers": [], "rows": []}
     response["alarm_graph"] = alarm_graph
+
+    # Offline component -> documentation modules index (module_index.py).
+    # Tolerant on read: an unreadable/future-version index becomes "no
+    # index" instead of blocking the model and the other contents.
+    from .module_index import read_module_index_item
+    module_index = read_module_index_item(items)
+    response["module_index"] = module_index
 
     # any candidate string (a component-table cell value, or an alarm's
     # own `component` field) is offered to collapse its own BOM/GLB

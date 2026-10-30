@@ -1021,8 +1021,15 @@ function createSceneViewerController(ids) {
   const alarmList = document.getElementById(ids.alarmList);
   const alarmSearchBarWrap = document.getElementById(ids.alarmSearchBarWrap);
   const alarmSearchInput = document.getElementById(ids.alarmSearchInput);
+  // Fase 3 integrazione DoqTool: moduli di documentazione del componente
+  // selezionato, dall'indice offline nel bundle (balzar-modules.js).
+  const modulesBtn = document.getElementById(ids.modulesBtn);
+  const modulesBlock = document.getElementById(ids.modulesBlock);
+  const modulesNote = document.getElementById(ids.modulesNote);
+  const modulesList = document.getElementById(ids.modulesList);
 
   const state = {
+    modulePrepared: null, // BalzarModules.prepare(index), null without an index
     originalColors: null, // Map<Material, [r,g,b,a]>, cached on model load
     selectedNames: [],    // names currently highlighted -- 0, 1 or many
     selectedCount: null,  // BOM count, only meaningful for exactly 1 name
@@ -1117,6 +1124,7 @@ function createSceneViewerController(ids) {
     // multiple matches (an alarm affecting several components has no
     // single "the" part to print a sheet for)
     exportBtn.disabled = (state.selectedNames.length !== 1);
+    updateModules(names);
   }
 
   function allPartNames() {
@@ -1266,6 +1274,51 @@ function createSceneViewerController(ids) {
     renderDocList(docsIndex, documents);
   }
 
+  // Indice offline componente -> moduli di documentazione (balzar/module_index.py).
+  // Il comando "Moduli correlati" e il blocco compaiono solo se il bundle ha
+  // un indice; la lista segue la selezione. Titoli = dati dell'utente: solo
+  // textContent, mai innerHTML.
+  function renderModuleIndex(index) {
+    state.modulePrepared = (typeof BalzarModules !== "undefined") ? BalzarModules.prepare(index) : null;
+    const has = !!state.modulePrepared && Object.keys(index.idx).length > 0;
+    if (!has) state.modulePrepared = null;
+    if (modulesBtn) modulesBtn.hidden = !has;
+    if (modulesBlock) modulesBlock.hidden = !has;
+    updateModules(state.selectedNames);
+  }
+
+  function updateModules(names) {
+    if (!modulesBlock || !modulesList || !modulesNote) return;
+    modulesList.replaceChildren();
+    if (!state.modulePrepared) return;
+    const modules = BalzarModules.lookup(state.modulePrepared, names || []);
+    if (modulesBtn) modulesBtn.textContent = "Moduli correlati" + (modules.length ? ` (${modules.length})` : "");
+    if (!names || !names.length) {
+      modulesNote.textContent = "Seleziona un componente per vedere i moduli di documentazione che lo riguardano.";
+    } else if (!modules.length) {
+      modulesNote.textContent = `Nessun modulo collegato a ${names.join(", ")}.`;
+    } else {
+      modulesNote.textContent = "Cerca questi moduli nella documentazione: qui trovi dove, non il testo.";
+    }
+    modules.forEach(m => {
+      const li = document.createElement("li");
+      const code = document.createElement("strong");
+      code.textContent = m.c;
+      li.append(code, ` ${m.t} `);
+      const meta = document.createElement("span");
+      meta.className = "role";
+      meta.textContent = `rev. ${m.r}` + (m.s ? ` · ${m.s}` : "");
+      li.append(meta);
+      modulesList.append(li);
+    });
+  }
+  if (modulesBtn && modulesBlock) {
+    modulesBtn.addEventListener("click", () => {
+      modulesBlock.open = true;
+      modulesBlock.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
+
   // Read-only alarm/cause/procedure panel (Slice 3b, CLAUDE.md SS14):
   // shown INSTEAD of the flat search UI when `graph` (an
   // AlarmGraph.to_json_dict()) is present -- mutually exclusive with
@@ -1403,7 +1456,7 @@ function createSceneViewerController(ids) {
   return {
     viewer, statsTable, bomTable, searchNote,
     resetSelection, highlightNames, selectByName, setInfoTable, renderDocsIndex,
-    clearSelectionState, setBomMaterialMap, renderAlarmGraph,
+    clearSelectionState, setBomMaterialMap, renderAlarmGraph, renderModuleIndex,
   };
 }
 
@@ -1459,6 +1512,8 @@ function renderScenePanel(ctrl, r) {
   // SS14). Toggles the alarm panel visible/hidden itself -- a no-op
   // when r.alarm_graph is null (every endpoint always sends the key).
   ctrl.renderAlarmGraph(r.alarm_graph);
+  // undefined/null (no index in the bundle, or an older server) hides the command
+  ctrl.renderModuleIndex(r.module_index);
 }
 
 // ------------------------------------------------- alarm graph editor (Slice 4b)
@@ -1774,6 +1829,21 @@ const threedGlbOmittedEl = document.getElementById("threed-glb-omitted");
 const threedAlarmCsvInput = document.getElementById("threed-alarm-csv-input");
 const threedBundleDocsInput = document.getElementById("threed-bundle-docs-input");
 const threedBundleDocsClearBtn = document.getElementById("threed-bundle-docs-clear-btn");
+const threedModuleIndexInput = document.getElementById("threed-module-index-input");
+const threedModuleIndexClearBtn = document.getElementById("threed-module-index-clear-btn");
+
+// Indice dei moduli di documentazione scelto dall'utente (moduli.json di
+// DoqTool), o null. La validazione vera e' lato server (balzar/module_index.py):
+// qui solo il JSON, per dare un errore chiaro prima dell'upload.
+async function readThreedModuleIndex() {
+  const f = threedModuleIndexInput.files[0];
+  if (!f) return null;
+  try {
+    return JSON.parse(await f.text());
+  } catch (e) {
+    throw new Error(`indice moduli "${f.name}": JSON non leggibile`);
+  }
+}
 
 const threedCtrl = createSceneViewerController({
   viewer: "threed-viewer", statsTable: "threed-stats-table", bomTable: "threed-bom-table",
@@ -1784,6 +1854,8 @@ const threedCtrl = createSceneViewerController({
   searchPanelWrap: "threed-search-panel-wrap", searchBarWrap: "threed-search-bar-wrap",
   alarmPanelWrap: "threed-alarm-panel-wrap", alarmList: "threed-alarm-list",
   alarmSearchBarWrap: "threed-alarm-search-bar-wrap", alarmSearchInput: "threed-alarm-search-input",
+  modulesBtn: "threed-modules-btn", modulesBlock: "threed-modules-block",
+  modulesNote: "threed-modules-note", modulesList: "threed-modules-list",
 });
 
 let lastThreedResult = null;
@@ -1926,6 +1998,8 @@ threedGraphEncodeBtn.addEventListener("click", async () => {
   try {
     const data = await fileToBase64(file);
     const body = { data, alarm_graph: threedGraphState.graph };
+    const moduleIndex = await readThreedModuleIndex();
+    if (moduleIndex) body.module_index = moduleIndex;
     if (docFiles.length) {
       body.documents = [];
       for (const df of docFiles) body.documents.push({ label: df.name, data: await fileToBase64(df) });
@@ -1952,6 +2026,7 @@ threedFileInput.addEventListener("change", () => {
 });
 threedBundleCsvClearBtn.addEventListener("click", () => { threedBundleCsvInput.value = ""; });
 threedBundleDocsClearBtn.addEventListener("click", () => { threedBundleDocsInput.value = ""; });
+threedModuleIndexClearBtn.addEventListener("click", () => { threedModuleIndexInput.value = ""; });
 ["dragenter", "dragover"].forEach(evt =>
   threedDrop.addEventListener(evt, e => { e.preventDefault(); threedDrop.classList.add("dragover"); })
 );
@@ -1994,6 +2069,8 @@ async function handleThreedFile(file) {
   try {
     const data = await fileToBase64(file);
     const body = { data };
+    const moduleIndex = await readThreedModuleIndex();
+    if (moduleIndex) body.module_index = moduleIndex;
     if (csvFile) body.alarm_csv = await fileToBase64(csvFile);
     if (docFiles.length) {
       body.documents = [];
@@ -2006,7 +2083,7 @@ async function handleThreedFile(file) {
     lastThreedResult = json;
     renderThreedResult(json);
     setThreedStatus(json.bundled
-      ? `Fatto: ${file.name} + ${extras} documento/i (bundle BZX1)`
+      ? `Fatto: ${file.name} + ${extras} documento/i${threedModuleIndexInput.files[0] ? " + indice moduli" : ""} (bundle BZX1)`
       : `Fatto: ${file.name}`);
   } catch (err) {
     setThreedStatus("Errore: " + err.message, true);
@@ -2101,6 +2178,8 @@ const open3dCtrl = createSceneViewerController({
   searchPanelWrap: "open-3d-search-panel-wrap", searchBarWrap: "open-3d-search-bar-wrap",
   alarmPanelWrap: "open-3d-alarm-panel-wrap", alarmList: "open-3d-alarm-list",
   alarmSearchBarWrap: "open-3d-alarm-search-bar-wrap", alarmSearchInput: "open-3d-alarm-search-input",
+  modulesBtn: "open-3d-modules-btn", modulesBlock: "open-3d-modules-block",
+  modulesNote: "open-3d-modules-note", modulesList: "open-3d-modules-list",
 });
 let lastOpen3dGlbUrl = null;
 

@@ -154,6 +154,20 @@ body.no-3d #doc-index{{top:12px}}
 #doc-index li:hover{{background:#333}}
 #doc-index .role{{font-size:10px;text-transform:uppercase;color:#9cf;border:1px solid #456;
                  border-radius:3px;padding:0 4px}}
+#modules-btn{{position:absolute;top:12px;left:50%;transform:translateX(-50%);padding:6px 12px;border-radius:6px;
+              border:1px solid #555;background:rgba(20,20,20,0.85);color:#eee;font:inherit;cursor:pointer}}
+#modules-btn:hover{{border-color:#2563eb}}
+#modules-panel{{position:absolute;right:12px;bottom:52px;width:min(340px,calc(100vw - 24px));
+               max-height:45vh;overflow-y:auto;background:rgba(20,20,20,0.92);color:#eee;
+               border-radius:6px;padding:8px 12px;font-size:13px;display:none}}
+#modules-panel.open{{display:block}}
+#modules-panel h3{{margin:0 0 6px 0;font-size:14px;color:#fff}}
+#modules-panel p{{margin:0 0 6px 0;color:#ccc;font-size:12px}}
+#modules-panel ul{{list-style:none;margin:0;padding:0}}
+#modules-panel li{{padding:4px 0;border-bottom:1px solid #333}}
+#modules-panel li:last-child{{border-bottom:none}}
+#modules-panel .mc{{font-family:monospace;font-weight:bold;color:#7fd1c5;margin-right:6px}}
+#modules-panel .mr{{display:block;color:#9aa;font-size:11px}}
 #doc-overlay{{position:absolute;top:24px;left:24px;right:24px;bottom:24px;background:#fbfbfb;
              color:#111;border-radius:8px;display:none;flex-direction:column;overflow:hidden;
              box-shadow:0 4px 30px rgba(0,0,0,0.6)}}
@@ -173,6 +187,7 @@ body.no-3d #doc-index{{top:12px}}
 {threed_section}
 {bom_html}
 {doc_index_html}
+{modules_html}
 <div id="doc-overlay">
   <div id="doc-overlay-head">
     <span id="doc-overlay-title"></span>
@@ -183,9 +198,12 @@ body.no-3d #doc-index{{top:12px}}
 <script>
 window.__BALZAR_INFO_TABLE__ = {info_table_json};
 window.__BALZAR_DOCS__ = {docs_json};
+window.__BALZAR_MODULES__ = {modules_json};
+{modules_lib_js}
 {select_js}
 {doc_js}
 {alarm_graph_js}
+{modules_js}
 </script>
 </body>
 </html>
@@ -384,6 +402,8 @@ _SELECT_JS = """
     // zero or multiple matches (an alarm affecting several components has
     // no single "the" part to print a sheet for).
     exportBtn.disabled = (selectedNames.length !== 1);
+    // optional hook: the "moduli correlati" panel (see _MODULES_JS) listens here
+    if (window.__balzarOnSelection) window.__balzarOnSelection(names);
   }
 
   function parseComponentTable(text){
@@ -816,6 +836,48 @@ class ComponentTable:
         return {"headers": self.headers, "rows": self.rows}
 
 
+_MODULES_HTML = """<button id="modules-btn" type="button">Moduli correlati</button>
+<div id="modules-panel">
+  <h3>Moduli correlati</h3>
+  <p id="modules-note"></p>
+  <ul id="modules-list"></ul>
+</div>"""
+
+# Wiring of the "moduli correlati" panel to the selection. The matching
+# itself lives in balzar-modules.js (one implementation shared with the web
+# UI, embedded into the page by _render_viewer_page). Document titles are
+# user data: only textContent is used, never innerHTML.
+_MODULES_JS = """
+(function(){
+  var prepared = window.BalzarModules && BalzarModules.prepare(window.__BALZAR_MODULES__);
+  var btn = document.getElementById('modules-btn');
+  var panel = document.getElementById('modules-panel');
+  var note = document.getElementById('modules-note');
+  var list = document.getElementById('modules-list');
+  if (!prepared || !btn || !panel) return;
+  function render(names){
+    var modules = BalzarModules.lookup(prepared, names);
+    btn.textContent = 'Moduli correlati' + (modules.length ? ' (' + modules.length + ')' : '');
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!names.length) note.textContent = 'Seleziona un componente per vedere i moduli di documentazione che lo riguardano.';
+    else if (!modules.length) note.textContent = 'Nessun modulo collegato a ' + names.join(', ') + '.';
+    else note.textContent = 'Cerca questi moduli nella documentazione: qui trovi dove, non il testo.';
+    modules.forEach(function(m){
+      var li = document.createElement('li');
+      var code = document.createElement('span'); code.className = 'mc'; code.textContent = m.c;
+      li.appendChild(code); li.appendChild(document.createTextNode(m.t));
+      var rev = document.createElement('span'); rev.className = 'mr';
+      rev.textContent = 'rev. ' + m.r + (m.s ? ' \u00b7 ' + m.s : '');
+      li.appendChild(rev); list.appendChild(li);
+    });
+  }
+  window.__balzarOnSelection = render;
+  btn.addEventListener('click', function(){ panel.classList.toggle('open'); });
+  render([]);
+})();
+"""
+
+
 def parse_component_table_text(text: str) -> ComponentTable:
     """Generic CSV -> ComponentTable(headers, rows). Uses the stdlib
     `csv` module (unlike the client-side JS parser, which is a plain
@@ -864,7 +926,8 @@ def parse_component_table(path: str) -> ComponentTable:
 
 
 def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
-                        work_dir: str, alarm_graph: dict | None = None) -> http.server.HTTPServer:
+                        work_dir: str, alarm_graph: dict | None = None,
+                        module_index: dict | None = None) -> http.server.HTTPServer:
     """Write model.glb (if any) + viewer.html + a copy of
     model-viewer.min.js, then serve `work_dir` on an ephemeral localhost
     port and open the default browser. The single page builder behind
@@ -898,6 +961,14 @@ def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
     ).replace("</", "<\\/")
     docs_json = json.dumps(documents or []).replace("</", "<\\/")
     search_or_alarm_html = _alarm_graph_html(alarm_graph, documents) if alarm_graph else _SEARCH_SECTION
+    # the module index only makes sense with a model to select from
+    has_modules = bool(glb is not None and module_index and module_index.get("idx"))
+    modules_json = json.dumps(module_index if has_modules else None,
+                              ensure_ascii=False).replace("</", "<\\/")
+    modules_lib_js = ""
+    if has_modules:
+        with open(vendored_path("balzar-modules.js"), encoding="utf-8") as fh:
+            modules_lib_js = fh.read().replace("</", "<\\/")
     html_out = _PAGE_TEMPLATE.format(
         body_class="" if glb is not None else "no-3d",
         threed_section=_THREED_SECTION.format(search_or_alarm_html=search_or_alarm_html)
@@ -908,7 +979,11 @@ def _render_viewer_page(glb: bytes | None, bom_lines, info_table, documents,
         docs_json=docs_json,
         select_js=_SELECT_JS if glb is not None else "",
         doc_js=_DOC_JS,
-        alarm_graph_js=_ALARM_GRAPH_JS if alarm_graph else "")
+        alarm_graph_js=_ALARM_GRAPH_JS if alarm_graph else "",
+        modules_html=_MODULES_HTML if has_modules else "",
+        modules_json=modules_json,
+        modules_lib_js=modules_lib_js,
+        modules_js=_MODULES_JS if has_modules else "")
     with open(os.path.join(work_dir, "viewer.html"), "w", encoding="utf-8") as fh:
         fh.write(html_out)
     if os.path.exists(_MODEL_VIEWER_JS):
@@ -928,7 +1003,8 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] 
                         work_dir: str,
                         info_table: ComponentTable | None = None,
                         documents: list[dict] | None = None,
-                        alarm_graph: dict | None = None) -> "http.server.HTTPServer":
+                        alarm_graph: dict | None = None,
+                        module_index: dict | None = None) -> "http.server.HTTPServer":
     """Write model.glb + viewer.html + a copy of model-viewer.min.js into
     `work_dir`, serve it on an ephemeral localhost port, open the default
     browser. `work_dir` is the caller's responsibility (a TemporaryDirectory
@@ -952,8 +1028,14 @@ def open_glb_in_browser(glb: bytes, bom_lines: list[tuple[str, int, list[str]]] 
     panel INSTEAD of the `info_table` search UI (mutually exclusive,
     see _render_viewer_page).
 
+    `module_index` (optional, a normalized module_index.py dict) adds the
+    "Moduli correlati" button/panel: per selected component, the
+    documentation modules that cover it, read from the embedded index
+    (no network).
+
     Returns the running server (see _render_viewer_page)."""
-    return _render_viewer_page(glb, bom_lines, info_table, documents, work_dir, alarm_graph)
+    return _render_viewer_page(glb, bom_lines, info_table, documents, work_dir, alarm_graph,
+                               module_index)
 
 
 def _render_2d_item(item) -> list[dict]:
@@ -1092,6 +1174,13 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HT
     else:
         collapse_names = info_table.all_values() if info_table else None
 
+    # offline component -> documentation modules index (tolerant read, see
+    # module_index.read_module_index_item). Purely additive: it does NOT feed
+    # collapse_names (a registry listing every sub-assembly would collapse the
+    # whole model), so the BOM is the same with or without it.
+    from .module_index import read_module_index_item
+    module_index = read_module_index_item(items)
+
     three_d_items = [it for it in items if it.kind == KIND_3D]
     if not three_d_items:
         # a document-only bundle: no model, just the navigable index --
@@ -1115,4 +1204,5 @@ def open_bundle_in_browser(bundle_data: bytes, work_dir: str) -> "http.server.HT
                 for e in generate_bom(scene, collapse_names)]
     return open_glb_in_browser(glb, bom_lines, work_dir, info_table=info_table,
                                alarm_graph=alarm_graph,
-                               documents=documents or None)
+                               documents=documents or None,
+                               module_index=module_index)

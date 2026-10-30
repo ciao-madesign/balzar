@@ -685,6 +685,7 @@ api/encode_3d.py        funzione serverless Vercel: 3DXML -> payload BZM1 + GLB 
 api/qr.py               funzione serverless Vercel: payload -> immagine QR (genera, non legge)
 api/render.py           funzione serverless Vercel: apri .bzr/.bzp -> PNG/GIF/SVG
 index.html, app.js, style.css   frontend statico della demo (6 tab)
+balzar-modules.js       abbinamento componente -> moduli di documentazione (indice offline, CLAUDE.md §15)
 model-viewer.min.js     web component vendorizzato (Apache-2.0), nessuna dipendenza da CDN
 ```
 

@@ -80,6 +80,16 @@ sola lettura, desktop e web) evidenzia il componente 3D collegato e
 apre la procedura con un click. Dettaglio tecnico completo, tutte le
 decisioni di design e la verifica end-to-end in `CLAUDE.md` §14.
 
+**Moduli di documentazione per componente (integrazione con DoqTool)**:
+selezionando un componente nel visualizzatore, il comando "Moduli correlati"
+elenca i moduli della documentazione che lo riguardano (codice, titolo,
+revisione, capitolo), letti da un piccolo indice portato nel bundle — senza
+rete. L'elenco non contiene il testo: dice dove cercare nella documentazione
+fuori dalla macchina (manuale stampato, PDF, tablet). L'indice lo produce
+DoqTool, il sistema che scrive la documentazione; è additivo (un bundle
+senza indice si comporta come prima, e i lettori che non lo conoscono lo
+saltano). Dettaglio in `CLAUDE.md` §15.
+
 **Un'estensione valutata ma non costruita**: collegare Balzar Live allo
 stato reale di una macchina (allarme attivo, letto via OPC UA/Modbus/
 MQTT/REST) per far scattare automaticamente l'evidenziazione del

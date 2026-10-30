@@ -447,6 +447,15 @@
             <input type="file" id="threed-bundle-docs-input" multiple></label>
           <button id="threed-bundle-docs-clear-btn" type="button">Rimuovi documenti</button>
         </p>
+
+        <p>
+          <label>Indice dei moduli di documentazione (opzionale, <code>moduli.json</code> esportato
+            da DoqTool): nel visualizzatore, selezionando un componente, elenca i moduli che lo
+            riguardano — senza rete, solo come riferimento per ritrovarli nella documentazione;
+            da scegliere prima del file 3D:
+            <input type="file" id="threed-module-index-input" accept=".json,application/json"></label>
+          <button id="threed-module-index-clear-btn" type="button">Rimuovi indice</button>
+        </p>
       </details>
 
       <section id="threed-drop" class="dropzone">
@@ -465,6 +474,8 @@
                  style="position:absolute;top:10px;left:10px">Mostra tutto</button>
           <button id="threed-export-btn" type="button" disabled
                  style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
+          <button id="threed-modules-btn" type="button" hidden
+                 style="position:absolute;top:10px;right:10px">Moduli correlati</button>
           <div id="threed-search-panel-wrap" style="position:absolute;bottom:52px;left:10px;right:10px;
                display:flex;flex-direction:column;gap:6px;max-height:50vh">
             <p id="threed-search-note" style="margin:0;color:#eee;font-size:12px;
@@ -522,6 +533,14 @@
         <details id="threed-docs-block" open hidden>
           <summary>documenti nel bundle</summary>
           <ul id="threed-docs-index" class="doc-index-list"></ul>
+        </details>
+
+        <!-- Fase 3 integrazione DoqTool: moduli di documentazione del componente
+             selezionato, letti dall'indice offline nel pacchetto (nessuna rete). -->
+        <details id="threed-modules-block" open hidden>
+          <summary>moduli correlati al componente selezionato</summary>
+          <p id="threed-modules-note" class="honesty"></p>
+          <ul id="threed-modules-list" class="doc-index-list"></ul>
         </details>
 
         <details open>
@@ -693,6 +712,8 @@
                  style="position:absolute;top:10px;left:10px">Mostra tutto</button>
           <button id="open-3d-export-btn" type="button" disabled
                  style="position:absolute;top:10px;left:118px">Esporta scheda ricambio</button>
+          <button id="open-3d-modules-btn" type="button" hidden
+                 style="position:absolute;top:10px;right:10px">Moduli correlati</button>
           <div id="open-3d-search-panel-wrap" style="position:absolute;bottom:52px;left:10px;right:10px;
                display:flex;flex-direction:column;gap:6px;max-height:50vh">
             <p id="open-3d-search-note" style="margin:0;color:#eee;font-size:12px;
@@ -722,6 +743,14 @@
         <details id="open-3d-docs-block" open hidden>
           <summary>documenti nel bundle</summary>
           <ul id="open-3d-docs-index" class="doc-index-list"></ul>
+        </details>
+
+        <!-- Fase 3 integrazione DoqTool: moduli di documentazione del componente
+             selezionato, letti dall'indice offline nel pacchetto (nessuna rete). -->
+        <details id="open-3d-modules-block" open hidden>
+          <summary>moduli correlati al componente selezionato</summary>
+          <p id="open-3d-modules-note" class="honesty"></p>
+          <ul id="open-3d-modules-list" class="doc-index-list"></ul>
         </details>
         <details open>
           <summary>distinta base</summary>
@@ -787,6 +816,7 @@
     <p><a href="https://github.com/ciao-madesign/balzar" target="_blank" rel="noopener">codice sorgente</a></p>
   </footer>
 
+  <script src="balzar-modules.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

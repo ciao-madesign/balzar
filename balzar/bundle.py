@@ -22,6 +22,10 @@ KIND_ALARM -> the flat search bar (viewer3d.ComponentTable); KIND_ALARM_GRAPH
 CLAUDE.md SS14) -- a bundle uses AT MOST ONE of these two alarm
 mechanisms at a time, never both, see is_alarm_kind's docstring; KIND_DOC
 -> the navigable document index, just consultable, not linked to the 3D).
+KIND_MODULE_INDEX -> a small offline index component -> documentation
+modules (balzar/module_index.py): purely additive, readers that don't
+know it skip it like any unknown role, so a bundle carrying one still
+opens everywhere.
 A .csv is KIND_ALARM only when the user explicitly marks it as the
 component info table (any columns -- component name, alarm code, spare
 part, maintenance notes... in any order, with a header row, see
@@ -65,6 +69,7 @@ _HEADER_LEN = 4 + 2 + 2 + 4 + 4
 KIND_3D = "3d"        # a BZM1 3D assembly -> the model viewer + BOM
 KIND_ALARM = "alarm"  # a component info CSV (any columns) -> wired to the search bar
 KIND_ALARM_GRAPH = "alarm_graph"  # alarm_graph.AlarmGraph, JSON bytes -> the block/arrow alarm panel
+KIND_MODULE_INDEX = "module_index"  # module_index.py JSON bytes -> "moduli correlati" per componente
 KIND_2D = "2d"        # a BZR1 2D program (drawing/schematic) -> rendered PNG/GIF/SVG in the index
 KIND_DOC = "doc"      # a generic consultable document -> the navigable index, not linked to the 3D
 

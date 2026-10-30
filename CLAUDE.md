@@ -6181,3 +6181,37 @@ Con questo, i quattro slice pianificati per il grafo allarmi sono
 tutti completi: modello dati (§14.1), integrazione bundle (§14.2),
 pannello di lettura desktop (§14.3) e web (§14.4), produzione lato
 server (§14.5) ed editor visivo (§14.6).
+
+---
+
+## 15. Indice dei moduli di documentazione per componente (integrazione con DoqTool)
+
+> **STATO (2026-10-30) — IMPLEMENTATO.** Verificato con la suite `unittest` (433 test: i 407 di partenza + 26 nuovi in `tests/test_module_index.py`, nessuna regressione) e con Chromium headless su UI web e pagina desktop.
+
+**Scopo.** Selezionando un componente nel visualizzatore, un comando elenca i **moduli di documentazione** che lo riguardano (codice, titolo, revisione, capitolo). L'elenco **non contiene il testo dei moduli**: dice dove cercarli nella documentazione fuori dalla macchina (manuale stampato, PDF, tablet). Resta completamente offline, coerente con il resto del prodotto: l'indice viaggia nel bundle, nessuna chiamata di rete. Lo produce DoqTool (il sistema che scrive la documentazione, `GET /api/alarms/export/balzar?file=moduli`, o dentro lo ZIP come `moduli.json`).
+
+**Formato** (`balzar/module_index.py`, JSON):
+
+```json
+{"v": 1,
+ "docs": [{"c": "DOC-042", "t": "Sostituzione cuscinetti", "r": 3, "s": "5.2"}],
+ "idx":  {"MOTOR_UNIT_01": [0], "BoltA": [0]}}
+```
+
+`docs` = tabella dei moduli (ogni titolo una volta sola); `idx` = etichetta BOM → posizioni in `docs`, già in ordine di pertinenza; `c` codice stabile, `r` revisione all'export, `s` capitolo/pagina (facoltativo). `normalize_module_index()` valida e restituisce una copia con **solo i campi noti** (niente contenuto arbitrario nel bundle), posizioni fuori tabella/bool/duplicati rifiutati o ripuliti, limiti `MAX_DOCS=5000`, `MAX_KEYS=20000`, `MAX_BYTES=2 MB`.
+
+**Trasporto** (`balzar/bundle.py`): nuovo ruolo `KIND_MODULE_INDEX = "module_index"` (JSON compatto, label `moduli.json`). **Additivo**: un lettore che non lo conosce lo salta come qualunque ruolo ignoto (`_documents_from_items` lo ignora, gli altri filtrano per `kind`), quindi un pacchetto che lo contiene si apre ovunque. Non è esclusivo con grafo allarmi o tabella CSV.
+
+**Lettura tollerante** (`read_module_index_item`): un indice illeggibile o di una versione futura diventa "nessun indice" e **non impedisce mai di aprire il modello 3D e gli altri contenuti** (a differenza del grafo allarmi, dove un contenuto invalido dà 400).
+
+**Superfici**
+- `webapi.handle_encode_3d`: campo `module_index` (oggetto) → item `KIND_MODULE_INDEX`, 400 con messaggio chiaro se non valido; presente in **ogni** risposta (`module_index`, `null` se assente), come `alarm_graph`. `handle_render` (BZX1) lo rilegge; un BZM1 nudo risponde `null`.
+- `balzar-modules.js` (radice del repo): **una sola implementazione** dell'abbinamento (`normName`, `prepare`, `lookup`), usata dalla UI web (`<script>` in `index.html`) e **incorporata** nella pagina del visualizzatore desktop (`viewer3d._render_viewer_page` ne legge il testo con `vendored_path`). Il glob `*.js` di `balzar.spec` e il server locale lo includono senza altro. Abbinamento: etichetta esatta, poi grafia normalizzata (minuscole, senza accenti, `_ - . /` come spazio — la **stessa normalizzazione di DoqTool**); più selezioni = unione senza doppioni nell'ordine di pertinenza.
+- UI web (`app.js`): `createSceneViewerController` ha `renderModuleIndex()`/`updateModules()`; `setSelection()` aggiorna l'elenco; il pulsante "Moduli correlati (N)" (in alto a destra nel visualizzatore) apre e porta in vista il blocco. `renderScenePanel` lo alimenta da `r.module_index` per entrambe le schede (codifica `threed-*` e lettura `open-3d-*`). Campo di caricamento `threed-module-index-input` nella codifica (da scegliere **prima** del file 3D, come gli altri campi opzionali), inviato in entrambi i percorsi (tabella e grafo).
+- Pagina desktop (`viewer3d.py`): `open_glb_in_browser(..., module_index=...)`, pulsante `#modules-btn` (in alto al centro) e pannello `#modules-panel`; `_SELECT_JS.setSelection` chiama l'hook opzionale `window.__balzarOnSelection`. I titoli sono dati dell'utente: **solo `textContent`**, e `</` è neutralizzato nel JSON incorporato.
+
+**Decisione di design (errore trovato e corretto durante la verifica)**: l'indice **non** alimenta `collapse_names`. In una prima versione le sue chiavi comprimevano in una riga i sotto-assiemi nominati; con un registro che elenca l'assieme radice e ogni sotto-assieme l'intero modello sarebbe diventato **una sola riga** di distinta. Ora la distinta con indice è identica a quella senza (test `test_index_never_changes_the_bom`). Un sotto-assieme è una riga selezionabile solo se lo comprime un allarme (come prima, §9.21); in quel caso DoqTool ha già riunito sotto la sua chiave i moduli dei discendenti.
+
+**Peso nel bundle** (misurato su indici sintetici, titoli casuali → stima prudente): 50 componenti/20 moduli ≈ 0,9 KB; 200/60 ≈ 2,7 KB; 500/120 ≈ 7 KB; 1000/200 ≈ 15 KB. Con 3 moduli reali di prova: +138 byte sul pacchetto. DoqTool limita a 15 moduli per componente.
+
+**Non fatto per scelta di scope**: CLI (`encode_bundle_files`) e GUI Tkinter non hanno ancora il parametro per l'indice (solo web e `webapi`); nessun collegamento in rete verso DoqTool (voluto: strumento offline); nessun legame col modello a stati/orchestratore di §9.19.
