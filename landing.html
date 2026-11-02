@@ -25,6 +25,7 @@
       <div class="nav-links-inline">
         <a href="#balzar-live">3D &amp; allarmi</a>
         <a href="#come-funziona">Come funziona</a>
+        <a href="#doqtool">Con DoqTool</a>
         <a href="#prove">Numeri reali</a>
         <a href="#applicazioni">Applicazioni</a>
       </div>
@@ -37,7 +38,7 @@
     <!-- ================= INTRO ================= -->
     <section class="intro">
       <div class="wrap intro-wrap">
-        <h1>Tutto il tuo progetto, in un piccolo codice.</h1>
+        <h1>Tutto il vostro progetto, in un piccolo codice.</h1>
         <p class="intro-sub">Un disegno tecnico, un esploso, una distinta base: non più un file
           pesante da conservare, ma un codice minimo che ricostruisce tutto all'istante —
           completamente offline, senza rete, senza server.</p>
@@ -123,6 +124,17 @@
               <span class="ficon" aria-hidden="true">📋</span>
               <div><strong>Distinta base collegata</strong><span>la riga giusta si seleziona da
                 sola, con il conteggio reale dei posizionamenti nell'assieme</span></div>
+            </li>
+            <li>
+              <span class="ficon" aria-hidden="true">🧭</span>
+              <div><strong>Dall'allarme alla procedura</strong><span>un allarme rimanda alla causa o
+                alla soluzione e da lì alla procedura da seguire, con il componente interessato
+                evidenziato nel modello</span></div>
+            </li>
+            <li>
+              <span class="ficon" aria-hidden="true">📚</span>
+              <div><strong>Moduli correlati</strong><span>per il componente scelto, l'elenco dei
+                capitoli di manuale che lo riguardano, con la sezione in cui cercare</span></div>
             </li>
             <li>
               <span class="ficon" aria-hidden="true">🌐</span>
@@ -250,7 +262,7 @@
         <div class="table-wrap" style="margin-top:1.8rem">
           <table class="compare-table">
             <thead>
-              <tr><th>Altri esempi inclusi nel progetto</th><th class="num">Payload</th><th class="num">Output rigenerato</th><th class="num">Espansione</th></tr>
+              <tr><th>Altri casi misurati</th><th class="num">Payload</th><th class="num">Output rigenerato</th><th class="num">Espansione</th></tr>
             </thead>
             <tbody>
               <tr><td>Pattern geometrico ripetuto</td><td class="num">276 B</td><td class="num">1024×1024 px</td><td class="num">~11.400×</td></tr>
@@ -316,10 +328,52 @@
             <ul>
               <li>Rotazione, zoom, click su un componente per isolarlo</li>
               <li>Ricerca per nome componente o codice allarme</li>
-              <li>Distinta base e documenti/procedure collegati</li>
+              <li>Distinta base, documenti e procedure collegati, con l'elenco dei moduli correlati a ogni componente</li>
               <li>Acquisizione continua da fotocamera, zero tocchi dell'operatore</li>
             </ul>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CON DOQTOOL ================= -->
+    <section class="block alt" id="doqtool">
+      <div class="wrap">
+        <div class="section-head center">
+          <h2>La documentazione tecnica entra nel modello 3D</h2>
+          <p class="section-lede">Balzar visualizza la macchina in 3D anche dove la rete non arriva.
+            In combinazione con DoqTool, lo strumento con cui si redige la documentazione, il modello
+            diventa una guida alla diagnosi e alla riparazione.</p>
+        </div>
+        <ol class="steps-flow steps-four">
+          <li>
+            <span class="step-num">1</span>
+            <h3>In DoqTool si redige</h3>
+            <p>Allarmi, cause, soluzioni e procedure, con l'indicazione del componente coinvolto. DoqTool
+              verifica che i nomi coincidano tra documenti, elenchi e modello 3D.</p>
+          </li>
+          <li>
+            <span class="step-num">2</span>
+            <h3>Si esportano due tabelle</h3>
+            <p>L'elenco degli allarmi e quello delle cause e soluzioni, nel formato che Balzar legge
+              direttamente, più un piccolo indice dei documenti per ciascun componente.</p>
+          </li>
+          <li>
+            <span class="step-num">3</span>
+            <h3>Si carica il tutto in Balzar</h3>
+            <p>Il modello 3D e le tabelle viaggiano insieme nel codice QR. Il tecnico li apre dove serve,
+              senza connessione.</p>
+          </li>
+          <li>
+            <span class="step-num">4</span>
+            <h3>Il tecnico consulta</h3>
+            <p>Seleziona un allarme e vede il componente e la procedura. Con «Moduli correlati» trova i
+              capitoli di manuale da consultare, con la sezione esatta. Balzar riporta solo i titoli: i
+              manuali restano nei vostri archivi.</p>
+          </li>
+        </ol>
+        <div class="cta-row" style="margin-top:1.8rem;justify-content:center">
+          <a class="btn btn-secondary" href="https://doqtool-easydocument.vercel.app/">Scopri DoqTool →</a>
         </div>
       </div>
     </section>
